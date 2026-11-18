@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "voice": {
+      "command": "D:/code/voice_mcp_service/target/release/voice-mcp.exe",
+      "args": [],
+      "exposure": "direct",
+      "timeout": 180,
+      "description": "本地语音输入输出与音频体检（中英双语，离线）：转写/朗读/录音/音色"
+    }
+  }
+}

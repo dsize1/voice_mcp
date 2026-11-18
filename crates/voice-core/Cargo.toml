@@ -1,0 +1,18 @@
+[package]
+name = "voice-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hound.workspace = true
+symphonia.workspace = true
+sherpa-onnx = { version = "2.0.1", default-features = false, features = ["shared"] }
+rodio = { version = "0.23", default-features = false, features = ["playback"] }
+cpal = "0.18"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+tempfile = "3"

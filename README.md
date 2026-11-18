@@ -1,0 +1,443 @@
+# Voice MCP Service
+
+> **把"声音"变成 MCP 工具：本地离线、中英双语、纯 Rust 的语音输入输出 + 发音评测服务。**
+> 配合 Pi 的 Skill，构成一套能指出「你哪里读错了、错在第几秒」的英语口语教练。
+
+```text
+你说一句话  →  ASR 转写 + 词级时间戳  →  与参考文本做差异对齐  →  语流指标  →  LLM 解读并给一条具体建议
+```
+
+`RTF 0.013`（SenseVoice int8，CPU）· 全程离线无出站请求 · 模型合计 1.58 GB · 单文件二进制
+
+---
+
+## 目录
+
+- [设计原则](#设计原则)
+- [能力现状](#能力现状)
+- [架构](#架构)
+- [快速开始](#快速开始)
+- [配置](#配置)
+- [MCP 工具](#mcp-工具)
+- [CLI](#cli)
+- [Skills（口语教练 / 语音录入）](#skills)
+- [留证机制](#留证机制)
+- [实测性能](#实测性能)
+- [供应链安全](#供应链安全)
+- [设计决策（ADR）](#设计决策adr)
+- [已知限制](#已知限制)
+- [路线图](#路线图)
+- [目录结构](#目录结构)
+
+---
+
+## 设计原则
+
+这套东西最容易做错的地方不是模型，而是**职责边界**。三条铁律：
+
+### 1. MCP 只做"测量"，Skill + LLM 做"教学"
+
+Pi 里的 LLM **听不到音频**，它只能看到文本和数字。所以：
+
+- MCP 的职责是产出 `{"kind":"substitution","reference":"third","said":"straight","t0":4.5,"phonetic_similarity":0.40}`
+  这样的**测量结果**
+- "怎么教、说什么、先修哪个"由 Skill 里的教学规则 + LLM 决定
+- TTS 生成的示范音是给**你的耳朵**听的，不是给模型听的
+
+这条原则决定了两件事：**评分逻辑不写进 MCP**，以及 **MCP 的输出必须是结构化 JSON 而不是一段话**。
+
+### 2. 不确定就说不确定
+
+`third → straight` 到底是"你发错了"还是"ASR 听错了"？从文本层面**无法判断**。
+系统会输出 `hint: "unclear"` 并要求教练给出验证动作，而不是猜一个结论——
+**错误的纠音建议比不给建议更糟**。详见 [ADR-0006](docs/adr/0006-assessment-scope.md)。
+
+### 3. 每次调用都留证，只追加不覆盖
+
+原始录音、派生音频、转写 JSON、指标 JSON、反馈 markdown，全部落盘并可 grep。
+这是"趋势分析"和"事后复听"的前提，也让每次模型升级/算法升级都可回溯。
+
+---
+
+## 能力现状
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| 任意格式解码（wav/m4a/mp3/flac/ogg） | ✅ | 纯 Rust（symphonia），Win11 录音机 `.m4a` 直读，1.8 ms / 6 s |
+| ASR（中英 + 词级时间戳） | ✅ | SenseVoice int8，RTF 0.013，CPU 即可 |
+| ASR（中英混说 / 标点增强） | ✅ | whisper-large-v3-turbo int8，按需加载 |
+| TTS（示范音，54 音色） | ✅ | Kokoro-82M，24 kHz，RTF 0.21 |
+| 麦克风采集 + 静音自动停 | ✅ 代码就绪 / ⚠️ 本机无麦克风未实测 | cpal / WASAPI |
+| 播放（服务端出声） | ✅ | rodio（Pi 的 TUI 放不了音频，必须服务端播） |
+| 目录监听（录音机新文件自动导入） | ✅ | 轮询 + 大小稳定判定 + 状态文件去重 |
+| 语流指标（语速/停顿/词界/填充词/重复） | ✅ | Silero VAD + 词时间戳 |
+| 词级差异（漏读/多读/替换 + 音形相似度） | ✅ | Levenshtein 对齐 + 自研音形编码 |
+| 韵律分析（F0 轮廓/句末升降/重音落点） | ⏳ 已设计 | [ADR-0007](docs/adr/0007-prosody-and-gop.md) |
+| 音素级 GOP（θ/s、v/w、r/l 精确定位） | ⏳ 已设计 | 同上，Python sidecar 路线 |
+| 流式 / HTTP 模式 / 热键听写 | ⏳ P4 | – |
+
+---
+
+## 架构
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  Pi（LLM + Skill）                                           │
+│  ielts-speaking-coach：决定"练什么、怎么反馈、先修哪个"        │
+│  voice-dictation     ：把口语整理成可用的文字                  │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ MCP (stdio)
+┌──────────────────────▼──────────────────────────────────────┐
+│  voice-mcp（Rust, 常驻，8 个工具）                            │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ voice-core                                           │   │
+│  │  audio   : decode / resample(Kaiser-sinc) / capture   │   │
+│  │            / play / wav / 声学体检                     │   │
+│  │  engine  : asr(SenseVoice + whisper 路由)             │   │
+│  │            tts(Kokoro) / vad(Silero)                  │   │
+│  │  assess  : normalize / diff(音形编码) / flow           │   │
+│  │  store   : 留证台账（session / take / manifest）        │   │
+│  └──────────────────────────────────────────────────────┘   │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│  sherpa-onnx 2.0.1（in-process C API via PyPI 轮子里的 DLL）  │
+│  onnxruntime (CPU)                                           │
+└─────────────────────────────────────────────────────────────┘
+
+旁路：voice-cli（doctor / stt / say / play / rec / watch / assess / tts-probe）
+```
+
+**为什么 ASR/TTS 用 sherpa-onnx 而不是自己拼 ONNX**：它一个原生库同时提供
+ASR（18 种模型类型：whisper / SenseVoice / paraformer / nemo / qwen3-asr…）、
+TTS（Kokoro / VITS / Matcha）、VAD（Silero）、说话人嵌入，省掉了 3 套前后处理与特征提取代码。
+且它的 Windows 共享库可以直接从 PyPI 轮子里取（不依赖 GitHub、不需要 C++ 工具链），
+详见 [ADR-0005](docs/adr/0005-deps-and-model-acquisition.md)。
+
+---
+
+## 快速开始
+
+### 前置
+
+- Windows 10/11（其他平台可编译，但默认路径与录音机目录是 Windows 的）
+- Rust 1.85+（MSVC 工具链，`x86_64-pc-windows-msvc`）
+- Python 3.9+（**只用于拉依赖脚本**，运行时不需要 Python）
+- 磁盘：模型 1.6 GB + 留证数据
+
+### 1. 拉原生库（≈20 秒，不用编译 C++）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/fetch_deps.ps1
+```
+
+它从 PyPI 轮子里解出 `sherpa-onnx-c-api.dll` + `onnxruntime.dll`，并用 `dumpbin`+`lib` 补出缺失的
+import library，落到 `.cache/sherpa/lib/`（`.cargo/config.toml` 里的 `SHERPA_ONNX_LIB_DIR` 已指向该目录）。
+
+### 2. 拉模型（≈1.58 GB，多连接分段下载）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/fetch_models.ps1            # 全部
+powershell -ExecutionPolicy Bypass -File tools/fetch_models.ps1 -List      # 只看清单
+powershell -ExecutionPolicy Bypass -File tools/fetch_models.ps1 -Sets vad,kokoro
+```
+
+默认装到 `C:/voice_models/`。下载源是 hf-mirror（8 路分段并发，约 1.1 MB/s）。
+
+### 3. 构建
+
+```bash
+cargo build --release
+cp .cache/sherpa/lib/*.dll target/release/      # DLL 需与 exe 同目录
+```
+
+产物：
+
+```
+target/release/voice-mcp.exe   # MCP 服务
+target/release/voice-cli.exe   # 客户端
+```
+
+### 4. 自检
+
+```bash
+./target/release/voice-cli.exe doctor --load
+```
+
+```
+[OK] 9 个模型文件齐全
+[OK] 数据目录可写 D:\voice_data
+[OK] 最近 take 解码验证 001_dictate.m4a -> 6.08s @16k, peak -0.2 dBFS
+[OK] ASR + TTS(54 音色 @24kHz) + VAD 加载完成 1726 ms
+结论: OK=12 FAIL=0
+```
+
+### 5. 接入 Pi
+
+```bash
+pi mcp add voice -- <项目绝对路径>/target/release/voice-mcp.exe
+```
+
+然后编辑 `~/.pi/agent/mcp.json`，把 `exposure` 改成 `direct`（默认 `codemode` 只能在脚本里调），
+并抬高 `timeout`（录音/长音频需要）：
+
+```json
+{
+  "mcpServers": {
+    "voice": {
+      "command": "D:/code/voice_mcp_service/target/release/voice-mcp.exe",
+      "exposure": "direct",
+      "timeout": 180,
+      "description": "本地语音输入输出与音频体检（中英双语，离线）"
+    }
+  }
+}
+```
+
+装 Skill（用户级，跨项目可用）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/install_skills.ps1
+```
+
+验证：
+
+```bash
+pi mcp list          # 应显示 voice: connected, 8 tools (direct)
+pi -p "列出你现在可用的 skills"
+```
+
+然后在 Pi 里直接说：
+
+```
+练一下口语
+把刚才说的记下来
+这个 m4a 转成文字
+```
+
+---
+
+## 配置
+
+优先级：**默认值 ← `$VOICE_HOME/config.json` ← 环境变量**
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `VOICE_MODELS_DIR` | `C:/voice_models` | 模型根目录（只读） |
+| `VOICE_HOME` | `D:/voice_data` | 留证/档案/索引目录 |
+| `VOICE_PROVIDER` | `cpu` | `cpu` / `cuda`（GPU 未打通，见 ADR-0005） |
+| `VOICE_THREADS` | `4` | ONNX Runtime 线程数 |
+
+`config.json` 还支持：`en_engine`（英文默认引擎，默认 `sense-voice`）、`record_max_sec`、
+`record_silence_sec`、`capture_sr`、`default_sid`、`synth_speed`、`watch_dirs`。
+
+---
+
+## MCP 工具
+
+共 8 个。完整出入参契约见 **[docs/CONTRACT.md](docs/CONTRACT.md)**。
+
+| 工具 | 一句话 |
+|---|---|
+| `assess` | **核心**：转写 + 语流 + 与参考文本的词级差异，返回结构化指标 |
+| `transcribe` | 纯转写（词级 + token 级时间戳） |
+| `synthesize` | 示范音（`play=true` 服务端出声，`slow_too` 出 0.75x 版） |
+| `record` | 麦克风录音，静音自动停（需麦克风） |
+| `play` | 播放 wav |
+| `prepare_audio` | 音频体检 + 去首尾静音 + 16k 派生 |
+| `voices` | 列出 54 个音色 |
+| `status` | 自检（含 `mic` 是否为 null） |
+
+所有工具返回同一个信封，失败不抛协议错误：
+
+```json
+{ "ok": true,  "detail": { ... }, "error": null }
+{ "ok": false, "detail": null,    "error": "人类可读原因" }
+```
+
+---
+
+## CLI
+
+```bash
+voice-cli doctor [--load]                     # 自检（--load 会真实加载引擎）
+voice-cli stt <path|last> [--lang en] [--plain]# 转写（留证）
+voice-cli say "text" [--voice af_heart] [--speed 0.75] [--slow-too] [--play]
+voice-cli play <path>
+voice-cli assess <path|last> [--reference "原句"]   # 评测（与 MCP assess 同逻辑）
+voice-cli rec [--max-sec 30] [--silence 1.0] [--stt]   # 录音（需麦克风）
+voice-cli watch [--dir <目录>] [--lang en]    # 监听录音目录，新文件自动导入+转写
+voice-cli tts-probe                           # 为 54 个音色各生成一句，供人耳校准
+```
+
+`watch` 默认监视 Win11 录音机的输出目录（`Documents\录音` / `Documents\Sound Recordings`），
+首次运行会把已存在文件登记为基线，只处理**新**录音。
+
+---
+
+## Skills
+
+| Skill | 用途 |
+|---|---|
+| [`ielts-speaking-coach`](skills/ielts-speaking-coach/SKILL.md) | 口语陪练 + 纠音，目标雅思 7 分。固定五步循环：播示范 → 跟读 → 评测 → 只指出 1 个问题 → 重读对比 |
+| [`voice-dictation`](skills/voice-dictation/SKILL.md) | 语音录入 / 听写。口语转书面文字（删填充词、补标点、中英混说不翻译） |
+
+教练 Skill 的几个关键设计：
+
+- **教学语言阶梯 L1–L4**：L1 全中文讲解 + 单词级慢速示范（薄弱用户压力小），L4 全英文讨论 Part 3；
+  按 `learner.json` 自动升降档，用户随时可以说"用中文讲"
+- **一次只修 1–2 个问题**，其余进 `error_stats` 排队
+- **问题优先级**：可理解度（漏读/替换）> 流利度（停顿/词界/填充词）> 韵律 > 词汇语法
+- **档案**：`$VOICE_HOME/learner.json` 记录水平区间、focus、易错音素榜、练习队列、历史趋势
+- 参考资料（按需加载）：`phoneme-map.md`（17 个高频错误 + 最小对立对 + 一句口诀）、
+  `band-descriptors.md`（官方描述 → 可测量代理指标）、`drills.md`（10 种训练法）、`ielts-topics.md`（题库 + 7 分范文）
+
+---
+
+## 留证机制
+
+```text
+D:/voice_data/
+├── learner.json                 # 学习者档案（Skill 维护）
+├── manifest.jsonl               # 全局追加索引，可 grep
+├── last_take                    # 最近一次 take 的原始音频（path:"last" 指向它）
+├── watch_state.json             # 目录监听的已处理文件指纹
+└── sessions/2026-11-19/003545_assess/
+    ├── session.json
+    └── takes/
+        ├── 001_read_third.m4a        # 原始输入，永不修改
+        ├── 001_read_third.16k.wav    # 派生（可重建）
+        ├── 001_read_third.asr.json   # 转写 + words[] + tokens[]
+        ├── 001_read_third.metrics.json  # 全部评测数值 + scorer_version
+        ├── 001_read_third.md         # 该 take 的反馈（Agent 写）
+        └── 001_read_third.ref_{slow,norm}.wav  # 示范音
+```
+
+`manifest.jsonl` 一行：
+
+```json
+{"ts":"2026-11-19T00:25:10+08:00","session":"2026-11-19/002508_dictate","seq":1,
+ "scene":"read_third","src":"...001_read_third.m4a","lang":"en","engine":"sense-voice",
+ "dur":6.08,"text":"I think this is the straight time.","degraded":false,"feedback_ref":null}
+```
+
+---
+
+## 实测性能
+
+本机：Core Ultra 5 245K / 48 GB / RTX 5070 Ti 16 GB（CPU 推理，未启用 GPU EP）
+
+| 项 | 数值 |
+|---|---|
+| 模型常驻总大小 | 1.58 GB（9 个文件，全部预加载） |
+| 引擎冷启动 | 1726 ms（ASR 与 TTS 并行加载） |
+| `.m4a` 解码（6.08 s） | 1.8 ms（RTF 0.0003） |
+| SenseVoice 转写（6.08 s） | 82 ms（**RTF 0.013**） |
+| whisper-turbo 转写（6.08 s） | 883 ms（RTF 0.145，8 线程） |
+| Kokoro 合成（1.7 s 音频） | 372 ms（**RTF 0.21**） |
+| 端到端 `assess`（解码+ASR+flow+diff） | ≈ 120 ms |
+| 目录监听响应 | 新文件落盘后 ≈ 1.5–3 s 内完成导入+转写 |
+
+---
+
+## 供应链安全
+
+模型是数据、DLL 是代码，风险不同，分层校验（`python tools/verify_models.py`，可重跑，失败退出码 1）：
+
+| 检查 | 结果 |
+|---|---|
+| 367 个模型文件 sha256 与上游清单一致 | ✅ |
+| ONNX 无自定义算子域 / 无 `external_data` 外部引用 | ✅ |
+| 无伪装成数据的可执行文件（MZ/ELF/shebang） | ✅ |
+| 3 个 DLL 未命中 23 项危险 Win32 API（注入/下载/提权） | ✅ |
+| DLL 内嵌 URL 逐条人工核验（全是论文/文档链接） | ✅ |
+| PyPI 轮子双镜像 sha256 交叉一致 | ✅ |
+| 已知不良：DLL 未签名（开源轮子常态） | ⚠️ 知情 |
+
+详见 [docs/security-supply-chain.md](docs/security-supply-chain.md) 与基线哈希
+[docs/security-hashes.txt](docs/security-hashes.txt)。
+
+---
+
+## 设计决策（ADR）
+
+| ADR | 内容 |
+|---|---|
+| [0001](docs/adr/0001-runtime-strategy.md) | 运行时路线：当前 Rust 主干 + Python 评分 sidecar，长期 100% Rust |
+| [0002](docs/adr/0002-asr-routing.md) | ASR 双引擎与语言路由 + 教学语言阶梯 L1–L4 |
+| [0003](docs/adr/0003-model-selection.md) | 模型选型与显存预算 |
+| [0004](docs/adr/0004-audio-io-and-evidence.md) | 文件优先的 I/O 契约与留证机制 |
+| [0005](docs/adr/0005-deps-and-model-acquisition.md) | 依赖与模型获取策略（GitHub 不可用时的替代通路） |
+| [0006](docs/adr/0006-assessment-scope.md) | 评测层能力边界（三态推断、为什么不能硬猜） |
+| [0007](docs/adr/0007-prosody-and-gop.md) | 韵律分析与音素级 GOP（已排期，触发条件明确） |
+
+---
+
+## 已知限制
+
+1. **没有麦克风**时 `record` 不可用（本机实际情况），但**文件 + 目录监听**这条路径完全可用。
+2. **16 kHz 源音频**（Win11 录音机固定输出）→ 6–8 kHz 摩擦音细节有限，
+   `band_limited: true` 时不要据 /θ/ vs /s/ 下结论。要更高精度需要 48 kHz 采集（`cpal`）。
+3. **SenseVoice 时间戳是 CTC token 级**（±0.5 s）→ "第几秒"只能当参考。
+4. **无音素级 GOP** → 不能给音素级发音分数；`hint=unclear` 的情况需要人工/重录确认。
+5. **音形编码不区分元音长短**（bit/beat、bad/bed 同 key）。
+6. **中文只做字级比较**，无拼音层。
+7. `accuracy` 只用于**纵向趋势**，不要换算成雅思分数对外承诺。
+8. GPU EP 未打通（`VOICE_PROVIDER=cuda` 暂不可用），当前 CPU 性能已足够。
+
+---
+
+## 路线图
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| P0 | 环境验证（解码 / 原生库 / ASR / TTS / 供应链校验） | ✅ |
+| P1 | 音频层 + 8 个 MCP 工具 + CLI + 目录监听 | ✅ |
+| P2 | 评测层：词级 diff + flow | ✅ |
+| P2.5 | 韵律分析（F0/重音/升降调）+ 音素级 GOP（sidecar） | ⏳ 触发条件：≥10 次真实训练 |
+| P3 | `ielts-speaking-coach` / `voice-dictation` Skill | ✅ |
+| P4 | 热键听写 daemon / HTTP 模式 / 流式 TTS / 音色复刻 | – |
+
+---
+
+## 目录结构
+
+```text
+.
+├── Cargo.toml                  # workspace
+├── crates/
+│   ├── voice-core/             # 核心库（无 MCP 依赖）
+│   │   └── src/{config, store, audio/*, engine/*, assess/*}
+│   ├── voice-mcp/              # MCP 服务（rmcp 3.11）
+│   ├── voice-cli/              # 客户端 CLI
+│   └── spike/                  # P0 验证用的小程序（保留作为证据）
+├── skills/
+│   ├── ielts-speaking-coach/   # SKILL.md + references/{phoneme-map,band-descriptors,drills,ielts-topics}
+│   └── voice-dictation/
+├── docs/
+│   ├── CONTRACT.md             # MCP 工具契约（含给 Agent 的解读规则）
+│   ├── adr/                    # 0001–0007
+│   ├── security-supply-chain.md
+│   └── security-hashes.txt
+├── tools/
+│   ├── fetch_deps.ps1          # 原生库（PyPI 轮子 → .cache）
+│   ├── fetch_models.ps1        # 模型（hf-mirror 多连接）
+│   ├── verify_models.py        # 供应链校验
+│   └── install_skills.ps1      # Skill 安装（junction）
+└── .pi/{mcp.json,settings.json}  # Pi 项目级配置
+```
+
+---
+
+## 许可与模型条款
+
+本项目代码可自由修改复用。引入的模型权重遵循各自许可：
+
+| 模型 | 许可 |
+|---|---|
+| SenseVoice-Small | Apache-2.0（FunAudioLLM） |
+| whisper-large-v3-turbo | MIT |
+| Kokoro-82M | Apache-2.0 |
+| Silero VAD | MIT |
+| sherpa-onnx / onnxruntime | Apache-2.0 / MIT |
+| MMS_FA（P2.5 计划引入） | **CC-BY-NC 4.0（仅限非商用）** |

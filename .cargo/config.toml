@@ -1,0 +1,11 @@
+[env]
+# sherpa-onnx 原生库位置（由 tools/fetch_deps.ps1 从 PyPI 轮子解压得到，绕过 GitHub 直连）
+# 注意：换成 SHERPA_ONNX_LIB_DIR 后 sherpa-onnx-sys 不再尝试联网下载
+SHERPA_ONNX_LIB_DIR = { value = ".cache/sherpa/lib", relative = true }
+
+[build]
+# 保留默认 target 目录；如需加速可打开 sccache
+# rustflags = []
+
+[net]
+git-fetch-with-cli = true

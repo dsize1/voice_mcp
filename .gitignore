@@ -1,0 +1,22 @@
+# Rust
+/target
+**/*.rs.bk
+
+# 本地第三方二进制 / 缓存（由 tools/fetch_deps.ps1 生成）
+/.cache
+
+# 模型与数据不随仓库走（分别在 C:/voice_models、D:/voice_data）
+/models
+
+# 本地 spike 产物
+*.wav
+*.m4a
+*.onnx
+!crates/**/tests/fixtures/**
+
+# 编辑器
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

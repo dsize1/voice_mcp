@@ -1,0 +1,34 @@
+[package]
+name = "spike"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "probe-audio"
+path = "src/bin/probe_audio.rs"
+
+[[bin]]
+name = "sherpa-hello"
+path = "src/bin/sherpa_hello.rs"
+
+[[bin]]
+name = "asr-sensevoice"
+path = "src/bin/asr_sensevoice.rs"
+
+[[bin]]
+name = "asr-whisper"
+path = "src/bin/asr_whisper.rs"
+
+[[bin]]
+name = "vad-probe"
+path = "src/bin/vad_probe.rs"
+
+[[bin]]
+name = "tts-kokoro"
+path = "src/bin/tts_kokoro.rs"
+
+[dependencies]
+voice-core = { path = "../voice-core" }
+anyhow.workspace = true
+serde_json.workspace = true
+sherpa-onnx = { version = "2.0.1", default-features = false, features = ["shared"] }

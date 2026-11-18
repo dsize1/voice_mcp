@@ -1,0 +1,10 @@
+# 已知良好基线（2026-11-18 P0 校验通过，勿在未经校验的情况下变更）
+
+7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25  onnxruntime.dll  (17.8 MB)
+5dd36dbd3572846b72c4a40a4017c5a770160ee8e00da5053bebc8b2632501e8  sherpa-onnx-c-api.dll  (4.3 MB)
+4c56327796cdb980dcbf90025c28093d89ca286088fb74c3b107f2f633e67ffe  sherpa-onnx-cxx-api.dll  (0.3 MB)
+08890e9ea23ed2f59f81d5840c63b6b5cc8674d0f6e48d9069126a848aa0e022  sherpa_onnx_core-2.0.1-py3-none-win_amd64.whl  (16.7 MB)
+c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51  model.int8.onnx  (239.2 MB)
+b02dcdf54f348741e93fe732b67d933c8dcb6735655f710640143081db38878b  turbo-encoder.int8.onnx  (674.7 MB)
+20accd02388482eb3a46bd615631adfdc85e1eb2c7db9ea3f02a40ffe6b81547  turbo-decoder.int8.onnx  (361.1 MB)
+a4a068cd6cf1ea8355b84327595838ca748ec29a25bc91fc82e6c299ccdc5808  model.onnx  (2.2 MB)

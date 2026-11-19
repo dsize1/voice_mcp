@@ -66,16 +66,55 @@ impl Default for RecordOptions {
 /// 真正的麦克风在 "Hands-Free" 端点上，必须显式指定。
 pub fn pick_device(name: Option<&str>) -> Result<cpal::Device> {
     let host = cpal::default_host();
-    if let Some(want) = name {
-        let want_lc = want.to_lowercase();
-        if let Ok(iter) = host.input_devices() {
-            for d in iter {
-                if d.to_string().to_lowercase().contains(&want_lc) {
-                    return Ok(d);
+    let all: Vec<cpal::Device> = host
+        .input_devices()
+        .map(|it| it.collect())
+        .unwrap_or_default();
+    if all.is_empty() {
+        return Err(anyhow!(
+            "系统当前没有任何输入设备（蓝牙耳机可能未连接/休眠，请先连上再试）"
+        ));
+    }
+
+    // 名字匹配分：精确子串 100；忽略非字母数字后匹配 60
+    // （Windows 会给同名端点加 "2- " 之类前缀，硬编码前缀会随系统状态变化）
+    let norm = |s: &str| -> String { s.chars().filter(|c| c.is_alphanumeric()).collect() };
+    let want = name.map(|s| s.to_lowercase());
+    let want_norm = want.as_deref().map(norm);
+
+    let mut best: Option<(i32, cpal::Device)> = None;
+    for d in all {
+        let dn = d.to_string().to_lowercase();
+        let name_score = match (&want, &want_norm) {
+            (Some(w), Some(wn)) => {
+                if dn.contains(w.as_str()) {
+                    100
+                } else if !wn.is_empty() && norm(&dn).contains(wn) {
+                    60
+                } else {
+                    continue; // 指定了名字但不匹配 → 跳过
                 }
             }
+            _ => 1,
+        };
+        // 宽带优先：蓝牙 A2DP 端点常见 16 kHz 且录不到真实声音
+        let max_rate = d
+            .supported_input_configs()
+            .ok()
+            .and_then(|it| it.map(|c| c.max_sample_rate()).max())
+            .unwrap_or(0);
+        let rate_score = if max_rate >= 32_000 { 30 } else { 0 };
+        let score = name_score + rate_score;
+        if best.as_ref().map(|(b, _)| score > *b).unwrap_or(true) {
+            best = Some((score, d));
         }
-        eprintln!("[voice] 没找到匹配 \"{want}\" 的输入设备，回退到默认设备");
+    }
+
+    if let Some((_, d)) = best {
+        return Ok(d);
+    }
+    if let Some(w) = name {
+        eprintln!("[voice] 没有匹配 \"{w}\" 的设备，回退到默认");
     }
     host.default_input_device()
         .ok_or_else(|| anyhow!("没有可用的默认麦克风"))

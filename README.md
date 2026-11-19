@@ -302,6 +302,7 @@ voice-cli tts-probe                           # 为 54 个音色各生成一句�
 
 ```bash
 export VOICE_CASES_DIR="D:/voice_data/cases_audio"   # 放你的 wav/m4a
+voice-cli lesson <mp3> --lrc <lrc>  # 用 LRC 当基准逐行核对转写与时间戳
 voice-cli cases                    # 跑 cases/*.json
 voice-cli cases --only r03         # 只跑一条
 ```
@@ -315,6 +316,8 @@ voice-cli cases --only r03         # 只跑一条
 | `r03_mic48k_pause_drop_is` | ASR 漏掉 `is` 时必须是 `likely_asr_miss` + `medium`，不能当 high 指控 |
 | `r04_tts_perfect` | TTS 音频零误报（证明 diff 流水线本身干净） |
 | `r05_free_speech_flow` | 无参考文本时语速落在合理区间（分析窗口生效） |
+| `r06_nce2_l2_native` | 教材原生 24 kHz MP3（81 s）：mp3 解码、长音频分块、合成词合并、`band_limited=false` |
+| `r07_nce2_l2_free` | 同一音频只看语流：教学慢速朗读的 articulation_rate 区间 |
 
 ## 留证机制
 
@@ -413,7 +416,9 @@ D:/voice_data/
 5. **音形编码不区分元音长短**（bit/beat、bad/bed 同 key）。
 6. **中文只做字级比较**，无拼音层。
 7. `accuracy` 只用于**纵向趋势**，不要换算成雅思分数对外承诺。
-8. GPU EP 未打通（`VOICE_PROVIDER=cuda` 暂不可用），当前 CPU 性能已足够。
+8. **长音频必须走分块解码**（`transcribe_long`）：单次喂 >30 s 音频会让时间戳压缩、尾部内容丢失。
+   这个坑实测会让"81 s 音频只转出 57 s"。业务层请勿直接调用 `asr.transcribe`。
+9. GPU EP 未打通（`VOICE_PROVIDER=cuda` 暂不可用），当前 CPU 性能已足够。
 9. 自动停止在 AGC 强的设备上仍可能略拖尾（已用「相对语音峰值」判据缓解）；
    底噪高于 −50 dBFS 的设备建议先关掉系统「音频增强」，否则噪声会吃掉摩擦音。
 

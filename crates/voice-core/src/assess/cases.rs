@@ -33,6 +33,9 @@ pub struct Case {
     pub id: String,
     pub audio: String,
     pub reference: Option<String>,
+    /// 参考文本文件（长文本用这个；相对路径同样支持 ${VOICE_CASES_DIR}）
+    #[serde(default)]
+    pub reference_file: Option<String>,
     #[serde(default = "default_lang")]
     pub lang: String,
     #[serde(default)]
@@ -69,6 +72,9 @@ pub struct Expect {
 pub struct ExpectIssue {
     pub kind: String,
     pub reference: Option<String>,
+    /// 参考文本文件（长文本用这个；相对路径同样支持 ${VOICE_CASES_DIR}）
+    #[serde(default)]
+    pub reference_file: Option<String>,
     pub said: Option<String>,
     pub hint: Option<String>,
     pub severity: Option<String>,

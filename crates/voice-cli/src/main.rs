@@ -71,6 +71,22 @@ enum Cmd {
         #[arg(long, default_value = "assess")]
         scene: String,
     },
+    /// 用 LRC 字幕当基准，逐行核对转写与时间戳（教材音频自检 / 生成跟读素材）
+    Lesson {
+        /// 音频路径
+        audio: String,
+        /// 配套 LRC（双语，[mm:ss.xx]英文 | 中文）
+        #[arg(long)]
+        lrc: String,
+        #[arg(long, default_value = "en")]
+        lang: String,
+        /// 只看逐行明细
+        #[arg(long)]
+        verbose: bool,
+        /// 把 LRC 按本音轨重新定时并写到该路径（源 LRC 与本音轨版本不一致时很有用）
+        #[arg(long)]
+        write_lrc: Option<String>,
+    },
     /// 跑录音回归用例（cases/*.json，只存断言不存音频）
     Cases {
         /// 用例目录
@@ -130,6 +146,9 @@ fn main() -> Result<()> {
         Cmd::Play { path } => {
             play::play_wav(&path)?;
             Ok(())
+        }
+        Cmd::Lesson { audio: a, lrc, lang, verbose, write_lrc } => {
+            lesson(&cfg, &a, &lrc, &lang, verbose, write_lrc.as_deref())
         }
         Cmd::Cases { dir, only } => run_cases(&cfg, &dir, only.as_deref()),
         Cmd::Mic { secs } => mic(&cfg, &secs),
@@ -332,9 +351,7 @@ fn stt(
     let decode_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let engines = Engines::load(cfg.clone())?;
-    let t = engines
-        .asr
-        .transcribe(&decoded.samples, decoded.sample_rate, lang, engine)?;
+    let t = engines.transcribe_long(&decoded.samples, decoded.sample_rate, lang, engine)?;
 
     session.write_json(&prefix, "asr", &t)?;
     session.write_json(
@@ -432,6 +449,182 @@ fn say(
     Ok(())
 }
 
+// ------------------------------------------------------------------ lesson
+/// 用 LRC 真值核对：整体 accuracy + 逐行文本/起始时间偏差
+fn lesson(
+    cfg: &Config,
+    audio_path: &str,
+    lrc_path: &str,
+    lang: &str,
+    verbose: bool,
+    write_lrc: Option<&str>,
+) -> Result<()> {
+    use voice_core::assess::lrc;
+    let lrc_text = std::fs::read_to_string(lrc_path)
+        .with_context(|| format!("读 LRC 失败: {lrc_path}"))?;
+    let decoded = audio::load_16k(audio_path)?;
+    let duration = decoded.samples.len() as f32 / decoded.sample_rate as f32;
+    let lines = lrc::parse(&lrc_text, duration);
+    if lines.is_empty() {
+        bail!("LRC 里没有可用的时间轴行");
+    }
+    let reference = lrc::full_reference(&lines);
+
+    let engines = Engines::load(cfg.clone())?;
+    let a = voice_core::assess::assess(
+        &engines,
+        voice_core::AssessRequest {
+            samples: &decoded.samples,
+            sample_rate: decoded.sample_rate,
+            lang,
+            engine: None,
+            reference: Some(&reference),
+            source_sr: Some(decoded.info.source_sr),
+        },
+    )?;
+    let td = a.text_diff.as_ref();
+
+    // 逐行：用全局对齐把「参考词 → 识别时间」映射出来，避免时间窗启发式
+    use voice_core::assess::normalize;
+    let mut line_rows = Vec::new();
+    let mut ref_cursor = 0usize;
+    let mut line_ok = 0usize;
+    let mut matched_sim: Vec<f32> = Vec::new();
+
+    for l in &lines {
+        let ref_words = normalize::words(&l.en);
+        let start = ref_cursor;
+        let end = start + ref_words.len();
+        ref_cursor = end;
+
+        // 该行参考词在全局对齐里对应的识别词与时间
+        let mut said: Vec<String> = Vec::new();
+        let mut times: Vec<f32> = Vec::new();
+        if let Some(td) = td {
+            for p in &td.alignment {
+                let Some(ri) = p.ref_index else { continue };
+                if ri < start || ri >= end {
+                    continue;
+                }
+                if let Some(s) = &p.said {
+                    said.push(s.clone());
+                    times.push(p.t0);
+                }
+            }
+        }
+        let said_text = said.join(" ");
+        let sim = voice_core::assess::diff::similarity(
+            &ref_words.join(" "),
+            &normalize::words(&said_text).join(" "),
+        );
+        matched_sim.push(sim);
+        if sim >= 0.8 {
+            line_ok += 1;
+        }
+        // 行内第一个匹配到的时间 vs LRC 行起点
+        let start_offset = times.first().map(|t| t - l.t0);
+        line_rows.push(serde_json::json!({
+            "t0": l.t0,
+            "sim": (sim * 100.0).round() / 100.0,
+            "start_offset": start_offset.map(|v| (v * 100.0).round() / 100.0),
+            "ref": l.en,
+            "said": said_text,
+        }));
+    }
+
+    let offsets: Vec<f32> = line_rows
+        .iter()
+        .filter_map(|r| r["start_offset"].as_f64())
+        .map(|v| v as f32)
+        .collect();
+    let mean_off = if offsets.is_empty() { 0.0 } else { offsets.iter().sum::<f32>() / offsets.len() as f32 };
+    let max_off = offsets.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+    let mean_sim = if matched_sim.is_empty() { 0.0 } else { matched_sim.iter().sum::<f32>() / matched_sim.len() as f32 };
+
+    // ---- 线性拟合 t_hyp = a * t_lrc + b：判断 LRC 是否属于这条音轨 ----
+    let fit = linear_fit(&line_rows);
+    let mut retimed = serde_json::Value::Null;
+    if let Some(out) = write_lrc {
+        if let Some((a, b)) = fit {
+            let mut buf = String::new();
+            for l in &lines {
+                let t = (a * l.t0 + b).max(0.0);
+                let mm = (t / 60.0).floor() as u32;
+                let ss = t - mm as f32 * 60.0;
+                let body = if l.zh.is_empty() {
+                    l.en.clone()
+                } else {
+                    format!("{} | {}", l.en, l.zh)
+                };
+                buf.push_str(&format!("[{mm:02}:{ss:05.2}]{body}
+"));
+            }
+            std::fs::write(out, buf)?;
+            retimed = serde_json::json!(out);
+        }
+    }
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "audio": audio_path,
+            "duration": (duration * 100.0).round() / 100.0,
+            "source_sr": decoded.info.source_sr,
+            "band_limited": decoded.info.band_limited,
+            "asr": { "engine": a.transcript.engine, "infer_ms": (a.transcript.infer_ms * 10.0).round() / 10.0 },
+            "overall": {
+                "accuracy": td.map(|d| (d.accuracy * 1000.0).round() / 1000.0),
+                "issues": td.map(|d| d.issues.len()),
+                "alignment": td.map(|d| format!("{:?}", d.timestamp_alignment).to_lowercase()),
+            },
+            "lines": { "total": lines.len(), "matched_80pct": line_ok,
+                       "mean_line_sim": (mean_sim * 100.0).round() / 100.0,
+                       "mean_start_offset": (mean_off * 100.0).round() / 100.0,
+                       "max_abs_start_offset": (max_off * 100.0).round() / 100.0 },
+            "lrc_fit": fit.map(|(a, b)| serde_json::json!({
+                "scale": (a * 1000.0).round() / 1000.0,
+                "offset_sec": (b * 100.0).round() / 100.0,
+                "consistent": (a - 1.0).abs() < 0.02 && b.abs() < 0.6,
+                "hint": if (a - 1.0).abs() < 0.02 && b.abs() < 0.6 {
+                    "LRC 与本音轨一致".to_string()
+                } else {
+                    format!("LRC 与本音轨不一致：行时间整体差 {:.0}%，可能来自别的剪辑版本；可用 --write-lrc 重定时", (a - 1.0) * 100.0)
+                },
+            })),
+            "retimed_lrc": retimed,
+            "detail": if verbose { serde_json::json!(line_rows) } else { serde_json::json!([]) },
+        }))?
+    );
+    Ok(())
+}
+
+/// 最小二乘拟合 t_hyp = a * t_lrc + b（用每行起点与首个匹配识别词的时间）
+fn linear_fit(rows: &[serde_json::Value]) -> Option<(f32, f32)> {
+    let pts: Vec<(f64, f64)> = rows
+        .iter()
+        .filter_map(|r| {
+            let t = r["t0"].as_f64()?;
+            let off = r["start_offset"].as_f64()?;
+            Some((t, t + off))
+        })
+        .collect();
+    if pts.len() < 2 {
+        return None;
+    }
+    let n = pts.len() as f64;
+    let sx: f64 = pts.iter().map(|p| p.0).sum();
+    let sy: f64 = pts.iter().map(|p| p.1).sum();
+    let sxx: f64 = pts.iter().map(|p| p.0 * p.0).sum();
+    let sxy: f64 = pts.iter().map(|p| p.0 * p.1).sum();
+    let den = n * sxx - sx * sx;
+    if den.abs() < 1e-9 {
+        return None;
+    }
+    let a = (n * sxy - sx * sy) / den;
+    let b = (sy - a * sx) / n;
+    Some((a as f32, b as f32))
+}
+
 // ------------------------------------------------------------------ cases
 fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
     use voice_core::assess::cases;
@@ -456,6 +649,12 @@ fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
             continue;
         }
         let decoded = audio::load_16k(&path)?;
+        // 参考文本：优先 reference_file
+        let reference: Option<String> = match (&case.reference_file, &case.reference) {
+            (Some(f), _) => Some(std::fs::read_to_string(cases::resolve_audio(f))?),
+            (None, Some(t)) => Some(t.clone()),
+            _ => None,
+        };
         let a = voice_core::assess::assess(
             &engines,
             voice_core::AssessRequest {
@@ -463,7 +662,7 @@ fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
                 sample_rate: decoded.sample_rate,
                 lang: &case.lang,
                 engine: case.engine.as_deref(),
-                reference: case.reference.as_deref(),
+                reference: reference.as_deref(),
                 source_sr: Some(decoded.info.source_sr),
             },
         )?;
@@ -582,7 +781,7 @@ fn rec(
 
     let mut t = None;
     if then_stt {
-        let tr = engines.asr.transcribe(&trimmed, voice_core::INTERNAL_SR, lang, None)?;
+        let tr = engines.transcribe_long(&trimmed, voice_core::INTERNAL_SR, lang, None)?;
         session.write_json(&prefix, "asr", &tr)?;
         t = Some(tr);
     }
@@ -792,7 +991,7 @@ fn import_and_transcribe(
         *engines = Some(Engines::load(cfg.clone())?);
     }
     let e = engines.as_ref().unwrap();
-    let tr = e.asr.transcribe(&decoded.samples, decoded.sample_rate, lang, None)?;
+    let tr = e.transcribe_long(&decoded.samples, decoded.sample_rate, lang, None)?;
     let (trimmed, _) = e.vad.trim_silence(&decoded.samples, 0.15);
     let _ = trimmed;
 

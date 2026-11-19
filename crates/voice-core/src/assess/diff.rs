@@ -84,6 +84,9 @@ pub enum TimestampAlignment {
 #[derive(Debug, Clone, Serialize)]
 pub struct Pair {
     pub op: Op,
+    /// 该参考词在规范化参考序列中的下标（用于按行/按段聚合）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ref_index: Option<usize>,
     pub reference: Option<String>,
     pub said: Option<String>,
     /// 归一化后词形相似度 0..1（仅 Substitute 有意义）
@@ -142,8 +145,6 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
     let hyp_token_count = normalize::surfaces(&transcript.text).len();
 
     let ref_words: Vec<String> = ref_units.iter().map(|u| u.text.clone()).collect();
-    let hyp_words: Vec<String> = hyp_units.iter().map(|u| u.text.clone()).collect();
-
     // ASR 词时间戳（优先 words，其次 tokens）
     let src: Vec<(f32, f32)> = if !transcript.words.is_empty() {
         transcript.words.iter().map(|w| (w.t0, w.t1)).collect()
@@ -155,7 +156,15 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
             .map(|w| (w.t0, w.t1))
             .collect()
     };
-    let (hyp_times, alignment_quality) = times_for(&hyp_units, &src, hyp_token_count);
+    let (mut hyp_times, alignment_quality) = times_for(&hyp_units, &src, hyp_token_count);
+
+    // 合成词修复：ASR 常把 "lunchtime" 拆成 "lunch time"，
+    // 不合并会产出「sub 取代 + ins 多读」两条假问题。
+    let ref_set: std::collections::HashSet<String> =
+        ref_units.iter().map(|u| u.text.clone()).collect();
+    let mut hyp_units = hyp_units;
+    merge_split_compounds(&mut hyp_units, &mut hyp_times, &ref_set);
+    let hyp_words: Vec<String> = hyp_units.iter().map(|u| u.text.clone()).collect();
 
     let dp = align(&ref_words, &hyp_words);
     let mut alignment = Vec::with_capacity(dp.len());
@@ -199,9 +208,11 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
 
         let pair = match (&step.reference, &step.said) {
             (Some(r), Some(h)) if r == h => {
+                let ref_idx = ref_cursor;
                 ref_cursor += 1;
                 Pair {
                 op: Op::Equal,
+                ref_index: Some(ref_idx),
                 reference: Some(r.clone()),
                 said: Some(h.clone()),
                 similarity: 1.0,
@@ -258,9 +269,11 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                         hint: Some(hint),
                     });
                 }
+                let ref_idx = ref_cursor;
                 ref_cursor += 1;
                 Pair {
                     op: Op::Substitute,
+                    ref_index: Some(ref_idx),
                     reference: Some(r.clone()),
                     said: Some(h.clone()),
                     similarity: sim,
@@ -304,9 +317,11 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                         hint,
                     });
                 }
+                let ref_idx = ref_cursor;
                 ref_cursor += 1;
                 Pair {
                     op: Op::Delete,
+                    ref_index: Some(ref_idx),
                     reference: Some(r.clone()),
                     said: None,
                     similarity: 0.0,
@@ -333,6 +348,7 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                 });
                 Pair {
                     op: Op::Insert,
+                    ref_index: None,
                     reference: None,
                     said: Some(h.clone()),
                     similarity: 0.0,
@@ -360,6 +376,39 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
         alignment,
         timestamp_alignment: alignment_quality,
         timestamps_estimated: alignment_quality != TimestampAlignment::Exact,
+    }
+}
+
+/// 合并被 ASR 拆开的合成词（`lunch time` → `lunchtime`），并同步时间与 token 序号。
+///
+/// 只在「拼接后是参考里出现过的词」且「两部分都不是独立参考词」时才合并，
+/// 避免把 "in to" → "into"、"some thing" → "something" 这类正常分词误合并。
+fn merge_split_compounds(
+    units: &mut Vec<Unit>,
+    times: &mut Vec<(f32, f32)>,
+    ref_set: &std::collections::HashSet<String>,
+) {
+    let mut i = 0usize;
+    while i + 1 < units.len() {
+        let adjacent = units[i + 1].token == units[i].token + 1;
+        let joined = format!("{}{}", units[i].text, units[i + 1].text);
+        let should_merge = adjacent
+            && units[i].text.chars().count() >= 2
+            && units[i + 1].text.chars().count() >= 2
+            && ref_set.contains(&joined)
+            && !ref_set.contains(&units[i].text);
+        if should_merge {
+            units[i].text = joined;
+            if let (Some(a), Some(b)) = (times.get(i).copied(), times.get(i + 1).copied()) {
+                times[i] = (a.0, b.1.max(a.1));
+            }
+            units.remove(i + 1);
+            if i + 1 < times.len() {
+                times.remove(i + 1);
+            }
+        } else {
+            i += 1;
+        }
     }
 }
 
@@ -624,6 +673,39 @@ mod tests {
         for w in ["think", "elephant", "third", "straight"] {
             assert!(!is_short_function_word(w), "{w} 不应算短功能词");
         }
+    }
+
+    #[test]
+    fn split_compound_is_not_a_problem() {
+        // 实测：原生音频 "lunchtime" 被 ASR 拆成 "lunch time"
+        let t = tr(
+            "I stay in bed until lunch time",
+            &[
+                ("I", 0.0, 0.2),
+                ("stay", 0.2, 0.5),
+                ("in", 0.5, 0.7),
+                ("bed", 0.7, 1.0),
+                ("until", 1.0, 1.4),
+                ("lunch", 1.4, 1.7),
+                ("time", 1.7, 2.0),
+            ],
+        );
+        let d = compare("I stay in bed until lunchtime", &t);
+        assert_eq!(d.issues.len(), 0, "合成词被拆开不应算错: {:?}", d.issues);
+        assert_eq!(d.insertions, 0);
+        assert_eq!(d.substitutions, 0);
+    }
+
+    #[test]
+    fn compound_merge_does_not_join_normal_words() {
+        // "in to" 不应被当成 "into"（参考里没有 into）
+        let t = tr("go in to the room", &[]);
+        let d = compare("go in to the room", &t);
+        assert_eq!(d.issues.len(), 0);
+        // 参考里真的有 into 时才合并
+        let t2 = tr("go in to the room", &[]);
+        let d2 = compare("go into the room", &t2);
+        assert_eq!(d2.issues.len(), 0, "参考 into / 识别 in to 应视为同一词: {:?}", d2.issues);
     }
 
     #[test]

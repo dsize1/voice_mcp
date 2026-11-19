@@ -6,6 +6,7 @@
 pub mod cases;
 pub mod diff;
 pub mod flow;
+pub mod lrc;
 pub mod normalize;
 pub mod phonetic;
 
@@ -66,9 +67,8 @@ pub struct AssessRequest<'a> {
 
 /// 一次完成：ASR → 语流指标 → 词级差异。
 pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
-    let transcript = engines
-        .asr
-        .transcribe(req.samples, req.sample_rate, req.lang, req.engine)?;
+    // 必须走 transcribe_long：长音频直接喂离线模型会静默截断
+    let transcript = engines.transcribe_long(req.samples, req.sample_rate, req.lang, req.engine)?;
     let segments = engines.vad.segments(req.samples);
     let flow = flow::analyze(req.samples, req.sample_rate, &transcript, &segments);
     let audio = apply_source(crate::audio::info(req.samples, req.sample_rate), req.source_sr);

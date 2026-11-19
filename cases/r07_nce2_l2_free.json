@@ -1,0 +1,14 @@
+{
+  "id": "r07_nce2_l2_free",
+  "note": "同一教材音频不做参考比对：NCE 是教学慢速朗读，articulation_rate 实测 129.5 wpm（113 词 / 52 s 发声），用 [110,200] 锁住；同时验证 analysis_window 生效（不被句子间长停顿与尾部静音稀释）。",
+  "audio": "${VOICE_CASES_DIR}/nce2_l2.mp3",
+  "lang": "en",
+  "expect": {
+    "articulation_rate": {
+      "gte": 110,
+      "lte": 200
+    },
+    "band_limited": false,
+    "degraded": false
+  }
+}

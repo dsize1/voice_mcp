@@ -207,8 +207,7 @@ impl VoiceServer {
 
             let lang = p.lang.clone().unwrap_or_else(|| "auto".into());
             let tr = app.with_engines(|e| {
-                e.asr
-                    .transcribe(&decoded.samples, decoded.sample_rate, &lang, p.engine.as_deref())
+                e.transcribe_long(&decoded.samples, decoded.sample_rate, &lang, p.engine.as_deref())
             })?;
 
             session.write_json(&prefix, "asr", &tr)?;
@@ -374,7 +373,7 @@ impl VoiceServer {
             let lang = p.lang.clone().unwrap_or_else(|| "auto".into());
             let tr = if p.transcribe {
                 let tr = app.with_engines(|e| {
-                    e.asr.transcribe(&trimmed, voice_core::INTERNAL_SR, &lang, None)
+                    e.transcribe_long(&trimmed, voice_core::INTERNAL_SR, &lang, None)
                 })?;
                 session.write_json(&prefix, "asr", &tr)?;
                 tr_json = serde_json::json!({

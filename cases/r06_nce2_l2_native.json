@@ -1,0 +1,21 @@
+{
+  "id": "r06_nce2_l2_native",
+  "note": "教材原生音频（24 kHz MP3，81 s，11 词导语不在字幕里）。锁住：mp3 解码、24k→16k、band_limited=false、长音频分块（单次解码会把时间戳压缩 0.77 倍并丢内容）、合成词合并(lunchtime)、对齐精确。11 条 issue 应全部是导语 extra。",
+  "audio": "${VOICE_CASES_DIR}/nce2_l2.mp3",
+  "reference_file": "${VOICE_CASES_DIR}/nce2_l2_ref.txt",
+  "lang": "en",
+  "expect": {
+    "accuracy": { "gte": 0.88, "lte": 0.95 },
+    "timestamp_alignment": "exact",
+    "band_limited": false,
+    "issue_count": { "gte": 9, "lte": 13 },
+    "issues": [
+      { "kind": "extra", "said": "lesson2" },
+      { "kind": "extra", "said": "question" }
+    ],
+    "absent_issues": [
+      { "kind": "substitution", "reference": "lunchtime" },
+      { "kind": "substitution", "reference": "writer's" }
+    ]
+  }
+}

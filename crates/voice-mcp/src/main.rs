@@ -353,6 +353,12 @@ impl VoiceServer {
             let prefix = session.take_prefix(seq, &scene);
 
             let (trimmed, offset) = app.with_engines(|e| Ok(e.vad.trim_silence(&cap.samples, 0.15)))?;
+            // 原始证据：设备采样率原样落盘
+            let raw_path = session
+                .dir
+                .join("takes")
+                .join(format!("{prefix}.raw{}.wav", cap.device_sr));
+            voice_core::audio::wav::write_wav_i16(&raw_path, &cap.raw, cap.device_sr)?;
             let norm = session.write_norm_wav(&prefix, &trimmed, voice_core::INTERNAL_SR)?;
             session.write_json(
                 &prefix,
@@ -390,7 +396,7 @@ impl VoiceServer {
                     session: session.id.clone(),
                     seq,
                     scene: scene.clone(),
-                    src: norm.to_string_lossy().to_string(),
+                    src: raw_path.to_string_lossy().to_string(),
                     norm_wav: Some(norm.to_string_lossy().to_string()),
                     lang: tr.as_ref().map(|t| t.lang.clone()),
                     engine: tr.as_ref().map(|t| t.engine.clone()),
@@ -403,6 +409,7 @@ impl VoiceServer {
 
             Ok(serde_json::json!({
                 "wav": norm,
+                "src": raw_path,
                 "duration": round3(trimmed.len() as f32 / voice_core::INTERNAL_SR as f32),
                 "auto_stopped": cap.auto_stopped,
                 "device": cap.device_name,

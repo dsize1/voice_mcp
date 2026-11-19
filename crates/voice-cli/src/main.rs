@@ -489,6 +489,9 @@ fn rec(
 
     let seq = session.next_seq()?;
     let prefix = session.take_prefix(seq, scene);
+    // 原始证据：设备采样率原样落盘（48k 麦克风就是 48k），16k 是可重建的派生
+    let raw_path = session.dir.join("takes").join(format!("{prefix}.raw{}.wav", cap.device_sr));
+    voice_core::audio::wav::write_wav_i16(&raw_path, &cap.raw, cap.device_sr)?;
     let norm = session.write_norm_wav(&prefix, &trimmed, voice_core::INTERNAL_SR)?;
     session.write_json(
         &prefix,
@@ -512,7 +515,7 @@ fn rec(
         session: session.id.clone(),
         seq,
         scene: scene.to_string(),
-        src: norm.to_string_lossy().to_string(),
+        src: raw_path.to_string_lossy().to_string(),
         norm_wav: Some(norm.to_string_lossy().to_string()),
         lang: t.as_ref().map(|x| x.lang.clone()),
         engine: t.as_ref().map(|x| x.engine.clone()),
@@ -524,10 +527,17 @@ fn rec(
     voice_core::store::finish_take(&store, entry)?;
 
     match t {
-        Some(tr) => print_transcript(&tr, false, serde_json::json!({ "wav": norm })),
+        Some(tr) => print_transcript(
+            &tr,
+            false,
+            serde_json::json!({ "wav": norm, "src": raw_path, "device_sr": cap.device_sr }),
+        ),
         None => println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "wav": norm, "session": session.id }))?
+            serde_json::to_string_pretty(&serde_json::json!({
+                "wav": norm, "src": raw_path, "device_sr": cap.device_sr,
+                "auto_stopped": cap.auto_stopped, "session": session.id
+            }))?
         ),
     }
     Ok(())

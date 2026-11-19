@@ -14,6 +14,8 @@ use super::resample;
 use crate::INTERNAL_SR;
 
 pub struct Captured {
+    /// 设备原始采样率的 mono 采样（留证用：原始证据，16k 是可重建的派生）
+    pub raw: Vec<f32>,
     /// 已重采样到 16 kHz 的 mono 采样
     pub samples: Vec<f32>,
     pub sample_rate: u32,
@@ -30,8 +32,13 @@ pub struct Captured {
 pub struct RecordOptions {
     pub max_sec: f32,
     pub silence_sec: f32,
-    /// 触发自动停止的能量阈值（dBFS），低于此值视为静音
-    pub silence_dbfs: f32,
+    /// 触发自动停止的能量阈值（dBFS）。`None` = 用开场 400 ms 自适应校准。
+    ///
+    /// 为什么必须自适应：实测蓝牙耳机端点底噪 p99 = −42.8 dBFS，
+    /// 固定 −45 dBFS 只高出噪声尾部 2 dB，噪声一抖就永远停不下来。
+    pub silence_dbfs: Option<f32>,
+    /// 自适应校准时长（毫秒）
+    pub calibrate_ms: u32,
     /// 开始前等待说话的最长时间（秒），超时则返回空
     pub start_timeout_sec: f32,
     /// 偏好的采集采样率（设备支持则用，否则退回设备默认）
@@ -43,7 +50,8 @@ impl Default for RecordOptions {
         Self {
             max_sec: 30.0,
             silence_sec: 1.0,
-            silence_dbfs: -45.0,
+            silence_dbfs: None,
+            calibrate_ms: 400,
             start_timeout_sec: 8.0,
             prefer_sr: 48_000,
         }
@@ -222,6 +230,35 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
 
     stream.play().context("启动采集流失败")?;
 
+    // ---- 开场底噪校准（自适应阈值）----
+    let threshold = match opts.silence_dbfs {
+        Some(v) => v,
+        None => {
+            std::thread::sleep(Duration::from_millis(opts.calibrate_ms as u64));
+            let b = buf.lock().unwrap();
+            let hop = (device_sr as usize / 100).max(1);
+            let mut dbs: Vec<f32> = b
+                .chunks(hop)
+                .map(|c| {
+                    let sq: f32 = c.iter().map(|v| v * v).sum();
+                    let rms = (sq / c.len() as f32).sqrt();
+                    if rms <= 0.0 { -120.0 } else { 20.0 * rms.log10() }
+                })
+                .collect();
+            drop(b);
+            if dbs.is_empty() {
+                -45.0
+            } else {
+                dbs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let p95 = dbs[((dbs.len() as f32 - 1.0) * 0.95) as usize];
+                // 噪声尾部 +8 dB，并夹到合理区间，避免极端环境下失效
+                (p95 + 8.0).clamp(-60.0, -20.0)
+            }
+        }
+    };
+    eprintln!("[voice] 自动停止阈值 {threshold:.1} dBFS（{}）",
+        if opts.silence_dbfs.is_some() { "固定值" } else { "开场自适应校准" });
+
     // ---- 轮询：起始超时 / 自动停止 / 上限 ----
     let started = Instant::now();
     let mut speech_started = false;
@@ -253,13 +290,13 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
         };
 
         if !speech_started {
-            if recent_dbfs > opts.silence_dbfs {
+            if recent_dbfs > threshold {
                 speech_started = true;
                 last_loud = Instant::now();
             } else if elapsed > opts.start_timeout_sec {
                 break; // 一直没说话
             }
-        } else if recent_dbfs > opts.silence_dbfs {
+        } else if recent_dbfs > threshold {
             last_loud = Instant::now();
         } else if last_loud.elapsed().as_secs_f32() >= opts.silence_sec {
             auto_stopped = true;
@@ -273,6 +310,17 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
 
     stop.store(true, Ordering::Relaxed);
     drop(stream);
+
+    // 一直没说话 → 明确报错，不要把一整段噪声当录音交上去
+    if !speech_started {
+        return Err(anyhow!(
+            "{} 秒内没有检测到说话（自适应阈值 {:.1} dBFS）。
+             可能原因：麦克风音量太低、选错设备、或系统「音频增强/降噪」压掉了电平。
+             可以先跑 `voice-cli mic --secs 3` 看底噪，再确认设备与音量。",
+            opts.start_timeout_sec as u32,
+            threshold
+        ));
+    }
 
     let raw = {
         let b = buf.lock().unwrap();
@@ -293,6 +341,7 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
     let envelope_db = envelope(&samples, 10);
 
     Ok(Captured {
+        raw,
         samples,
         sample_rate: INTERNAL_SR,
         device_sr,

@@ -61,6 +61,7 @@ C:/voice_data/
     ├── session.md                        # 人可读留证：Agent 追加的讲解与反馈原文
     └── takes/
         ├── 001_read_think.m4a            # 原始输入（不可变、原始格式、原始时间戳）
+        ├── 001_drill.raw48000.wav        # 麦克风采集的原始证据（设备采样率原样）
         ├── 001_read_think.norm.wav       # 派生：16k mono，可删可重建
         ├── 001_read_think.asr.json       # 转写全文 + words[] 时间戳 + engine + degraded
         ├── 001_read_think.metrics.json   # 对齐/GOP/flow/prosody 全部数值

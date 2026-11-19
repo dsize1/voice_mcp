@@ -154,7 +154,9 @@
 | `scene` | string | | 场景标签 |
 | `device` | string | | 输入设备名子串（蓝牙耳机用 `"Hands-Free"`）；不填用配置 `mic` 或系统默认 |
 
-返回 `detail`：`wav` / `duration` / `auto_stopped` / `device` / `device_sr` / `transcript` / `session` / `prefix`
+返回 `detail`：`wav`（16k 派生）/ `src`（设备采样率原始证据，如 `.raw48000.wav`）/ `duration` / `auto_stopped` / `device` / `device_sr` / `transcript` / `session` / `prefix`
+
+> 自动停止阈值**开场自适应**（0.4 s 噪声 p95 + 8 dB）。`auto_stopped=false` 且时长≈max_sec 时说明一直没停顿；一直没说话会直接返回 `ok:false`。
 
 **失败时**（采到稀疏零值/过静音）会返回明确诊断，而不是把假音频当正常录音：
 

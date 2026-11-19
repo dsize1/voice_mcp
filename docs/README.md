@@ -16,6 +16,7 @@
 | [adr/0005-deps-and-model-acquisition.md](adr/0005-deps-and-model-acquisition.md) | 第三方依赖与模型获取策略（网络/工具链实测与替代通路） | Accepted |
 | [adr/0006-assessment-scope.md](adr/0006-assessment-scope.md) | 评测层能力边界（P2 词级诊断的三态推断） | Accepted |
 | [adr/0008-technical-debt.md](adr/0008-technical-debt.md) | **技术欠债登记**（33 条债 + 触发条件 + 偿付顺序） | Living |
+| [adr/0009-drill-library.md](adr/0009-drill-library.md) | 跟读素材库（Drill Library）与 NCE 语料接入 | Proposed (P4) |
 | [security-supply-chain.md](security-supply-chain.md) | 模型与原生库供应链校验（工具+结论） | ✅ |
 | [security-hashes.txt](security-hashes.txt) | 已知良好基线哈希 | ✅ |
 
@@ -51,6 +52,7 @@
 | P2 | 评测层：**词级 diff** ✅ / **flow** ✅ / prosody / GOP scorer | 能定位到具体音素错误 | ⏳ 2/4 完成 |
 | P3 | `ielts-speaking-coach` Skill + learner.json + 雅思题库 | 15 分钟完整训练闭环 | 未开始 |
 | P4 | 热键听写、`record`(cpal+VAD)、CosyVoice2、HTTP、流式 | 按需 | 未开始 |
+| P4 | **跟读素材库**（[ADR-0009](adr/0009-drill-library.md)）：NCE1–4 共 276 课 → 逐句切片 + 质量门槛 | 见 ADR 验收标准 | 已设计 |
 
 ## 5. 硬件基线（实测）
 

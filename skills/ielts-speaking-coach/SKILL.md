@@ -78,7 +78,8 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 ## 3. 每次训练的固定循环（10–15 分钟）
 
 ```
-① 选素材        → 从 learner.json 的 drill_queue 取；空则按 focus 生成 2–3 句
+① 选素材        → drill_queue 优先；条目若是 {bank_id} 就用素材库（读 $VOICE_HOME/bank/index.jsonl
+                  取 text/中文/参考音频路径），否则用内联 text；都没有则按 focus 现场造 2–3 句
 ② 播示范        → synthesize(text=句, speed=0.75, play=true, slow_too=true)
                   再 synthesize(text=句, speed=1.0, play=true)
 ③ 用户跟读      → record 或让用户用录音机

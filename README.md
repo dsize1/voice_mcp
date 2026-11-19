@@ -396,6 +396,7 @@ D:/voice_data/
 | [0005](docs/adr/0005-deps-and-model-acquisition.md) | 依赖与模型获取策略（GitHub 不可用时的替代通路） |
 | [0006](docs/adr/0006-assessment-scope.md) | 评测层能力边界（三态推断、为什么不能硬猜） |
 | [0007](docs/adr/0007-prosody-and-gop.md) | 韵律分析与音素级 GOP（已排期，触发条件明确） |
+| [0009](docs/adr/0009-drill-library.md) | 跟读素材库：NCE1–4 逐句切片、质量门槛、难度分级（Proposed / P4） |
 | [0008](docs/adr/0008-technical-debt.md) | **技术欠债登记**：33 条债、严重度、触发偿付条件、偿付顺序 |
 
 ---
@@ -433,6 +434,7 @@ D:/voice_data/
 | P2 | 评测层：词级 diff + flow | ✅ |
 | P2.5 | 韵律分析（F0/重音/升降调）+ 音素级 GOP（sidecar） | ⏳ 触发条件：≥10 次真实训练 |
 | P3 | `ielts-speaking-coach` / `voice-dictation` Skill | ✅ |
+| P4 | **跟读素材库**（NCE 276 课逐句切片，见 [ADR-0009](docs/adr/0009-drill-library.md)） | 📋 已设计 |
 | P4 | 热键听写 daemon / HTTP 模式 / 流式 TTS / 音色复刻 | – |
 
 ---

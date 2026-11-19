@@ -8,6 +8,9 @@
 # 模型与数据不随仓库走（分别在 C:/voice_models、D:/voice_data）
 /models
 
+# 用例音频（只提交 cases/*.json 断言）
+cases/audio/
+
 # 本地 spike 产物
 *.wav
 *.m4a

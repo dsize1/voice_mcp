@@ -28,6 +28,16 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 | `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`speed` 0.75/1.0、`play=true` 服务端出声、`slow_too=true` 同时出慢速版 |
 | `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"` |
 | `mcp__voice__record` | 麦克风录音（静音自动停）。`mic` 为 null 时不可用 |
+
+**`record` 的 `silence_sec` 按场景给**（默认 2.0；给太小会把学员的刻意停顿当句尾，直接丢掉后面的词）：
+
+| 场景 | `silence_sec` | `max_sec` |
+|---|---|---|
+| 单词 / 最小对立对 | 1.2 | 8 |
+| 短句跟读（≤8 词） | 1.8 | 15 |
+| 整句跟读 | 2.2 | 20 |
+| 自由说 / Part 1 | 2.5 | 45 |
+| Part 2 独白 | **不要用 record**（阻塞太久），让用户用系统录音机 | – |
 | `mcp__voice__play` | 播放某个 wav（示范音或用户自己的录音） |
 | `mcp__voice__transcribe` | 纯转写（不做评测，用于自由说） |
 
@@ -99,6 +109,7 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 | **P0 可理解度** | `kind=omitted`（漏词/吞音） | 词尾辅音、弱读过度；先慢速读这个词 |
 | **P0 可理解度** | `kind=substitution` 且 `hint=likely_pronunciation` | 该词的音素（查 `references/phoneme-map.md`） |
 | **P0 可理解度** | `kind=substitution` 且 `hint=unclear` | **不下结论**，让用户重录该词或对照示范音确认 |
+| **P0 可理解度** | `kind=omitted` 且 `hint=likely_asr_miss` | **不算问题**。短功能词（is/a/the）被 ASR 吞掉很常见；让用户只重读该短语，或用 `engine="whisper"` 复核。不要写进 `error_stats` |
 | **P1 流利度** | `pause_count ≥ 3` 或 `pause_longest > 1.0` | 断句位置、意群 |
 | **P1 流利度** | `word_boundary_breaks ≥ 2` | 连读/词界（`not at all`、`an apple`） |
 | **P1 流利度** | `filler_rate > 5`（每百词）或 `repetitions ≥ 2` | 用呼吸代替 um/uh |

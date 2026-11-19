@@ -1,0 +1,13 @@
+{
+  "id": "r04_tts_perfect",
+  "note": "TTS 合成音当「完美发音者」：24 kHz 源，必须零误报。用于验证 diff 流水线本身不产生假问题。",
+  "audio": "${VOICE_CASES_DIR}/tts_perfect.wav",
+  "reference": "I think this is the third time.",
+  "lang": "en",
+  "expect": {
+    "accuracy": { "gte": 0.99 },
+    "timestamp_alignment": "exact",
+    "band_limited": false,
+    "issue_count": { "lte": 0 }
+  }
+}

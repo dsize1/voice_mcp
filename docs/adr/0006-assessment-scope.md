@@ -97,5 +97,6 @@ hint = likely_pronunciation   (音形≥0.6 或 拼写≥0.6)
 | R4 | 中文 "我觉得非常好" vs "我觉得很好" | 总错误 2，accuracy<1 |
 | R5 | 参考 "I'm fine." vs 识别 "I am fine"（3 词） | 0 问题，`timestamp_alignment=exact`，各词时间不被拉伸 |
 | R6 | 参考 "I'm fine." vs 只识别到 "fine" | 1 条 omitted，`reference_surface="I'm"`（不重复报 2 条） |
+| R9 | 真机 48 kHz 录音（句中停 1 s）| SenseVoice 输出 "I think this the third time"（漏 `is`），同一音频 whisper 输出 "I think it is the third time"。→ 短功能词漏读必须标 `hint=likely_asr_miss` + `severity=medium`，不允许当 high 指控用户 |
 | R8 | **真机 48 kHz 麦克风**（Hands-Free，2.22 s 语音）| accuracy=1.0、0 问题、`exact`、`band_limited=false`、`analysis_window`≈1.92 s、speech_rate 218 wpm（快速朗读）。同一句用 16 kHz 录音机录制时曾识别为 "straight"——说明源音频质量直接决定能否捕捉 /θ/ |
 | R7 | **TTS 音频当完美发音者**：`synthesize` 生成的句音频 → `assess(同一个 reference)` | accuracy=1.0、0 问题、`exact`、`band_limited=false`（24 kHz 源）。用于验证"纯净音频不会产生误报" |

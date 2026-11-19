@@ -59,7 +59,7 @@
 | D18 | 原生 DLL 需**手工** `cp .cache/sherpa/lib/*.dll target/release/`，忘掉就启动即崩（Windows loader 报错，没有友好提示） | README 快速开始第 3 步 | S2 | 第二次有人在这台机器上构建 | 0.5d：`build.rs` 或 cargo xtask 自动复制 |
 | D19 | 无 `rust-toolchain.toml`、无 MSRV 声明（edition 2024 → 1.85+），`Cargo.lock` 已提交 | – | S3 | 出现第二个开发环境 | 10 min |
 | D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | 当前零警告，但靠自觉 | S2 | 第二次提交代码时 | 0.5d（需先解决 D21） |
-| D21 | 仓库内**无音频 fixture**，`decode/diff/flow` 无法在 CI 回归（`.gitignore` 已留 `!crates/**/tests/fixtures/**` 但目录为空） | – | S2 | 做 D20 之前必须先做 | 2h：造 3 个合成 wav fixture（正弦/噪声/合成语音） |
+| D21 | 回归用例 | **部分偿还**：`cases/*.json` 只存断言（音频留本机，`VOICE_CASES_DIR` 指过去），`voice-cli cases` 一条命令跑全部；已覆盖 16k/48k/TTS/自由说/漏词 5 个场景。仍缺：没有**合成** fixture（正弦/噪声），CI 里无法无音频跑 decode/flow | S2 | 接 CI 前 | 2h |
 | D22 | `assess` 的 MCP 版与 CLI `assess_cmd` **逻辑重复**，两处维护 | 两个文件各 ~80 行 | S3 | 参数再变一次时 | 2h：抽到 `voice-core::pipeline` |
 | D23 | `spike` crate 在 workspace 默认成员里，`cargo build --release` 会编译 8 个二进制 | 曾提交；已用 `default-members` 修复 | ~~S3~~ ✅已还 | – | – |
 | D24 | `OkResult.detail: Option<Value>` 丢类型，输出无 schema 约束（只能在文档里写契约） | – | S3 | 想用 schema 做自动校验/生成客户端时 | 1d |
@@ -82,6 +82,7 @@
 | D31 | 无预编译二进制 / 无 GitHub Release，新用户必须本地装 Rust + MSVC | S2 | 出现非 Rust 用户 | 1d（CI 矩阵） |
 | D32 | 无 `LICENSE` 文件（README 只写了许可说明） | ~~S3~~ ✅已还 | – | – |
 | D33 | 项目级 `.pi/mcp.json`、`.pi/settings.json` 因未授信被忽略，与实际生效的全局配置存在**双份真相** | 每次 `pi mcp list` 都会提示 | S3 | 下次交接 | 1h：README 写清"哪个是权威" |
+| D37 | 短功能词漏读目前只靠启发式（词长 ≤4 且在功能词表内）降级，没有真正做双引擎交叉验证 | S2 | 出现误判投诉或要提升英文精度 | 0.5d：`assess` 加 `cross_check=true`，对 omitted 的功能词跑 whisper 复核 |
 | D36 | 蓝牙耳机端点底噪高达 **p50 = −54.7 / p99 = −46.0 dBFS**（正常麦克风自噪约 −70 dBFS），说明设备侧 AGC/降噪在强推电平。后果：能量（intensity）维度不能用于重音判断，韵律只能靠时长 + 音高 | S2 | P2.5 韵律上线前必须定口径 | 0.5d（改为时长+音高为主，能量仅作参考并标注设备） |
 | D35 | 蓝牙耳机（A2DP 端点）在 WASAPI 下"可打开、回调在跑、数据是稀疏零值"；cpal 只枚举到该端点，无法选中未激活的 HFP 端点，只能靠文案引导用户去系统设置切换 | S2 | 有第二个蓝牙麦用户 | 1d（用 windows crate 直接走 WASAPI 端点枚举 + MMDevice 选择） |
 | D34 | 中文 TTS 回读出现 1 处字词偏差（`再练一次`→`你再连一次`），未确定是 TTS 声调/连读问题还是 ASR 误听；中文音色自然度也未经人耳确认 | 上表 D05 的实测输出 | S3 | 用户反馈"中文讲解听不清" | 1h：人工听 + 若确认是 TTS 则换 `lexicon-zh` 或改分段 |
@@ -128,6 +129,8 @@
 | 一直不说话也返回一段噪声当录音 | 未检测到说话直接报错，并提示先跑 `voice-cli mic` 看底噪 |
 | 自动停止被尾部环境噪声拖住（实测多录 1.1 s） | 第二段相对判据：`stop_threshold = max(底噪阈值, 语音峰值 − 12 dB)`，噪声一落就停；带 `silence_sec` 缓冲避免切词尾 |
 | 录音文件的语速被前导/尾部静音稀释（150 wpm 被算成 73 wpm） | `flow.analysis_window` = 首末语音段跨度，语速/占比改用窗口做分母；文件时长另存 |
+| ASR 漏掉弱读短功能词被误判成用户漏读 | `Hint::LikelyAsrMiss`（词长≤4 且在功能词表）+ severity 降为 medium，note 明确写"不能直接判定"，并要求复核 |
+| 1.0 s 静音就判句尾，刻意停顿会丢后半句 | 默认 `silence_sec` 提到 2.0，Skill 里按场景给 1.2/1.8/2.2/2.5 |
 
 ## 八、维护约定
 

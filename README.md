@@ -296,6 +296,26 @@ voice-cli tts-probe                           # 为 54 个音色各生成一句�
 
 ---
 
+## 回归用例
+
+真实录音的回归用 JSON 断言描述，**音频留本机不进仓库**：
+
+```bash
+export VOICE_CASES_DIR="D:/voice_data/cases_audio"   # 放你的 wav/m4a
+voice-cli cases                    # 跑 cases/*.json
+voice-cli cases --only r03         # 只跑一条
+```
+
+现有 5 条（覆盖 16 kHz 录音机 / 48 kHz 麦克风 / TTS 完美音 / 自由说 / 漏词误判）：
+
+| 用例 | 锁住什么 |
+|---|---|
+| `r01_third_16k` | 16 kHz 音频下 `third→straight`、`band_limited=true`、`hint=unclear` |
+| `r02_mic48k_clean` | 48 kHz 读对：`accuracy=1.0`、0 问题、`band_limited=false` |
+| `r03_mic48k_pause_drop_is` | ASR 漏掉 `is` 时必须是 `likely_asr_miss` + `medium`，不能当 high 指控 |
+| `r04_tts_perfect` | TTS 音频零误报（证明 diff 流水线本身干净） |
+| `r05_free_speech_flow` | 无参考文本时语速落在合理区间（分析窗口生效） |
+
 ## 留证机制
 
 ```text

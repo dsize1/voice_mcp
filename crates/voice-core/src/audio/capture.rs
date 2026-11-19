@@ -49,7 +49,9 @@ impl Default for RecordOptions {
     fn default() -> Self {
         Self {
             max_sec: 30.0,
-            silence_sec: 1.0,
+            // 1.0 s 太激进：实测用户刻意停顿 1 s 就会被判成句子结束，
+            // 后续 "is" 直接丢掉。跟读场景 2 s 更稳；单词级由调用方显式调小。
+            silence_sec: 2.0,
             silence_dbfs: None,
             calibrate_ms: 400,
             start_timeout_sec: 8.0,

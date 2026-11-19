@@ -1,0 +1,14 @@
+{
+  "id": "r02_mic48k_clean",
+  "note": "48 kHz 真机麦克风，读对的一句。期望零问题、非窄带、精确对齐。",
+  "audio": "${VOICE_CASES_DIR}/mic48k_clean.wav",
+  "reference": "I think this is the third time.",
+  "lang": "en",
+  "expect": {
+    "accuracy": { "gte": 0.99 },
+    "timestamp_alignment": "exact",
+    "band_limited": false,
+    "degraded": false,
+    "issue_count": { "lte": 0 }
+  }
+}

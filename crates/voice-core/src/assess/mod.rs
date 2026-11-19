@@ -3,6 +3,7 @@
 //! 设计原则（docs/adr/0001）：这一层只产出**可测量的数字与可解释的问题条目**，
 //! 不产出教学话术；话术由 Skill + LLM 根据这些数字生成。
 
+pub mod cases;
 pub mod diff;
 pub mod flow;
 pub mod normalize;

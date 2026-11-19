@@ -71,6 +71,15 @@ enum Cmd {
         #[arg(long, default_value = "assess")]
         scene: String,
     },
+    /// 跑录音回归用例（cases/*.json，只存断言不存音频）
+    Cases {
+        /// 用例目录
+        #[arg(long, default_value = "cases")]
+        dir: String,
+        /// 只跑某个用例
+        #[arg(long)]
+        only: Option<String>,
+    },
     /// 麦克风诊断：设备能力 + 底噪统计（用于校准自动停止阈值）
     Mic {
         /// 采集秒数（保持安静）
@@ -81,7 +90,8 @@ enum Cmd {
     Rec {
         #[arg(long, default_value_t = 30.0)]
         max_sec: f32,
-        #[arg(long, default_value_t = 1.0)]
+        /// 多久没声音算说完（秒）。单词 1.2 / 短句 1.8 / 整句 2.2 / 自由说 2.5
+        #[arg(long, default_value_t = 2.0)]
         silence: f32,
         /// 录完立即转写
         #[arg(long)]
@@ -121,6 +131,7 @@ fn main() -> Result<()> {
             play::play_wav(&path)?;
             Ok(())
         }
+        Cmd::Cases { dir, only } => run_cases(&cfg, &dir, only.as_deref()),
         Cmd::Mic { secs } => mic(&cfg, &secs),
         Cmd::Rec { max_sec, silence, stt: then_stt, lang, scene } => {
             rec(&cfg, max_sec, silence, then_stt, &lang, &scene)
@@ -421,6 +432,71 @@ fn say(
     Ok(())
 }
 
+// ------------------------------------------------------------------ cases
+fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
+    use voice_core::assess::cases;
+    let all = cases::load_dir(dir)?;
+    if all.is_empty() {
+        bail!("用例目录里没有 .json: {dir}");
+    }
+    let selected: Vec<_> = all
+        .into_iter()
+        .filter(|c| only.map(|o| c.id.contains(o)).unwrap_or(true))
+        .collect();
+
+    let engines = Engines::load(cfg.clone())?;
+    let store = Store::open(&cfg.data_dir)?;
+    let (mut pass, mut fail) = (0usize, 0usize);
+    let mut failures = Vec::new();
+
+    for case in &selected {
+        let path = cases::resolve_audio(&case.audio);
+        if !path.is_file() {
+            println!("[SKIP] {} 音频不存在: {}", case.id, path.display());
+            continue;
+        }
+        let decoded = audio::load_16k(&path)?;
+        let a = voice_core::assess::assess(
+            &engines,
+            voice_core::AssessRequest {
+                samples: &decoded.samples,
+                sample_rate: decoded.sample_rate,
+                lang: &case.lang,
+                engine: case.engine.as_deref(),
+                reference: case.reference.as_deref(),
+                source_sr: Some(decoded.info.source_sr),
+            },
+        )?;
+        // 留证：用例结果也落盘，便于事后对比
+        let session = store.new_session("case")?;
+        let seq = session.next_seq()?;
+        let prefix = session.take_prefix(seq, &case.id);
+        session.write_json(&prefix, "metrics", &a)?;
+
+        let r = cases::check(case, &a);
+        if r.passed {
+            pass += 1;
+            println!("[PASS] {}", r.id);
+            println!("       {}", r.summary);
+        } else {
+            fail += 1;
+            println!("[FAIL] {}", r.id);
+            println!("       {}", r.summary);
+            for f in &r.failures {
+                println!("         ✗ {f}");
+            }
+            failures.push(r.id.clone());
+        }
+    }
+
+    println!("
+{} 个用例: {pass} 通过, {fail} 失败", pass + fail);
+    if fail > 0 {
+        bail!("失败用例: {}", failures.join(", "));
+    }
+    Ok(())
+}
+
 // ------------------------------------------------------------------ mic
 fn mic(cfg: &Config, secs: &f32) -> Result<()> {
     println!("== 输入设备能力");
@@ -499,6 +575,7 @@ fn rec(
         &serde_json::json!({
             "device": cap.device_name, "device_sr": cap.device_sr,
             "auto_stopped": cap.auto_stopped, "duration": cap.duration,
+            "silence_sec": silence, "max_sec": max_sec,
             "trim_offset": offset, "envelope_db": cap.envelope_db,
         }),
     )?;

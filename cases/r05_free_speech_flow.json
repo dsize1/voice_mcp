@@ -1,0 +1,11 @@
+{
+  "id": "r05_free_speech_flow",
+  "note": "无参考文本，只验证语流指标落在合理区间（分析窗口生效、语速没有被静音稀释）。",
+  "audio": "${VOICE_CASES_DIR}/mic48k_clean.wav",
+  "lang": "en",
+  "expect": {
+    "speech_rate": { "gte": 120, "lte": 260 },
+    "band_limited": false,
+    "degraded": false
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "r03_mic48k_pause_drop_is",
+  "note": "48 kHz 真机，句中停顿 1 s 后 SenseVoice 漏掉弱读词 is（同一音频 whisper 能听到）。用来锁住「短功能词漏读不可直接指控」。",
+  "audio": "${VOICE_CASES_DIR}/mic48k_pause_drop_is.wav",
+  "reference": "I think this is the third time.",
+  "lang": "en",
+  "expect": {
+    "band_limited": false,
+    "issues": [
+      { "kind": "omitted", "reference": "is", "hint": "likely_asr_miss", "severity": "medium" }
+    ],
+    "absent_issues": [
+      { "kind": "omitted", "reference": "is", "severity": "high" }
+    ]
+  }
+}

@@ -70,19 +70,24 @@
 **Agent 必须遵守的解读规则**（细节见 ADR-0006）：
 
 1. `issues[].kind` 三态：`substitution`（替换，high）/ `omitted`（漏读，high）/ `extra`（多读，medium）。
-2. `summary.timestamp_alignment` 是时间戳质量，决定你能不能报秒数：
+2. `hint=likely_asr_miss`（出现在 `kind=omitted` 上）表示**被漏掉的词是短功能词**
+   （is/a/the/of/to…），而 ASR（尤其 CTC 解码）吞掉这类弱读词非常常见。
+   实测：同一段 48 kHz 录音，SenseVoice 漏掉 `is`，whisper 能听到。
+   **此时绝对不能判用户漏读**，必须让用户只重读该短语确认，或 `engine="whisper"` 复核一次。
+   该类型 severity 固定为 `medium`。
+3. `summary.timestamp_alignment` 是时间戳质量，决定你能不能报秒数：
    - `exact` → 按 token 序号精确对齐，可以说"第 4.5 秒那个词"（但仍是 CTC token 级，±0.5 s）
    - `estimated` → 识别分词与规范化分词不一致（如 `rock'n'roll`、连字符），位置按比例估算，
      **只能说"第几个词"，不要报秒数**
    - `missing` → 无时间戳，只能报词
-3. `issues[].reference_surface` 是参考文本里的**原始写法**（`I'm`、`3rd`）。
+4. `issues[].reference_surface` 是参考文本里的**原始写法**（`I'm`、`3rd`）。
    反馈时优先用它——同一缩写展开出的多个词只会报 1 条问题，不会出现"漏读 i"+"漏读 am"两条。
-4. `hint` 是**三态推断**，不是结论：
+5. `hint` 是**四态推断**，不是结论：
    - `likely_pronunciation` → 可以说"这里听起来是两个近音词，大概率发错了"
    - `likely_different_word` → 别说成发音问题，更像用词/记忆问题
    - `unclear` → **必须**说明"可能是发音问题，也可能是识别误差"，并提出重录或对照示范音
-5. `limitations` 里出现的每一条都要反映到措辞上（例如 `band_limited` 时不要断言 /θ/ vs /s/）。
-6. `accuracy` 只用于**纵向趋势对比**，不要换算成雅思分数对外承诺。
+6. `limitations` 里出现的每一条都要反映到措辞上（例如 `band_limited` 时不要断言 /θ/ vs /s/）。
+7. `accuracy` 只用于**纵向趋势对比**，不要换算成雅思分数对外承诺。
 
 ---
 

@@ -30,6 +30,9 @@ pub struct Config {
     /// 单次录音上限（秒）
     pub record_max_sec: f32,
     /// 录音自动停止的静音判定时长（秒）
+    ///
+    /// 场景建议：单词 1.2 / 短句 1.8 / 整句 2.2 / 自由说 2.5。
+    /// 太小会把刻意停顿当句尾（实测 1.0 s 会丢掉停顿后的词）。
     pub record_silence_sec: f32,
     /// 未指定音色时的默认 sid
     pub default_sid: i32,
@@ -52,7 +55,7 @@ impl Default for Config {
             num_threads: 4,
             en_engine: "sense-voice".into(),
             record_max_sec: 30.0,
-            record_silence_sec: 1.0,
+            record_silence_sec: 2.0,
             default_sid: 0,
             synth_speed: 1.0,
             capture_sr: 48_000,

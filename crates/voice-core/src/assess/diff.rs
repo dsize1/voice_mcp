@@ -56,6 +56,9 @@ pub enum Hint {
     LikelyDifferentWord,
     /// 从文本无法判断（如 third→straight）
     Unclear,
+    /// 疑似 ASR 漏听：短功能词（is / a / the / of…）被 CTC 解码吞掉是常见现象，
+    /// 实测同一条录音 whisper 能听到 "is" 而 SenseVoice 漏掉 → 不能直接判用户漏读
+    LikelyAsrMiss,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -236,6 +239,10 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                             psim * 100.0,
                             sim * 100.0
                         ),
+                        // LikelyAsrMiss 只用于 omitted 分支；这里理论上不会出现
+                        Hint::LikelyAsrMiss => format!(
+                            "参考词 \"{shown}\" → 识别为 \"{h}\"：疑似 ASR 误听，请复核"
+                        ),
                     };
                     issues.push(Issue {
                         kind: IssueKind::Substitution,
@@ -265,6 +272,24 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                 d += 1;
                 if !already_reported(ref_token, &mut last_reported_ref_token) {
                     let shown = ref_surface.clone().unwrap_or_else(|| r.clone());
+                    // 短功能词漏读的可信度低：CTC 解码吞掉 1–4 字母的弱读词很常见
+                    let (hint, severity, note) = if is_short_function_word(r) {
+                        (
+                            Some(Hint::LikelyAsrMiss),
+                            Severity::Medium,
+                            format!(
+                                "参考词 \"{shown}\" 没有被识别到。它是短功能词（通常弱读），                                 ASR 漏听这种情况很常见——**不能直接判定为漏读**。                                 请让用户只重读该短语确认，或用 engine=whisper 复核一次"
+                            ),
+                        )
+                    } else {
+                        (
+                            None,
+                            Severity::High,
+                            format!(
+                                "参考词 \"{shown}\" 没有被识别到：可能是漏读、吞音（词尾辅音/弱读过度），                                 也可能被说得太快连在一起"
+                            ),
+                        )
+                    };
                     issues.push(Issue {
                         kind: IssueKind::Omitted,
                         reference: Some(r.clone()),
@@ -272,14 +297,11 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                         said: None,
                         t0,
                         t1,
-                        severity: Severity::High,
-                        note: format!(
-                            "参考词 \"{shown}\" 没有被识别到：可能是漏读、吞音（词尾辅音/弱读过度），\
-                             也可能被说得太快连在一起"
-                        ),
+                        severity,
+                        note,
                         similarity: 0.0,
                         phonetic_similarity: 0.0,
-                        hint: None,
+                        hint,
                     });
                 }
                 ref_cursor += 1;
@@ -339,6 +361,22 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
         timestamp_alignment: alignment_quality,
         timestamps_estimated: alignment_quality != TimestampAlignment::Exact,
     }
+}
+
+/// 短功能词（弱读词）判定：这些词被 CTC 解码漏掉时，不能轻易归因于用户漏读。
+///
+/// 实测依据：真机 48 kHz 录音 "I think this is the third time"，
+/// SenseVoice 输出 "I think this the third time"（漏 `is`），
+/// 同一音频 whisper 输出 "I think it is the third time"（听到了 `is`）。
+pub fn is_short_function_word(w: &str) -> bool {
+    const WORDS: [&str; 40] = [
+        "a", "an", "the", "is", "are", "was", "were", "am", "be", "been", "of", "to", "in",
+        "on", "at", "it", "its", "this", "that", "and", "or", "but", "as", "so", "do", "does",
+        "did", "have", "has", "had", "will", "would", "can", "could", "shall", "should", "may",
+        "i", "you", "we",
+    ];
+    let lc = w.trim().to_lowercase();
+    lc.chars().count() <= 4 && WORDS.contains(&lc.as_str())
 }
 
 /// 同一个来源 token（如 `I'm` → `i`+`am`）只报一条问题，避免重复刷屏。
@@ -547,6 +585,45 @@ mod tests {
         assert!((is.t0 - 1.2).abs() < 1e-6, "t0={}", is.t0);
         assert!((is.t1 - 1.8).abs() < 1e-6, "t1={}", is.t1);
         assert!(d.accuracy > 0.8 && d.accuracy < 1.0);
+    }
+
+    #[test]
+    fn short_function_word_omission_is_flagged_as_asr_miss() {
+        // 实测案例：SenseVoice 漏掉 "is"
+        let t = tr("I think this the third time", &[]);
+        let d = compare("I think this is the third time", &t);
+        let is_issue = d
+            .issues
+            .iter()
+            .find(|i| i.reference.as_deref() == Some("is"))
+            .expect("应报 1 条 omitted");
+        assert_eq!(is_issue.kind, IssueKind::Omitted);
+        assert_eq!(is_issue.hint, Some(Hint::LikelyAsrMiss));
+        assert_eq!(is_issue.severity, Severity::Medium, "不能当 high 直接指责");
+        assert!(is_issue.note.contains("不能直接判定"));
+    }
+
+    #[test]
+    fn content_word_omission_stays_high_severity() {
+        let t = tr("The cat sat", &[]);
+        let d = compare("The elephant cat sat", &t);
+        let el = d
+            .issues
+            .iter()
+            .find(|i| i.reference.as_deref() == Some("elephant"))
+            .expect("应报 elephant 漏读");
+        assert_eq!(el.severity, Severity::High);
+        assert_eq!(el.hint, None, "实词漏读不应降级");
+    }
+
+    #[test]
+    fn function_word_list_is_sane() {
+        for w in ["is", "the", "of", "to", "a", "it"] {
+            assert!(is_short_function_word(w), "{w} 应算短功能词");
+        }
+        for w in ["think", "elephant", "third", "straight"] {
+            assert!(!is_short_function_word(w), "{w} 不应算短功能词");
+        }
     }
 
     #[test]

@@ -35,7 +35,7 @@
 | D04 | whisper 路径只做过一次手工验证：token→词合并、标点、`enable_token_timestamps=false` 的降级路径都**没有回归测试**；`mixed` 路由首次调用要惰性加载 1.6 s，会顶到 Pi 的交互预期 | `crates/spike/src/bin/asr_whisper.rs` 的输出显示 `tokens: []` | S1（对中英混说用户） | 出现第一个真实中英混说使用场景 | 0.5d：补 3 个 fixture + 一个 `asr_routing` 集成测试 |
 | D05 | 中文 TTS 从未实测（`lang` 字段在 sherpa-onnx ≥2.0 已被忽略，只认 lexicon） | **已实测**：`zf_xiaobei`(sid 46) 合成 3.73 s / RTF 0.26；回读校验 `我觉得这个句子读得不错，再练一次。` → ASR 得 `…你再连一次。`（14/15 字一致）。`zm_yunjian`(sid 50) 同样正常。中文合成可用 | ~~S1~~ ✅已还 | – | – |
 | D06 | Kokoro 的 音色名↔sid 表按 hexgrad 官方 voices 目录**字典序推断**，仅 `af_heart→sid=3` 一处自洽，未人耳校准 | 无 | S2 | 用户抱怨音色不对，或要用特定音色做人设 | 1h：跑 `voice-cli tts-probe` 逐个试听 |
-| D07 | `record` 全链路**零实测**（本机无麦克风）：能量自动停止阈值 −45 dBFS、静音判定、VAD 精修都未验证 | `status.mic = null` | S1（录音功能不可用） | 麦克风到位后**立即** | 1h：校准阈值 + 补一段真实录音 fixture |
+| D07 | `record` 全链路实测 | **部分偿还**：设备枚举、格式协商（优先单声道 48k F32）、自动停止、VAD 精修、电平防线都已跑通；实测发现本机蓝牙耳机（EDIFIER W820NB）默认端点录到的是稀疏零值（2.4% 非零 / p90 −120 dBFS），**卡在硬件端点选择**上。缺少的是"真人说话"这一环 | S1 | 用户把系统输入切到 Hands-Free 端点或改插 USB 麦后立即 | 0.5h |
 | D08 | `capture` 的起始等待（8 s 内不说话就返回空）与自动停止阈值对**不同麦克风增益**没有自适应（无 AGC 补偿） | 代码推理 | S2 | 换第二支麦克风时 | 0.5d：先跑 5 s 环境噪声估底噪，再按 SNR 定阈值 |
 
 ## 二、评测精度（能力债，非 bug）
@@ -82,6 +82,7 @@
 | D31 | 无预编译二进制 / 无 GitHub Release，新用户必须本地装 Rust + MSVC | S2 | 出现非 Rust 用户 | 1d（CI 矩阵） |
 | D32 | 无 `LICENSE` 文件（README 只写了许可说明） | ~~S3~~ ✅已还 | – | – |
 | D33 | 项目级 `.pi/mcp.json`、`.pi/settings.json` 因未授信被忽略，与实际生效的全局配置存在**双份真相** | 每次 `pi mcp list` 都会提示 | S3 | 下次交接 | 1h：README 写清"哪个是权威" |
+| D35 | 蓝牙耳机（A2DP 端点）在 WASAPI 下"可打开、回调在跑、数据是稀疏零值"；cpal 只枚举到该端点，无法选中未激活的 HFP 端点，只能靠文案引导用户去系统设置切换 | S2 | 有第二个蓝牙麦用户 | 1d（用 windows crate 直接走 WASAPI 端点枚举 + MMDevice 选择） |
 | D34 | 中文 TTS 回读出现 1 处字词偏差（`再练一次`→`你再连一次`），未确定是 TTS 声调/连读问题还是 ASR 误听；中文音色自然度也未经人耳确认 | 上表 D05 的实测输出 | S3 | 用户反馈"中文讲解听不清" | 1h：人工听 + 若确认是 TTS 则换 `lexicon-zh` 或改分段 |
 
 ---
@@ -117,6 +118,10 @@
 | 哈希基线只有 8 条 | `--write-baseline` 全量输出（22 条：12 模型 + 3 DLL + 1 轮子） |
 | 中文 TTS 未验证 | 实测可用（RTF 0.26，回读 14/15 字），残留质性问题另立 D34 |
 | 词时间戳比例映射静默错位（D03） | 规范化词携带 token 序号，精确对齐；同 token 合并上报；新增 `timestamp_alignment` |
+| 采集到假音频却当正常处理（蓝牙零值） | `is_effectively_silent`：峰值 <−60 dBFS **或** 过半 10 ms 帧全零 → 报错并给 4 条可操作指引（含 Hands-Free 端点提示） |
+| `capture_sr` 是死配置（从不生效） | 新增 `preferred_config()`：设备支持时主动要单声道 48 kHz F32，否则退回默认 |
+| `band_limited` 恒为 true（拿 16 kHz 分析域当源采样率判） | `AssessRequest.source_sr` + `apply_source()`，按**源**采样率判定；R7 复测 24 kHz → `band_limited: false` |
+| 无法指定输入设备 | `RecordOptions`/CLI `--device`/MCP `record.device`/环境变量 `VOICE_MIC`（按名称子串匹配） |
 
 ## 八、维护约定
 

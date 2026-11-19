@@ -112,6 +112,9 @@ struct RecordParams {
     lang: Option<String>,
     #[serde(default)]
     scene: Option<String>,
+    /// 输入设备名子串（蓝牙耳机用 "Hands-Free"）；不填用配置 mic 或系统默认
+    #[serde(default)]
+    device: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
@@ -339,9 +342,11 @@ impl VoiceServer {
             let opts = capture::RecordOptions {
                 max_sec: p.max_sec.unwrap_or(app.cfg.record_max_sec),
                 silence_sec: p.silence_sec.unwrap_or(app.cfg.record_silence_sec),
+                prefer_sr: app.cfg.capture_sr,
                 ..Default::default()
             };
-            let cap = capture::record(&opts)?;
+            let device = p.device.clone().or_else(|| app.cfg.mic.clone());
+            let cap = capture::record_with(device.as_deref(), &opts)?;
             let session = app.store.new_session("drill")?;
             let seq = session.next_seq()?;
             let scene = p.scene.clone().unwrap_or_else(|| "drill".into());
@@ -566,6 +571,7 @@ impl VoiceServer {
                         lang: &lang,
                         engine: p.engine.as_deref(),
                         reference: p.reference.as_deref(),
+                        source_sr: Some(decoded.info.source_sr),
                     },
                 )
             })?;

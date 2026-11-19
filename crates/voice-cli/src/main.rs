@@ -71,6 +71,12 @@ enum Cmd {
         #[arg(long, default_value = "assess")]
         scene: String,
     },
+    /// 麦克风诊断：设备能力 + 底噪统计（用于校准自动停止阈值）
+    Mic {
+        /// 采集秒数（保持安静）
+        #[arg(long, default_value_t = 3.0)]
+        secs: f32,
+    },
     /// 录音（自动停止）并可立即转写
     Rec {
         #[arg(long, default_value_t = 30.0)]
@@ -115,6 +121,7 @@ fn main() -> Result<()> {
             play::play_wav(&path)?;
             Ok(())
         }
+        Cmd::Mic { secs } => mic(&cfg, &secs),
         Cmd::Rec { max_sec, silence, stt: then_stt, lang, scene } => {
             rec(&cfg, max_sec, silence, then_stt, &lang, &scene)
         }
@@ -183,6 +190,16 @@ fn doctor(cfg: &Config, load: bool) -> Result<()> {
     }
     for d in capture::input_devices() {
         println!("         可用: {d}");
+    }
+    if let Ok(r) = capture::measure_noise_with(cfg.mic.as_deref(), 0.6) {
+        if r.narrowband {
+            println!(
+                "  [WARN] 默认输入是窄带设备（{} Hz）：蓝牙 HFP 常见，摩擦音细节受限；                 纠音建议用 USB/有线麦克风（48 kHz）",
+                r.device_sr
+            );
+        } else {
+            println!("  [OK]   输入采样率 {} Hz（宽带）", r.device_sr);
+        }
     }
 
     println!("\n-- 监视目录（Win11 录音机）");
@@ -404,6 +421,40 @@ fn say(
     Ok(())
 }
 
+// ------------------------------------------------------------------ mic
+fn mic(cfg: &Config, secs: &f32) -> Result<()> {
+    println!("== 输入设备能力");
+    let report = capture::device_report();
+    for d in report["devices"].as_array().cloned().unwrap_or_default() {
+        println!("  - {}", d["name"].as_str().unwrap_or("?"));
+        if let Some(s) = d["supported"].as_array() {
+            for f in s {
+                println!(
+                    "      {:>4} ch {}  {}..{} Hz",
+                    f["channels"], f["format"].as_str().unwrap_or("?"),
+                    f["min_rate"], f["max_rate"]
+                );
+            }
+        }
+    }
+    println!("
+  默认: {}", report["default"].as_str().unwrap_or("(无)"));
+    println!("  配置 mic: {}", cfg.mic.as_deref().unwrap_or("(未指定，用默认)"));
+    println!("
+== 底噪测量（保持安静 {secs}s）");
+    let r = capture::measure_noise_with(cfg.mic.as_deref(), *secs)?;
+    println!("{}", serde_json::to_string_pretty(&r)?);
+    if r.narrowband {
+        println!(
+            "
+⚠️  该设备采样率 {} Hz ≤16 kHz：蓝牙耳机（HFP）常见，摩擦音细节受限。
+   纠音训练建议改用 USB / 有线麦克风（48 kHz）。",
+            r.device_sr
+        );
+    }
+    Ok(())
+}
+
 // ------------------------------------------------------------------ rec
 fn rec(
     cfg: &Config,
@@ -420,9 +471,10 @@ fn rec(
     let opts = capture::RecordOptions {
         max_sec,
         silence_sec: silence,
+        prefer_sr: cfg.capture_sr,
         ..Default::default()
     };
-    let cap = capture::record(&opts)?;
+    let cap = capture::record_with(cfg.mic.as_deref(), &opts)?;
     eprintln!(
         "[voice] 采集完成 {:.2}s @{} Hz（设备 {} Hz{}）",
         cap.duration,
@@ -508,6 +560,7 @@ fn assess_cmd(
             lang,
             engine,
             reference,
+            source_sr: Some(decoded.info.source_sr),
         },
     )?;
 

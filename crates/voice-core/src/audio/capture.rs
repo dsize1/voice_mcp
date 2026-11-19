@@ -34,6 +34,8 @@ pub struct RecordOptions {
     pub silence_dbfs: f32,
     /// 开始前等待说话的最长时间（秒），超时则返回空
     pub start_timeout_sec: f32,
+    /// 偏好的采集采样率（设备支持则用，否则退回设备默认）
+    pub prefer_sr: u32,
 }
 
 impl Default for RecordOptions {
@@ -43,23 +45,124 @@ impl Default for RecordOptions {
             silence_sec: 1.0,
             silence_dbfs: -45.0,
             start_timeout_sec: 8.0,
+            prefer_sr: 48_000,
         }
     }
 }
 
-/// 采集一段语音。
+/// 按名称（大小写不敏感的子串）选择输入设备；`None` 用系统默认。
+///
+/// 蓝牙耳机常见坑：默认端点可能是 A2DP 那条，录出来全是数字静音，
+/// 真正的麦克风在 "Hands-Free" 端点上，必须显式指定。
+pub fn pick_device(name: Option<&str>) -> Result<cpal::Device> {
+    let host = cpal::default_host();
+    if let Some(want) = name {
+        let want_lc = want.to_lowercase();
+        if let Ok(iter) = host.input_devices() {
+            for d in iter {
+                if d.to_string().to_lowercase().contains(&want_lc) {
+                    return Ok(d);
+                }
+            }
+        }
+        eprintln!("[voice] 没找到匹配 \"{want}\" 的输入设备，回退到默认设备");
+    }
+    host.default_input_device()
+        .ok_or_else(|| anyhow!("没有可用的默认麦克风"))
+}
+
+/// 选择采集格式：优先「单声道 + 偏好采样率 + F32」，否则退回设备默认。
+///
+/// 蓝牙 HFP 只有 16 kHz，USB/有线麦克风通常支持 48 kHz——
+/// 想拿到「高精度模式」，必须在设备支持时主动要 48 kHz，而不是躺平用默认值。
+fn preferred_config(device: &cpal::Device, prefer_sr: u32) -> Result<cpal::SupportedStreamConfig> {
+    if let Ok(ranges) = device.supported_input_configs() {
+        let mut best: Option<cpal::SupportedStreamConfigRange> = None;
+        for c in ranges {
+            if c.min_sample_rate() > prefer_sr || c.max_sample_rate() < prefer_sr {
+                continue;
+            }
+            if c.channels() != 1 {
+                continue;
+            }
+            // F32 优先
+            let better = match &best {
+                None => true,
+                Some(b) => {
+                    matches!(c.sample_format(), cpal::SampleFormat::F32)
+                        && !matches!(b.sample_format(), cpal::SampleFormat::F32)
+                }
+            };
+            if better {
+                best = Some(c);
+            }
+        }
+        if let Some(b) = best {
+            return Ok(b.with_sample_rate(prefer_sr));
+        }
+    }
+    device.default_input_config().context("获取麦克风默认格式失败")
+}
+
+/// 严格全零判定（蓝牙 A2DP 端点常见：回调在跑但数据全 0）。
+pub fn is_digital_silence(samples: &[f32]) -> bool {
+    !samples.is_empty() && samples.iter().all(|v| v.abs() < 1e-7)
+}
+
+/// 有效静音判定：峰值低于 -60 dBFS 视为"没采到真实声音"。
+///
+/// 实测蓝牙 A2DP 端点会给出"碎片式零值"（97% 采样为 0、峰值 -78 dBFS），
+/// 用严格全零判定抓不住，必须看电平。
+pub fn is_effectively_silent(samples: &[f32]) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+    let peak = samples.iter().fold(0f32, |a, b| a.max(b.abs()));
+    if peak < 1e-3 {
+        return true; // 峰值过低：-60 dBFS
+    }
+    // 碎片式零值：蓝牙 A2DP 端点实测"2.4% 非零、其余全是 0、峰值 −40 dBFS"，
+    // 靠峰值抓不住，但"超过一半的 10 ms 帧全为 0"是决定性特征——
+    // 真实麦克风的底噪不会让整帧变成数字零。
+    let hop = (crate::INTERNAL_SR as usize / 100).max(1).min(samples.len().max(1));
+    // 注意：这里按传入采样率近似用 10ms 窗口，足够判定零帧比例
+    let frames: Vec<&[f32]> = samples.chunks(hop).collect();
+    if frames.len() < 5 {
+        return false;
+    }
+    let zero_frames = frames
+        .iter()
+        .filter(|f| f.iter().all(|v| v.abs() < 1e-6))
+        .count();
+    zero_frames * 2 > frames.len()
+}
+
+/// 采集失败时的统一诊断文案（蓝牙端点 / 权限 / 设备选择）
+fn capture_guidance(device_name: &str, peak_dbfs: f32) -> String {
+    format!(
+        "设备 \"{device_name}\" 采到的音频接近静音（峰值 {peak_dbfs:.0} dBFS），不是真实声音。
+         常见原因与处理：
+           1) 蓝牙耳机：系统默认输入选到了 A2DP 端点。请到
+              「设置 → 系统 → 声音 → 输入」改选名称含 **Hands-Free** 的那一项，再重试；
+           2) 或用 USB / 有线麦克风（纠音更准：蓝牙 HFP 只有 16 kHz 且带强降噪）；
+           3) 检查「设置 → 隐私和安全性 → 麦克风」是否允许桌面应用访问；
+           4) 设备固定可用环境变量 VOICE_MIC=\"Hands-Free\" 或 record 的 device 参数。"
+    )
+}
+
+/// 采集一段语音（使用系统默认输入设备）。
 ///
 /// 返回前会把采样重采样到 16 kHz mono。
 pub fn record(opts: &RecordOptions) -> Result<Captured> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| anyhow!("没有可用的默认麦克风"))?;
+    record_with(None, opts)
+}
+
+/// 采集一段语音（可指定设备名子串）。
+pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Captured> {
+    let device = pick_device(device)?;
     let device_name = device.to_string();
 
-    let config = device
-        .default_input_config()
-        .context("获取麦克风默认格式失败")?;
+    let config = preferred_config(&device, opts.prefer_sr)?;
     let device_sr = config.sample_rate();
     let channels = config.channels() as usize;
     let sample_format = config.sample_format();
@@ -71,7 +174,16 @@ pub fn record(opts: &RecordOptions) -> Result<Captured> {
     let stop = Arc::new(AtomicBool::new(false));
     let frames_seen = Arc::new(AtomicUsize::new(0));
 
-    let err_fn = |e| eprintln!("[voice] 采集流错误: {e}");
+    let err_count = Arc::new(AtomicUsize::new(0));
+    let err_fn = {
+        let err_count = err_count.clone();
+        move |e| {
+            let n = err_count.fetch_add(1, Ordering::Relaxed) + 1;
+            if n <= 3 {
+                eprintln!("[voice] 采集流错误（第 {n} 次）: {e}");
+            }
+        }
+    };
 
     macro_rules! build {
         ($t:ty, $conv:expr) => {{
@@ -169,6 +281,12 @@ pub fn record(opts: &RecordOptions) -> Result<Captured> {
     if raw.is_empty() {
         return Err(anyhow!("没有采集到音频（麦克风权限或设备问题）"));
     }
+    // 蓝牙 A2DP 端点常见：回调在跑但数据全 0
+    if is_effectively_silent(&raw) {
+        let peak = raw.iter().fold(0f32, |a, b| a.max(b.abs()));
+        let dbfs = if peak <= 0.0 { -120.0 } else { 20.0 * peak.log10() };
+        return Err(anyhow!(capture_guidance(&device_name, dbfs)));
+    }
 
     let samples = resample::resample(&raw, device_sr, INTERNAL_SR);
     let duration = samples.len() as f32 / INTERNAL_SR as f32;
@@ -214,4 +332,183 @@ pub fn envelope(samples: &[f32], hop_ms: u32) -> Vec<f32> {
             if rms <= 0.0 { -120.0 } else { 20.0 * rms.log10() }
         })
         .collect()
+}
+
+// ------------------------------------------------------------------ 诊断
+/// 设备能力报告（doctor / mic 用）：列出所有输入设备及其支持的格式。
+pub fn device_report() -> serde_json::Value {
+    let host = cpal::default_host();
+    let default = default_input_device();
+    let mut devices = Vec::new();
+    if let Ok(iter) = host.input_devices() {
+        for d in iter {
+            let mut formats = Vec::new();
+            if let Ok(cfgs) = d.supported_input_configs() {
+                for c in cfgs {
+                    formats.push(serde_json::json!({
+                        "format": format!("{:?}", c.sample_format()),
+                        "channels": c.channels(),
+                        "min_rate": c.min_sample_rate(),
+                        "max_rate": c.max_sample_rate(),
+                    }));
+                }
+            }
+            devices.push(serde_json::json!({
+                "name": d.to_string(),
+                "default_format": d
+                    .default_input_config()
+                    .map(|c| serde_json::json!({
+                        "format": format!("{:?}", c.sample_format()),
+                        "channels": c.channels(),
+                        "rate": c.sample_rate(),
+                    }))
+                    .ok(),
+                "supported": formats,
+            }));
+        }
+    }
+    serde_json::json!({ "default": default, "devices": devices })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NoiseReport {
+    pub device: String,
+    pub device_sr: u32,
+    pub channels: u16,
+    pub sample_format: String,
+    pub seconds: f32,
+    pub peak_dbfs: f32,
+    /// 帧能量分位数（dBFS）
+    pub p10_dbfs: f32,
+    pub p50_dbfs: f32,
+    pub p90_dbfs: f32,
+    pub p99_dbfs: f32,
+    /// 建议的自动停止阈值 = p99 + 6 dB
+    pub suggested_silence_dbfs: f32,
+    /// 建议的"开始说话"判定 = p99 + 8 dB
+    pub suggested_start_dbfs: f32,
+    /// 是否窄带（≤16 kHz）——蓝牙耳机 HFP 常见
+    pub narrowband: bool,
+}
+
+/// 录制 `secs` 秒并统计底噪（用于校准自动停止阈值）。
+pub fn measure_noise(secs: f32) -> Result<NoiseReport> {
+    measure_noise_with(None, secs)
+}
+
+/// 同 `measure_noise`，但可指定设备名子串。
+pub fn measure_noise_with(name: Option<&str>, secs: f32) -> Result<NoiseReport> {
+    let device = pick_device(name)?;
+    let device_name = device.to_string();
+    let cfg = device.default_input_config().context("获取默认输入格式失败")?;
+    let device_sr = cfg.sample_rate();
+    let channels = cfg.channels();
+    let sample_format = format!("{:?}", cfg.sample_format());
+    let ch = channels as usize;
+
+    let buf: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let b2 = buf.clone();
+    let stream = device.build_input_stream(
+        cfg.into(),
+        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            let mut b = b2.lock().unwrap();
+            for f in data.chunks(ch) {
+                b.push(f.iter().sum::<f32>() / ch as f32);
+            }
+        },
+        |e| eprintln!("[voice] 采集流错误: {e}"),
+        None,
+    )?;
+    stream.play().context("启动采集流失败")?;
+    std::thread::sleep(Duration::from_secs_f32(secs.max(0.5)));
+    drop(stream);
+
+    let x = buf.lock().unwrap().clone();
+    if x.is_empty() {
+        return Err(anyhow!("没有采集到数据（麦克风权限？）"));
+    }
+    if is_effectively_silent(&x) {
+        let peak = x.iter().fold(0f32, |a, b| a.max(b.abs()));
+        let dbfs = if peak <= 0.0 { -120.0 } else { 20.0 * peak.log10() };
+        return Err(anyhow!(capture_guidance(&device_name, dbfs)));
+    }
+    let db = |v: f32| if v <= 0.0 { -120.0 } else { 20.0 * v.log10() };
+    let hop = (device_sr as usize / 100).max(1);
+    let mut dbs: Vec<f32> = x
+        .chunks(hop)
+        .map(|c| {
+            let sq: f32 = c.iter().map(|v| v * v).sum();
+            db((sq / c.len() as f32).sqrt())
+        })
+        .collect();
+    dbs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pct = |p: f32| dbs[((dbs.len() as f32 - 1.0) * p) as usize];
+    let peak = x.iter().fold(0f32, |a, b| a.max(b.abs()));
+
+    Ok(NoiseReport {
+        device: device_name,
+        device_sr,
+        channels,
+        sample_format,
+        seconds: x.len() as f32 / device_sr as f32,
+        peak_dbfs: db(peak),
+        p10_dbfs: pct(0.10),
+        p50_dbfs: pct(0.50),
+        p90_dbfs: pct(0.90),
+        p99_dbfs: pct(0.99),
+        suggested_silence_dbfs: pct(0.99) + 6.0,
+        suggested_start_dbfs: pct(0.99) + 8.0,
+        narrowband: device_sr <= 16_000,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_digital_silence() {
+        assert!(is_digital_silence(&[0.0, 0.0, -0.0]));
+        assert!(!is_digital_silence(&[0.0, 1e-5]));
+        assert!(!is_digital_silence(&[]), "空切片不算数字静音（另由 empty 判定）");
+    }
+
+    #[test]
+    fn detects_effectively_silent() {
+        // 蓝牙 A2DP 端点的真实形态：多数为 0，偶尔有几个极小值
+        let mut v = vec![0.0f32; 10_000];
+        v[42] = 1.2e-4; // 约 -78 dBFS
+        assert!(!is_digital_silence(&v), "不是严格全零");
+        assert!(is_effectively_silent(&v), "但必须判为无效静音");
+
+        // 正常说话：峰值 ~ -20 dBFS
+        assert!(!is_effectively_silent(&[0.0, 0.1, -0.5, 0.02]));
+
+        // 稀疏脉冲：峰值不低，但绝大多数帧是全零（蓝牙端点实测形态）
+        let mut sparse = vec![0.0f32; 16_000];
+        for i in (0..16_000).step_by(3_000) {
+            sparse[i] = 0.01;
+        }
+        assert!(!is_effectively_silent(&sparse[..4]), "样本太少不做零帧判定");
+        let mut sparse2 = sparse.clone();
+        sparse2[400] = 0.5; // 抬高峰值
+        assert!(is_effectively_silent(&sparse2), "峰值高但零帧占多数 → 判无效");
+
+        // 真实麦克风底噪：帧不全零
+        let noise: Vec<f32> = (0..16_000).map(|i| 0.003 * ((i as f32 * 0.7).sin())).collect();
+        assert!(!is_effectively_silent(&noise));
+    }
+
+    #[test]
+    fn envelope_tracks_level() {
+        // 0.5 幅度正弦，10 ms 帧 -> 约 -9 dBFS
+        let sr = crate::INTERNAL_SR as f32;
+        let x: Vec<f32> = (0..(sr as usize / 2))
+            .map(|i| 0.5 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sr).sin())
+            .collect();
+        let env = envelope(&x, 10);
+        assert!(!env.is_empty());
+        let max = env.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(max > -12.0 && max < -6.0, "峰值帧能量 {max} dBFS 不在预期范围");
+    }
 }

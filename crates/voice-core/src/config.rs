@@ -39,6 +39,8 @@ pub struct Config {
     pub watch_dirs: Vec<PathBuf>,
     /// 高精度采集采样率（cpal）
     pub capture_sr: u32,
+    /// 输入设备名子串（蓝牙耳机需指定 "Hands-Free"）；None = 系统默认
+    pub mic: Option<String>,
 }
 
 impl Default for Config {
@@ -54,6 +56,7 @@ impl Default for Config {
             default_sid: 0,
             synth_speed: 1.0,
             capture_sr: 48_000,
+            mic: None,
             watch_dirs: default_watch_dirs(),
         }
     }

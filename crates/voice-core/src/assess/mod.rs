@@ -33,6 +33,16 @@ pub struct Assessment {
     pub scorer_version: String,
 }
 
+/// 用原始采样率修正体检结果：`band_limited` 必须按**源**采样率判断，
+/// 否则 16 kHz 的分析域会让所有输入都被标成窄带。
+pub fn apply_source(mut info: AudioInfo, source_sr: Option<u32>) -> AudioInfo {
+    if let Some(sr) = source_sr {
+        info.source_sr = sr;
+        info.band_limited = sr <= 16_000;
+    }
+    info
+}
+
 /// VAD 静默失败判定：转写出了多个词，却几乎没检测到语音段。
 ///
 /// 这是 D02 的判定谓词，独立成函数以便单测（历史 bug：`articulation_rate=1891 wpm`）。
@@ -48,6 +58,9 @@ pub struct AssessRequest<'a> {
     pub engine: Option<&'a str>,
     /// 参考文本（跟读/朗读场景）；为空则只做语流分析
     pub reference: Option<&'a str>,
+    /// 原始文件/设备的采样率。用于正确判断 `band_limited`
+    /// （分析用的采样率恒为 16 kHz，不能拿它判断"源音频是否窄带"）。
+    pub source_sr: Option<u32>,
 }
 
 /// 一次完成：ASR → 语流指标 → 词级差异。
@@ -57,7 +70,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         .transcribe(req.samples, req.sample_rate, req.lang, req.engine)?;
     let segments = engines.vad.segments(req.samples);
     let flow = flow::analyze(req.samples, req.sample_rate, &transcript, &segments);
-    let audio = crate::audio::info(req.samples, req.sample_rate);
+    let audio = apply_source(crate::audio::info(req.samples, req.sample_rate), req.source_sr);
     let text_diff = req
         .reference
         .map(|r| diff::compare(r, &transcript))
@@ -115,6 +128,19 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn band_limited_follows_source_rate() {
+        let a = crate::audio::info(&vec![0.01f32; 16_000], 16_000);
+        assert!(a.band_limited, "16k 分析域默认是窄带");
+        // 源是 48k → 不是窄带
+        assert!(!apply_source(a.clone(), Some(48_000)).band_limited);
+        assert_eq!(apply_source(a.clone(), Some(48_000)).source_sr, 48_000);
+        // 源是 16k → 窄带
+        assert!(apply_source(a.clone(), Some(16_000)).band_limited);
+        // 未提供 → 保持分析域判定
+        assert!(apply_source(a, None).band_limited);
+    }
 
     #[test]
     fn vad_suspect_flags_silent_failure() {

@@ -227,6 +227,7 @@ pi -p "列出你现在可用的 skills"
 | `VOICE_HOME` | `D:/voice_data` | 留证/档案/索引目录 |
 | `VOICE_PROVIDER` | `cpu` | `cpu` / `cuda`（GPU 未打通，见 ADR-0005） |
 | `VOICE_THREADS` | `4` | ONNX Runtime 线程数 |
+| `VOICE_MIC` | 空（系统默认） | 输入设备名子串。**蓝牙耳机必须指定**，如 `Hands-Free` |
 
 `config.json` 还支持：`en_engine`（英文默认引擎，默认 `sense-voice`）、`record_max_sec`、
 `record_silence_sec`、`capture_sr`、`default_sid`、`synth_speed`、`watch_dirs`。
@@ -261,6 +262,7 @@ pi -p "列出你现在可用的 skills"
 
 ```bash
 voice-cli doctor [--load]                     # 自检（--load 会真实加载引擎）
+voice-cli mic [--secs 3]                      # 麦克风诊断：支持的格式 + 底噪分位数 + 阈值建议
 voice-cli stt <path|last> [--lang en] [--plain]# 转写（留证）
 voice-cli say "text" [--voice af_heart] [--speed 0.75] [--slow-too] [--play]
 voice-cli play <path>
@@ -379,7 +381,10 @@ D:/voice_data/
 > 完整清单（含验证状态与偿付触发条件）见 [ADR-0008 技术欠债登记](docs/adr/0008-technical-debt.md)。
 
 
-1. **没有麦克风**时 `record` 不可用（本机实际情况），但**文件 + 目录监听**这条路径完全可用。
+1. **蓝牙耳机不要用默认端点**：实测 EDIFIER W820NB 的默认输入（A2DP）能打开、回调在跑，但录到的是
+   稀疏零值（2.4% 非零、p90 −120 dBFS）。请到「设置 → 系统 → 声音 → 输入」选名称含 **Hands-Free** 的端点，
+   或用 `VOICE_MIC="Hands-Free"`。代码里已有电平防线，会明确报错而不是把假音频当正常录音。
+   纠音本身也建议用 USB/有线麦：蓝牙 HFP 只有 16 kHz 且带强降噪，会削掉 /θ/ /s/ 的摩擦音细节。
 2. **16 kHz 源音频**（Win11 录音机固定输出）→ 6–8 kHz 摩擦音细节有限，
    `band_limited: true` 时不要据 /θ/ vs /s/ 下结论。要更高精度需要 48 kHz 采集（`cpal`）。
 3. **SenseVoice 时间戳是 CTC token 级**（±0.5 s）→ "第几秒"只能当参考。

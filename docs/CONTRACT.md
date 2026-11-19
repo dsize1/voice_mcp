@@ -152,8 +152,16 @@
 | `transcribe` | bool | | 录完直接转写 |
 | `lang` | string | | 转写语言 |
 | `scene` | string | | 场景标签 |
+| `device` | string | | 输入设备名子串（蓝牙耳机用 `"Hands-Free"`）；不填用配置 `mic` 或系统默认 |
 
 返回 `detail`：`wav` / `duration` / `auto_stopped` / `device` / `device_sr` / `transcript` / `session` / `prefix`
+
+**失败时**（采到稀疏零值/过静音）会返回明确诊断，而不是把假音频当正常录音：
+
+```json
+{ "ok": false, "error": "设备 \"耳机 (…)\" 采到的音频接近静音（峰值 -40 dBFS），不是真实声音。
+常见原因与处理：1) 蓝牙耳机…选 Hands-Free 端点…" }
+```
 
 > 前提：系统必须有可用输入设备。`status.mic` 为 `null` 时此工具会明确报错。
 > 长独白（>60 s，如雅思 Part 2）建议改用录音机 + `voice-cli watch`，不要走这个阻塞式工具。

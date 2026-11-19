@@ -95,3 +95,6 @@ hint = likely_pronunciation   (音形≥0.6 或 拼写≥0.6)
 | R2 | 同上，语流 | speech_rate≈69 wpm，pause_count=2，longest≈0.54 s，speech_ratio≈0.43 |
 | R3 | "I'm fine" vs 识别 "I am fine" | 0 问题（缩写展开后一致） |
 | R4 | 中文 "我觉得非常好" vs "我觉得很好" | 总错误 2，accuracy<1 |
+| R5 | 参考 "I'm fine." vs 识别 "I am fine"（3 词） | 0 问题，`timestamp_alignment=exact`，各词时间不被拉伸 |
+| R6 | 参考 "I'm fine." vs 只识别到 "fine" | 1 条 omitted，`reference_surface="I'm"`（不重复报 2 条） |
+| R7 | **TTS 音频当完美发音者**：`synthesize` 生成的句音频 → `assess(同一个 reference)` | accuracy=1.0、0 问题、`exact`、`band_limited=false`（24 kHz 源）。用于验证"纯净音频不会产生误报" |

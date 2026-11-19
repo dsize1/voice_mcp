@@ -5,34 +5,32 @@
 //! - 数字统一成词（3 → three）
 //! - 去标点、统一小写
 //! - 中文按字符切分（diff 变成字级）
+//!
+//! **关键设计（D03 修复）**：规范化会改变词数（展开缩写），所以每个规范化词都带
+//! 一个 `token` 字段指回**原始 token 序号**。上层用这个序号去取 ASR 词时间戳，
+//! 而不是按"比例"把 N 个词映射到 M 个时间戳——后者在带缩写的句子上会静默错位，
+//! 导致教练指错词。
 
-/// 把文本切成规范化后的词序列。
-pub fn words(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for raw in tokenize(text) {
-        if is_cjk(&raw) {
-            // 中文：每个字一个单元
-            for ch in raw.chars() {
-                if is_cjk_char(ch) {
-                    out.push(ch.to_string());
-                } else if ch.is_ascii_alphanumeric() {
-                    out.push(ch.to_ascii_lowercase().to_string());
-                }
-            }
-        } else {
-            for w in expand_contraction(&raw) {
-                out.push(w);
-            }
-        }
-    }
-    out
+/// 一个规范化后的比较单元。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unit {
+    /// 规范化后的词形（小写、去标点、缩写已展开）
+    pub text: String,
+    /// 回到原始 token 的序号（`tokens()` 的下标）
+    pub token: usize,
 }
 
-fn tokenize(text: &str) -> Vec<String> {
+/// 原始 token 序列：英文/数字按非字母数字切分，CJK 逐字切分。
+pub fn tokens(text: &str) -> Vec<String> {
     let mut v = Vec::new();
     let mut cur = String::new();
     for ch in text.chars() {
-        if ch.is_alphanumeric() || ch == '\'' || ch == '\u{2019}' || is_cjk_char(ch) {
+        if is_cjk_char(ch) {
+            if !cur.is_empty() {
+                v.push(std::mem::take(&mut cur));
+            }
+            v.push(ch.to_string());
+        } else if ch.is_alphanumeric() || ch == '\'' || ch == '\u{2019}' {
             cur.push(ch);
         } else if !cur.is_empty() {
             v.push(std::mem::take(&mut cur));
@@ -44,8 +42,32 @@ fn tokenize(text: &str) -> Vec<String> {
     v
 }
 
-fn is_cjk(s: &str) -> bool {
-    s.chars().any(is_cjk_char)
+/// 规范化单元序列（带来源 token 序号）。
+pub fn units(text: &str) -> Vec<Unit> {
+    let mut out = Vec::new();
+    for (idx, raw) in tokens(text).iter().enumerate() {
+        if raw.chars().all(is_cjk_char) {
+            // CJK 已在 tokens() 里逐字切分，这里直接透传
+            for ch in raw.chars() {
+                out.push(Unit { text: ch.to_string(), token: idx });
+            }
+        } else {
+            for w in expand_contraction(raw) {
+                out.push(Unit { text: w, token: idx });
+            }
+        }
+    }
+    out
+}
+
+/// 规范化后的词形序列（不含来源信息，`flow` 等只要词数的地方用）。
+pub fn words(text: &str) -> Vec<String> {
+    units(text).into_iter().map(|u| u.text).collect()
+}
+
+/// 原始 token 的表面形式（用于反馈里显示 "I'm" 而不是 "i" + "am"）。
+pub fn surfaces(text: &str) -> Vec<String> {
+    tokens(text)
 }
 
 fn is_cjk_char(c: char) -> bool {
@@ -186,5 +208,43 @@ mod tests {
     #[test]
     fn handles_curly_apostrophe() {
         assert_eq!(words("I\u{2019}m here"), vec!["i", "am", "here"]);
+    }
+
+    // ---- D03：来源 token 序号 ----
+
+    #[test]
+    fn units_track_source_token() {
+        let u = units("I'm fine");
+        // "I'm" 展开成两个词，但都指向 token 0
+        assert_eq!(u.len(), 3);
+        assert_eq!((u[0].text.as_str(), u[0].token), ("i", 0));
+        assert_eq!((u[1].text.as_str(), u[1].token), ("am", 0));
+        assert_eq!((u[2].text.as_str(), u[2].token), ("fine", 1));
+        assert_eq!(surfaces("I'm fine"), vec!["I'm", "fine"]);
+    }
+
+    #[test]
+    fn units_are_monotonic_in_token() {
+        let u = units("Don't 3 it, I'm sure.");
+        for w in u.windows(2) {
+            assert!(w[1].token >= w[0].token, "token 序号必须单调不减");
+        }
+    }
+
+    #[test]
+    fn chinese_units_are_one_char_each_with_own_token() {
+        let u = units("我觉得");
+        assert_eq!(u.len(), 3);
+        assert_eq!(u.iter().map(|x| x.token).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(surfaces("我觉得"), vec!["我", "觉", "得"]);
+    }
+
+    #[test]
+    fn number_expansion_shares_one_token() {
+        let u = units("21 cats");
+        assert_eq!(u.len(), 3);
+        assert_eq!(u[0].token, 0);
+        assert_eq!(u[1].token, 0, "twenty/one 都来自同一个数字 token");
+        assert_eq!(u[2].token, 1);
     }
 }

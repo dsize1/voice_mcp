@@ -46,10 +46,11 @@
     "speech_rate": 69.1, "articulation_rate": 161.3, "rate_unit": "wpm",
     "pause_count": 2, "pause_longest": 0.54,
     "word_boundary_breaks": 0, "filler_rate": 0.0, "repetitions": 0,
-    "degraded": false, "issue_count": 1
+    "degraded": false, "issue_count": 1,
+    "timestamp_alignment": "exact"
   },
   "issues": [{
-    "kind": "substitution", "reference": "third", "said": "straight",
+    "kind": "substitution", "reference": "third", "reference_surface": "third", "said": "straight",
     "t0": 4.5, "t1": 5.04, "severity": "high",
     "similarity": 0.25, "phonetic_similarity": 0.40,
     "hint": "unclear",
@@ -69,12 +70,19 @@
 **Agent 必须遵守的解读规则**（细节见 ADR-0006）：
 
 1. `issues[].kind` 三态：`substitution`（替换，high）/ `omitted`（漏读，high）/ `extra`（多读，medium）。
-2. `hint` 是**三态推断**，不是结论：
+2. `summary.timestamp_alignment` 是时间戳质量，决定你能不能报秒数：
+   - `exact` → 按 token 序号精确对齐，可以说"第 4.5 秒那个词"（但仍是 CTC token 级，±0.5 s）
+   - `estimated` → 识别分词与规范化分词不一致（如 `rock'n'roll`、连字符），位置按比例估算，
+     **只能说"第几个词"，不要报秒数**
+   - `missing` → 无时间戳，只能报词
+3. `issues[].reference_surface` 是参考文本里的**原始写法**（`I'm`、`3rd`）。
+   反馈时优先用它——同一缩写展开出的多个词只会报 1 条问题，不会出现"漏读 i"+"漏读 am"两条。
+4. `hint` 是**三态推断**，不是结论：
    - `likely_pronunciation` → 可以说"这里听起来是两个近音词，大概率发错了"
    - `likely_different_word` → 别说成发音问题，更像用词/记忆问题
    - `unclear` → **必须**说明"可能是发音问题，也可能是识别误差"，并提出重录或对照示范音
-3. `limitations` 里出现的每一条都要反映到措辞上（例如 `band_limited` 时不要断言 /θ/ vs /s/）。
-4. `accuracy` 只用于**纵向趋势对比**，不要换算成雅思分数对外承诺。
+5. `limitations` 里出现的每一条都要反映到措辞上（例如 `band_limited` 时不要断言 /θ/ vs /s/）。
+6. `accuracy` 只用于**纵向趋势对比**，不要换算成雅思分数对外承诺。
 
 ---
 

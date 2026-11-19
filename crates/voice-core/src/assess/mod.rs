@@ -85,6 +85,15 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
                 .to_string(),
         );
     }
+    if let Some(d) = &text_diff {
+        if d.timestamp_alignment == diff::TimestampAlignment::Estimated {
+            limitations.push(
+                "本次识别分词与规范化分词不一致，问题位置是按比例估算的（可能错位 ±1 个词），                 定位时请以词为准、不要死抠秒数"
+                    .to_string(),
+            );
+        }
+    }
+
     if transcript.engine == "sense-voice" {
         limitations.push(
             "SenseVoice 给出的是 CTC token 时间戳（±0.5 s 量级），词界停顿时序只能作参考；             逐词精确定位需要音素级对齐".to_string(),

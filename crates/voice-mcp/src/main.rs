@@ -635,6 +635,10 @@ impl VoiceServer {
                 "repetitions": assessment.flow.repetitions,
                 "degraded": assessment.degraded,
                 "issue_count": issues.len(),
+                "timestamp_alignment": assessment
+                    .text_diff
+                    .as_ref()
+                    .map(|d| d.timestamp_alignment),
             });
 
             Ok(serde_json::json!({

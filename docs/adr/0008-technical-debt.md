@@ -31,7 +31,7 @@
 |---|---|---|---|---|---|
 | D01 | `assess` 在 manifest 写的 `feedback_ref` 曾指向**不存在的 .md**（只算路径不建文件） | 提交前自查发现；已修（现在会写入带模板的空反馈文件） | ~~S1~~ ✅已还 | – | – |
 | D02 | VAD 静默失败时（`speech_duration≈0` 但转写出词）仍照常输出语流指标，`speech_rate`/`articulation_rate` 会变成荒谬值 | 实测曾出现 `articulation_rate=1891 wpm`（VAD 状态 bug 的次生现象）。现已在 `assess` 里检测 `words≥2 且 speech_duration<0.2` → `degraded=true` + limitations 追加警告 | ~~S1~~ ✅已还 | – | – |
-| D03 | 词时间戳 → 规范化词序列用**按比例映射**（`diff::hyp_times`）。遇到缩写展开（I'm→i am）、数字转词（3→three）时词数改变，映射会**静默错位**，只用一个 `timestamps_estimated` 布尔标记，无法区分"估算"和"错位" | `assess` 的 `t0/t1` 在带缩写的句子上未做过回归 | S1 | 用户报告"问题定位到错误的词"；或开始做韵律标注（D12 上线） | 0.5d：改用词边界锚点（用 ASR 词序列做锚，展开项共享时间窗）+ 3 个回归用例 |
+| D03 | 词时间戳 → 规范化词序列曾用**按比例映射**，缩写展开/数字转词后静默错位 | **已修**：`normalize::Unit` 带来源 token 序号；token 数与 ASR 词数一致时按序号精确取时间，同一 token 展开的多个词在其时间窗内均分，否则才退回比例估算并标 `estimated`。新增 `timestamp_alignment`(exact/estimated/missing) 与 `reference_surface`（`I'm` 不再拆成 2 条问题）。6 个新单测 + 真机回归（`third→straight` 仍是 exact @4.50–5.04） | ~~S1~~ ✅已还 | – | – |
 | D04 | whisper 路径只做过一次手工验证：token→词合并、标点、`enable_token_timestamps=false` 的降级路径都**没有回归测试**；`mixed` 路由首次调用要惰性加载 1.6 s，会顶到 Pi 的交互预期 | `crates/spike/src/bin/asr_whisper.rs` 的输出显示 `tokens: []` | S1（对中英混说用户） | 出现第一个真实中英混说使用场景 | 0.5d：补 3 个 fixture + 一个 `asr_routing` 集成测试 |
 | D05 | 中文 TTS 从未实测（`lang` 字段在 sherpa-onnx ≥2.0 已被忽略，只认 lexicon） | **已实测**：`zf_xiaobei`(sid 46) 合成 3.73 s / RTF 0.26；回读校验 `我觉得这个句子读得不错，再练一次。` → ASR 得 `…你再连一次。`（14/15 字一致）。`zm_yunjian`(sid 50) 同样正常。中文合成可用 | ~~S1~~ ✅已还 | – | – |
 | D06 | Kokoro 的 音色名↔sid 表按 hexgrad 官方 voices 目录**字典序推断**，仅 `af_heart→sid=3` 一处自洽，未人耳校准 | 无 | S2 | 用户抱怨音色不对，或要用特定音色做人设 | 1h：跑 `voice-cli tts-probe` 逐个试听 |
@@ -92,7 +92,7 @@
 
 | 顺序 | 债 | 为什么先还 | 何时 |
 |---|---|---|---|
-| 1 | **D03 时间戳错位** | 它会让教练指错词，是最典型的"错误结论" | 下次有 0.5d 时 |
+| 1 | ~~D03 时间戳错位~~ | 已还（见第七节） | – |
 | 2 | **D07 record 实测** | 没有麦克风，短句跟读体验缺失（`mic=null`） | 硬件到位后立即 |
 | 3 | **D18 + D19 + D21** | 一组低成本工程卫生，做 CI 的前置 | 一次 0.5d 打包 |
 | 4 | **D20 CI** | 没有门禁，回归全靠自觉 | D21 之后 |
@@ -116,6 +116,7 @@
 | 无 LICENSE / spike 进默认构建 | 补 MIT LICENSE；workspace 加 `default-members` |
 | 哈希基线只有 8 条 | `--write-baseline` 全量输出（22 条：12 模型 + 3 DLL + 1 轮子） |
 | 中文 TTS 未验证 | 实测可用（RTF 0.26，回读 14/15 字），残留质性问题另立 D34 |
+| 词时间戳比例映射静默错位（D03） | 规范化词携带 token 序号，精确对齐；同 token 合并上报；新增 `timestamp_alignment` |
 
 ## 八、维护约定
 

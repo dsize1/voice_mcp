@@ -112,6 +112,23 @@ fn preferred_config(device: &cpal::Device, prefer_sr: u32) -> Result<cpal::Suppo
     device.default_input_config().context("获取麦克风默认格式失败")
 }
 
+/// 自动停止的"静音"阈值。
+///
+/// 只用开场底噪定的阈值在 AGC 强的设备上会导致尾部空转：
+/// 实测蓝牙端点说话电平峰值约 −20 dBFS、尾部噪声却能到 −40 dBFS，
+/// 固定阈值会让录音在说完后再拖 1.1 s。
+/// 因此取 `max(底噪阈值, 语音峰值 − 12 dB)`：比底噪阈值**更高**，
+/// 噪声一落下去就判定为静音，不再被环境噪声拖住；同时留 12 dB 余量避免切掉轻声词尾
+/// （且有 `silence_sec` 连续静音的缓冲，短暂轻声不会误停）。
+pub fn stop_threshold(noise_threshold: f32, speech_peak_dbfs: f32) -> f32 {
+    if !speech_peak_dbfs.is_finite() || speech_peak_dbfs <= -100.0 {
+        return noise_threshold; // 还没说过话
+    }
+    (speech_peak_dbfs - 12.0)
+        .max(noise_threshold)
+        .clamp(-60.0, -20.0)
+}
+
 /// 严格全零判定（蓝牙 A2DP 端点常见：回调在跑但数据全 0）。
 pub fn is_digital_silence(samples: &[f32]) -> bool {
     !samples.is_empty() && samples.iter().all(|v| v.abs() < 1e-7)
@@ -264,6 +281,7 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
     let mut speech_started = false;
     let mut last_loud = Instant::now();
     let mut auto_stopped = false;
+    let mut speech_peak_db = f32::NEG_INFINITY;
     let block_ms = 50u64;
 
     loop {
@@ -292,15 +310,22 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
         if !speech_started {
             if recent_dbfs > threshold {
                 speech_started = true;
+                speech_peak_db = recent_dbfs;
                 last_loud = Instant::now();
             } else if elapsed > opts.start_timeout_sec {
                 break; // 一直没说话
             }
-        } else if recent_dbfs > threshold {
-            last_loud = Instant::now();
-        } else if last_loud.elapsed().as_secs_f32() >= opts.silence_sec {
-            auto_stopped = true;
-            break;
+        } else {
+            if recent_dbfs > speech_peak_db {
+                speech_peak_db = recent_dbfs;
+            }
+            let stop_at = stop_threshold(threshold, speech_peak_db);
+            if recent_dbfs > stop_at {
+                last_loud = Instant::now();
+            } else if last_loud.elapsed().as_secs_f32() >= opts.silence_sec {
+                auto_stopped = true;
+                break;
+            }
         }
 
         if elapsed >= opts.max_sec {
@@ -310,6 +335,12 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
 
     stop.store(true, Ordering::Relaxed);
     drop(stream);
+    if speech_started {
+        eprintln!(
+            "[voice] 语音峰值 {speech_peak_db:.1} dBFS，尾部静音判据 {:.1} dBFS",
+            stop_threshold(threshold, speech_peak_db)
+        );
+    }
 
     // 一直没说话 → 明确报错，不要把一整段噪声当录音交上去
     if !speech_started {
@@ -520,6 +551,21 @@ mod tests {
         assert!(is_digital_silence(&[0.0, 0.0, -0.0]));
         assert!(!is_digital_silence(&[0.0, 1e-5]));
         assert!(!is_digital_silence(&[]), "空切片不算数字静音（另由 empty 判定）");
+    }
+
+    #[test]
+    fn stop_threshold_follows_speech_level() {
+        // 底噪阈值 −37，说话峰值 −20 → 判据 −32（比底噪阈值高 5 dB，能更早停）
+        let t = stop_threshold(-37.0, -20.0);
+        assert!((t - (-32.0)).abs() < 1e-3, "got {t}");
+        assert!(t > -37.0, "判据必须高于底噪阈值才可能提前停止");
+        // 说话很轻（峰值 −45）：不能把判据推到语音里去
+        let t2 = stop_threshold(-37.0, -45.0);
+        assert!((t2 - (-37.0)).abs() < 1e-3, "got {t2}");
+        // 还没说话
+        assert!((stop_threshold(-37.0, f32::NEG_INFINITY) - (-37.0)).abs() < 1e-3);
+        // 峰值很高时判据被夹到上界 −20，不会推到说话电平里去
+        assert_eq!(stop_threshold(-50.0, -5.0), -20.0);
     }
 
     #[test]

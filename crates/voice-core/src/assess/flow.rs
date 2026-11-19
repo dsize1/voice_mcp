@@ -36,6 +36,12 @@ pub struct WordGap {
 #[derive(Debug, Clone, Serialize)]
 pub struct FlowMetrics {
     pub duration: f32,
+    /// 实际参与语速计算的窗口 = [首个语音段起点, 末个语音段终点]
+    ///
+    /// 为什么需要：录音文件的 duration 里包含"等用户开口"的前导静音和
+    /// 自动停止的尾巴（实测 5.74 s 录音里真实语音只占 2.8 s），
+    /// 用文件时长算语速会把 150 wpm 算成 73 wpm。
+    pub analysis_window: f32,
     /// 有效发声时长（VAD 判定的语音段合计）
     pub speech_duration: f32,
     pub speech_ratio: f32,
@@ -158,7 +164,15 @@ pub fn analyze(
         }
     }
 
-    let speech_rate = if duration > 0.0 { word_count as f32 / duration * 60.0 } else { 0.0 };
+    let window_t0 = segments.first().map(|s| s.t0).unwrap_or(0.0);
+    let window_t1 = segments.last().map(|s| s.t1).unwrap_or(duration);
+    let analysis_window = (window_t1 - window_t0).max(0.05);
+
+    let speech_rate = if analysis_window > 0.0 {
+        word_count as f32 / analysis_window * 60.0
+    } else {
+        0.0
+    };
     let articulation_rate = if speech_duration > 0.05 {
         word_count as f32 / speech_duration * 60.0
     } else {
@@ -172,8 +186,9 @@ pub fn analyze(
 
     FlowMetrics {
         duration,
+        analysis_window: round2(analysis_window),
         speech_duration,
-        speech_ratio: if duration > 0.0 { speech_duration / duration } else { 0.0 },
+        speech_ratio: (speech_duration / analysis_window).clamp(0.0, 1.0),
         leading_silence,
         trailing_silence,
         word_count,
@@ -285,6 +300,32 @@ mod tests {
         assert_eq!(f.fillers.len(), 1);
         assert!(f.filler_rate > 0.0);
         assert_eq!(f.repetitions, 1);
+    }
+
+    #[test]
+    fn analysis_window_ignores_leading_and_trailing_silence() {
+        // 模拟真实麦克风录音：5.74 s 文件，语音只在 1.6–4.6 s
+        let t = tr(
+            "en",
+            "I think this is the third time",
+            &[
+                ("I", 1.86, 2.10),
+                ("think", 2.10, 2.50),
+                ("this", 2.50, 2.80),
+                ("is", 2.80, 3.00),
+                ("the", 3.00, 3.20),
+                ("third", 3.20, 3.80),
+                ("time", 3.80, 4.60),
+            ],
+        );
+        let segs = vec![Segment { t0: 1.86, t1: 4.60 }];
+        let samples = vec![0.0f32; (5.74 * 16_000.0) as usize];
+        let f = analyze(&samples, 16_000, &t, &segs);
+        assert!((f.duration - 5.74).abs() < 0.02, "duration 仍是文件时长");
+        assert!((f.analysis_window - 2.74).abs() < 0.02, "窗口 = 2.74 s");
+        // 7 词 / 2.74 s ≈ 153 wpm（而不是按 5.74 s 算出的 73 wpm）
+        assert!(f.speech_rate > 140.0 && f.speech_rate < 165.0, "speech_rate={}", f.speech_rate);
+        assert!(f.speech_ratio > 0.95, "窗口内几乎全是语音");
     }
 
     #[test]

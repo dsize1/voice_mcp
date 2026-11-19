@@ -659,6 +659,7 @@ impl VoiceServer {
                 "issues": issues,
                 "flow": {
                     "duration": round3(assessment.flow.duration),
+                    "analysis_window": assessment.flow.analysis_window,
                     "speech_duration": round3(assessment.flow.speech_duration),
                     "speech_ratio": round3(assessment.flow.speech_ratio),
                     "pause_count": assessment.flow.pause_count,

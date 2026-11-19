@@ -15,6 +15,7 @@
 | [adr/0004-audio-io-and-evidence.md](adr/0004-audio-io-and-evidence.md) | 音频输入/输出契约与留证机制 | Accepted |
 | [adr/0005-deps-and-model-acquisition.md](adr/0005-deps-and-model-acquisition.md) | 第三方依赖与模型获取策略（网络/工具链实测与替代通路） | Accepted |
 | [adr/0006-assessment-scope.md](adr/0006-assessment-scope.md) | 评测层能力边界（P2 词级诊断的三态推断） | Accepted |
+| [adr/0008-technical-debt.md](adr/0008-technical-debt.md) | **技术欠债登记**（33 条债 + 触发条件 + 偿付顺序） | Living |
 | [security-supply-chain.md](security-supply-chain.md) | 模型与原生库供应链校验（工具+结论） | ✅ |
 | [security-hashes.txt](security-hashes.txt) | 已知良好基线哈希 | ✅ |
 

@@ -574,6 +574,22 @@ impl VoiceServer {
             session.write_json(&prefix, "metrics", &assessment)?;
             session.write_json(&prefix, "asr", &assessment.transcript)?;
             let feedback_path = session.dir.join("takes").join(format!("{prefix}.md"));
+            if !feedback_path.is_file() {
+                std::fs::write(
+                    &feedback_path,
+                    format!(
+                        "# 反馈 · {prefix}
+
+                         <!-- Agent 在这里写本轮反馈；结构：问题 / 怎么改 / 示范 / 再来一次 -->
+
+                         - 参考文本：{}
+- 识别结果：{}
+",
+                        p.reference.as_deref().unwrap_or("(未提供，仅语流分析)"),
+                        assessment.transcript.text
+                    ),
+                )?;
+            }
             session.write_session_json(Some(serde_json::json!({
                 "scorer_version": assessment.scorer_version,
                 "last_prefix": prefix,

@@ -33,6 +33,13 @@ pub struct Assessment {
     pub scorer_version: String,
 }
 
+/// VAD 静默失败判定：转写出了多个词，却几乎没检测到语音段。
+///
+/// 这是 D02 的判定谓词，独立成函数以便单测（历史 bug：`articulation_rate=1891 wpm`）。
+pub fn vad_suspect(word_count: usize, speech_duration: f32) -> bool {
+    word_count >= 2 && speech_duration < 0.2
+}
+
 pub struct AssessRequest<'a> {
     /// 16 kHz mono 采样
     pub samples: &'a [f32],
@@ -57,6 +64,18 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         .filter(|_| !transcript.words.is_empty() || !transcript.text.is_empty());
 
     let mut limitations = Vec::new();
+    let mut degraded = transcript.degraded || transcript.words.is_empty();
+
+    // D02：VAD 静默失败检测——转写出了词，却几乎没有检测到语音段。
+    // 此时 speech_duration / articulation_rate 不可信（历史上曾算出 1891 wpm）。
+    if vad_suspect(transcript.words.len(), flow.speech_duration) {
+        degraded = true;
+        limitations.push(
+            "VAD 未检测到有效语音段（speech_duration≈0），本次语速/停顿指标不可信，             请检查录音音量或重录"
+                .to_string(),
+        );
+    }
+
     if transcript.words.is_empty() {
         limitations.push("无词级时间戳：词级定位依赖比例估算，音素级分析不可用".to_string());
     }
@@ -74,7 +93,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     limitations.push("尚无音素级强制对齐（GOP），因此不能给出音素级发音分数".to_string());
 
     Ok(Assessment {
-        degraded: transcript.degraded || transcript.words.is_empty(),
+        degraded,
         transcript,
         audio,
         flow,
@@ -82,4 +101,25 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         limitations,
         scorer_version: SCORER_VERSION.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vad_suspect_flags_silent_failure() {
+        // 7 个词却只有 0.05 s 语音 → 不可信
+        assert!(vad_suspect(7, 0.05));
+    }
+
+    #[test]
+    fn vad_suspect_accepts_normal_and_empty() {
+        // 正常：7 个词 2.6 s 语音
+        assert!(!vad_suspect(7, 2.6));
+        // 空录音（0 个词）：不是 VAD 失败，而是没说话
+        assert!(!vad_suspect(0, 0.0));
+        // 单个词（可能是 "yes"/"no"）不判失败，避免误报
+        assert!(!vad_suspect(1, 0.05));
+    }
 }

@@ -330,12 +330,46 @@ def check_wheel(wheel: str):
             log("warn", f"{label}: 查询失败 {e}")
 
 
+def write_baseline(models_dir: str, lib_dir: str, wheel: str, out: str):
+    """把当前通过校验的哈希全量落盘，作为"已知良好"基线（D28）。"""
+    lines = [
+        "# 已知良好基线 —— 由 tools/verify_models.py --write-baseline 生成",
+        "# 用法：升级模型/依赖后重跑校验，再把新结果覆盖本文件并提交",
+        "",
+    ]
+    n = 0
+    for root, _, files in os.walk(models_dir):
+        for fn in sorted(files):
+            if ".part" in fn:
+                continue
+            full = os.path.join(root, fn)
+            rel = os.path.relpath(full, models_dir).replace("\\", "/")
+            if not (fn.endswith((".onnx", ".bin", ".txt", ".fst", ".model", ".json"))):
+                continue
+            lines.append(f"{sha256_of(full)}  models/{rel}  ({os.path.getsize(full)/1e6:.1f} MB)")
+            n += 1
+    if os.path.isdir(lib_dir):
+        for fn in sorted(os.listdir(lib_dir)):
+            if fn.lower().endswith((".dll", ".lib")):
+                full = os.path.join(lib_dir, fn)
+                lines.append(f"{sha256_of(full)}  native/{fn}  ({os.path.getsize(full)/1e6:.1f} MB)")
+                n += 1
+    if os.path.exists(wheel):
+        lines.append(f"{sha256_of(wheel)}  pypi/{os.path.basename(wheel)}  ({os.path.getsize(wheel)/1e6:.1f} MB)")
+        n += 1
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(chr(10).join(lines) + chr(10))
+    print(f"基线已写入 {out}（{n} 条）")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--models-dir", default="C:/voice_models")
     ap.add_argument("--lib-dir", default=".cache/sherpa/lib")
     ap.add_argument("--wheel", default=f".cache/sherpa/sherpa_onnx_core-{SHERPA_VERSION}-py3-none-win_amd64.whl")
     ap.add_argument("--no-online", action="store_true")
+    ap.add_argument("--write-baseline", action="store_true",
+                    help="校验通过后把全量哈希写入 docs/security-hashes.txt")
     a = ap.parse_args()
 
     print(f"模型目录 : {a.models_dir}")
@@ -345,6 +379,11 @@ def main():
     check_data_files(a.models_dir)
     check_pe(a.lib_dir)
     check_wheel(a.wheel)
+
+    if a.write_baseline and not bad:
+        write_baseline(a.models_dir, a.lib_dir, a.wheel,
+                       os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                    "docs", "security-hashes.txt"))
 
     print("\n" + "=" * 72)
     print(f"结论: OK={len(ok)}  WARN={len(warn)}  FAIL={len(bad)}")

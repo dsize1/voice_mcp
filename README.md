@@ -370,10 +370,14 @@ D:/voice_data/
 | [0005](docs/adr/0005-deps-and-model-acquisition.md) | 依赖与模型获取策略（GitHub 不可用时的替代通路） |
 | [0006](docs/adr/0006-assessment-scope.md) | 评测层能力边界（三态推断、为什么不能硬猜） |
 | [0007](docs/adr/0007-prosody-and-gop.md) | 韵律分析与音素级 GOP（已排期，触发条件明确） |
+| [0008](docs/adr/0008-technical-debt.md) | **技术欠债登记**：33 条债、严重度、触发偿付条件、偿付顺序 |
 
 ---
 
 ## 已知限制
+
+> 完整清单（含验证状态与偿付触发条件）见 [ADR-0008 技术欠债登记](docs/adr/0008-technical-debt.md)。
+
 
 1. **没有麦克风**时 `record` 不可用（本机实际情况），但**文件 + 目录监听**这条路径完全可用。
 2. **16 kHz 源音频**（Win11 录音机固定输出）→ 6–8 kHz 摩擦音细节有限，

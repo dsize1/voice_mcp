@@ -1,0 +1,124 @@
+# ADR-0008: 技术欠债登记（Debt Register）
+
+- 状态：Accepted（活文档，每还一条就更新）
+- 日期：2026-11-19
+- 相关：ADR-0001（运行时路线）、ADR-0006（评测边界）、ADR-0007（韵律与 GOP）
+
+## 背景
+
+这套系统在 3 天内从 0 建到可跑通训练闭环，过程中有大量**"先能跑、后补正确性"**的取舍。
+如果不把欠债显式登记，会有两个后果：
+
+1. 后来者（包括三个月后的我）不知道哪些地方是"验证过的"、哪些是"看起来对但没测过"；
+2. LLM 在 Skill 里会按"能力完备"的假设说话，而实际能力有洞。
+
+**登记规则**：每条债必须写清 **证据**（怎么发现的）+ **触发偿付条件**（什么时候必须还）。
+没有触发条件的不许登记——那是牢骚，不是债。
+
+## 严重度定义
+
+| 级别 | 含义 |
+|---|---|
+| **S1** | 会产出**错误结论**或让某条主路径（中文/录音/纠音）不可用 |
+| **S2** | 影响可用性、可维护性、可分发性，但不会直接误导用户 |
+| **S3** | 整洁度/一致性，随时可修 |
+
+---
+
+## 一、正确性（S1 为主）
+
+| ID | 欠债 | 证据 | 级别 | 触发偿付条件 | 预估 |
+|---|---|---|---|---|---|
+| D01 | `assess` 在 manifest 写的 `feedback_ref` 曾指向**不存在的 .md**（只算路径不建文件） | 提交前自查发现；已修（现在会写入带模板的空反馈文件） | ~~S1~~ ✅已还 | – | – |
+| D02 | VAD 静默失败时（`speech_duration≈0` 但转写出词）仍照常输出语流指标，`speech_rate`/`articulation_rate` 会变成荒谬值 | 实测曾出现 `articulation_rate=1891 wpm`（VAD 状态 bug 的次生现象）。现已在 `assess` 里检测 `words≥2 且 speech_duration<0.2` → `degraded=true` + limitations 追加警告 | ~~S1~~ ✅已还 | – | – |
+| D03 | 词时间戳 → 规范化词序列用**按比例映射**（`diff::hyp_times`）。遇到缩写展开（I'm→i am）、数字转词（3→three）时词数改变，映射会**静默错位**，只用一个 `timestamps_estimated` 布尔标记，无法区分"估算"和"错位" | `assess` 的 `t0/t1` 在带缩写的句子上未做过回归 | S1 | 用户报告"问题定位到错误的词"；或开始做韵律标注（D12 上线） | 0.5d：改用词边界锚点（用 ASR 词序列做锚，展开项共享时间窗）+ 3 个回归用例 |
+| D04 | whisper 路径只做过一次手工验证：token→词合并、标点、`enable_token_timestamps=false` 的降级路径都**没有回归测试**；`mixed` 路由首次调用要惰性加载 1.6 s，会顶到 Pi 的交互预期 | `crates/spike/src/bin/asr_whisper.rs` 的输出显示 `tokens: []` | S1（对中英混说用户） | 出现第一个真实中英混说使用场景 | 0.5d：补 3 个 fixture + 一个 `asr_routing` 集成测试 |
+| D05 | 中文 TTS 从未实测（`lang` 字段在 sherpa-onnx ≥2.0 已被忽略，只认 lexicon） | **已实测**：`zf_xiaobei`(sid 46) 合成 3.73 s / RTF 0.26；回读校验 `我觉得这个句子读得不错，再练一次。` → ASR 得 `…你再连一次。`（14/15 字一致）。`zm_yunjian`(sid 50) 同样正常。中文合成可用 | ~~S1~~ ✅已还 | – | – |
+| D06 | Kokoro 的 音色名↔sid 表按 hexgrad 官方 voices 目录**字典序推断**，仅 `af_heart→sid=3` 一处自洽，未人耳校准 | 无 | S2 | 用户抱怨音色不对，或要用特定音色做人设 | 1h：跑 `voice-cli tts-probe` 逐个试听 |
+| D07 | `record` 全链路**零实测**（本机无麦克风）：能量自动停止阈值 −45 dBFS、静音判定、VAD 精修都未验证 | `status.mic = null` | S1（录音功能不可用） | 麦克风到位后**立即** | 1h：校准阈值 + 补一段真实录音 fixture |
+| D08 | `capture` 的起始等待（8 s 内不说话就返回空）与自动停止阈值对**不同麦克风增益**没有自适应（无 AGC 补偿） | 代码推理 | S2 | 换第二支麦克风时 | 0.5d：先跑 5 s 环境噪声估底噪，再按 SNR 定阈值 |
+
+## 二、评测精度（能力债，非 bug）
+
+| ID | 欠债 | 级别 | 触发偿付条件 | 预估 |
+|---|---|---|---|---|
+| D09 | 词级时间戳是 CTC token 级（±0.5 s）→ 词界停顿、连读判断可信度低 | S2 | ADR-0007 的 D12 上线时自然解决；或先换带 cross-attention 的 whisper 导出 | 见 ADR-0007 |
+| D10 | 音形编码不区分**元音长短**（bit/beat、bad/bed 同 key） | S2 | 同上（需音素级） | 见 ADR-0007 |
+| D11 | 停顿 250 ms / 词界 200 ms / 语速区间 80–190 wpm 全是**经验值**，未用真实数据校准 | S2 | ≥10 次真实训练后（ADR-0007 的同一触发条件） | 0.5d：用 manifest 分布反推分位数 |
+| D12 | 无 F0/重音/升降调（韵律完全空缺），`tone_flat` 这类问题只能靠人耳定性 | S2 | ADR-0007 触发条件满足 | 3–4d |
+| D13 | 中文只做**字级** diff，无拼音层 | S2 | 有中文发音诊断需求时 | 2d（引入拼音对齐） |
+| D14 | `accuracy = 1-(S+D+I)/N_ref` 对长句不公平（分母大），且不区分错误类型权重 | S3 | 用户开始练长句/Part 2 时 | 0.5d：改用 WER + 关键错误加权 |
+
+## 三、工程韧性
+
+| ID | 欠债 | 证据 | 级别 | 触发偿付条件 | 预估 |
+|---|---|---|---|---|---|
+| D15 | 全局 `Mutex<Option<Engines>>` 在 ASR/TTS 期间持锁，**并发调用串行化** | `voice-mcp/src/main.rs` 的 `with_engines` | S2 | 出现第二个并发调用方（HTTP 模式/热键 daemon） | 0.5d：拆成 per-engine 锁 |
+| D16 | 无**取消/中断**：`record` 阻塞最长 30 s、`play` 阻塞到播完，都只能靠客户端超时兜底 | – | S2 | 用户抱怨"卡住没法停" | 1d：`record` 改流式 + 支持 abort |
+| D17 | 引擎加载**失败不缓存**：每次调用都会重试并重新付出加载代价（whisper 1.6 s） | `With_engines` 只缓存成功 | S3 | 出现一次引擎加载失败 | 0.5d |
+| D18 | 原生 DLL 需**手工** `cp .cache/sherpa/lib/*.dll target/release/`，忘掉就启动即崩（Windows loader 报错，没有友好提示） | README 快速开始第 3 步 | S2 | 第二次有人在这台机器上构建 | 0.5d：`build.rs` 或 cargo xtask 自动复制 |
+| D19 | 无 `rust-toolchain.toml`、无 MSRV 声明（edition 2024 → 1.85+），`Cargo.lock` 已提交 | – | S3 | 出现第二个开发环境 | 10 min |
+| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | 当前零警告，但靠自觉 | S2 | 第二次提交代码时 | 0.5d（需先解决 D21） |
+| D21 | 仓库内**无音频 fixture**，`decode/diff/flow` 无法在 CI 回归（`.gitignore` 已留 `!crates/**/tests/fixtures/**` 但目录为空） | – | S2 | 做 D20 之前必须先做 | 2h：造 3 个合成 wav fixture（正弦/噪声/合成语音） |
+| D22 | `assess` 的 MCP 版与 CLI `assess_cmd` **逻辑重复**，两处维护 | 两个文件各 ~80 行 | S3 | 参数再变一次时 | 2h：抽到 `voice-core::pipeline` |
+| D23 | `spike` crate 在 workspace 默认成员里，`cargo build --release` 会编译 8 个二进制 | 曾提交；已用 `default-members` 修复 | ~~S3~~ ✅已还 | – | – |
+| D24 | `OkResult.detail: Option<Value>` 丢类型，输出无 schema 约束（只能在文档里写契约） | – | S3 | 想用 schema 做自动校验/生成客户端时 | 1d |
+
+## 四、数据与运维
+
+| ID | 欠债 | 级别 | 触发偿付条件 | 预估 |
+|---|---|---|---|---|
+| D25 | `manifest.jsonl` 无轮转；`sessions/` 无保留策略（ADR-0004 提过"仅保留最近 N 天派生文件"，未实现） | S3 | 数据目录 > 5 GB | 3h |
+| D26 | `watch_state.json` 只增不减，源文件删除后条目仍在 | S3 | 同上 | 1h |
+| D27 | `learner.json` 的 schema 只存在于 SKILL.md 的散文里，**无代码校验、无版本迁移** | S2 | 改一次字段名时（会静默丢档案） | 2h：`voice-core::profile` + `version` 字段 + 迁移 |
+| D28 | `docs/security-hashes.txt` 覆盖不全 | ~~S3~~ ✅已还：`verify_models.py --write-baseline` 全量输出（12 个模型文件 + 3 个 DLL + 1 个轮子 = 22 条） | – | – |
+
+## 五、分发（当前最大的"产品债"）
+
+| ID | 欠债 | 级别 | 触发偿付条件 | 预估 |
+|---|---|---|---|---|
+| D29 | Skill 靠 `tools/install_skills.ps1` 建 junction 装到 `~/.pi/agent/skills`；项目 `.pi/settings.json` 又需项目授信。**没有真正的安装包形态** | S2 | 第二个人要用 | 0.5d：打成 Pi package（见 `docs/packages.md`） |
+| D30 | Windows-only 假设（默认路径、录音机目录名、DLL 名、`mklink /J`） | S2 | 出现 mac/linux 用户 | 1d |
+| D31 | 无预编译二进制 / 无 GitHub Release，新用户必须本地装 Rust + MSVC | S2 | 出现非 Rust 用户 | 1d（CI 矩阵） |
+| D32 | 无 `LICENSE` 文件（README 只写了许可说明） | ~~S3~~ ✅已还 | – | – |
+| D33 | 项目级 `.pi/mcp.json`、`.pi/settings.json` 因未授信被忽略，与实际生效的全局配置存在**双份真相** | 每次 `pi mcp list` 都会提示 | S3 | 下次交接 | 1h：README 写清"哪个是权威" |
+| D34 | 中文 TTS 回读出现 1 处字词偏差（`再练一次`→`你再连一次`），未确定是 TTS 声调/连读问题还是 ASR 误听；中文音色自然度也未经人耳确认 | 上表 D05 的实测输出 | S3 | 用户反馈"中文讲解听不清" | 1h：人工听 + 若确认是 TTS 则换 `lexicon-zh` 或改分段 |
+
+---
+
+## 六、偿付顺序（我的建议）
+
+不是为了"看起来整洁"，而是按**会误导用户的程度**排：
+
+| 顺序 | 债 | 为什么先还 | 何时 |
+|---|---|---|---|
+| 1 | **D03 时间戳错位** | 它会让教练指错词，是最典型的"错误结论" | 下次有 0.5d 时 |
+| 2 | **D07 record 实测** | 没有麦克风，短句跟读体验缺失（`mic=null`） | 硬件到位后立即 |
+| 3 | **D18 + D19 + D21** | 一组低成本工程卫生，做 CI 的前置 | 一次 0.5d 打包 |
+| 4 | **D20 CI** | 没有门禁，回归全靠自觉 | D21 之后 |
+| 5 | D12/D09 韵律与 GOP | 能力提升，但需真实数据校准阈值 | ADR-0007 触发条件 |
+
+**暂不偿付**：D25/D26/D30/D31（都是"规模变大才痛"的问题），D24/D14（洁癖级）。
+
+## 七、已还清（保留记账）
+
+| 债 | 怎么还的 |
+|---|---|
+| VAD 一次性喂整段只返回最后一段 | 改为按 `window_size=512` 分块（`engine/vad.rs`） |
+| VAD `clear()` 累积采样偏移（第 2 次调用时间戳 +6 s） | 改用 `reset()`；`vad_probe` 永久保留对比证据 |
+| VAD 越界时间戳污染语流指标 | `flow::analyze` 增加防御性裁剪 |
+| sherpa-onnx 原生库拉不下来（GitHub 不可用） | 改从 PyPI 轮子取 + `dumpbin`/`lib` 补 import library（ADR-0005） |
+| 模型下载 122 MB 要 15 分钟 | hf-mirror 8 路分段并发（~1.1 MB/s） |
+| whisper 无 token 时间戳 | 确认该权重未导出 cross-attention → 降为副通道，默认用 SenseVoice |
+| espeak-ng 375 个无用文件 | 确认 sherpa-onnx ≥2.0 已不用 espeak-ng，从下载清单剔除 |
+| `assess` 悬空 `feedback_ref` | 现在会先落盘带模板的 `.md`，Agent 再追加内容 |
+| VAD 静默失败无检测 | `assess` 增加 `words≥2 且 speech_duration<0.2` 判定 → `degraded` + limitations |
+| 无 LICENSE / spike 进默认构建 | 补 MIT LICENSE；workspace 加 `default-members` |
+| 哈希基线只有 8 条 | `--write-baseline` 全量输出（22 条：12 模型 + 3 DLL + 1 轮子） |
+| 中文 TTS 未验证 | 实测可用（RTF 0.26，回读 14/15 字），残留质性问题另立 D34 |
+
+## 八、维护约定
+
+- 修一条就把对应行的级别改成 `~~S?~~ ✅已还` 并挪到第七节，**不要删行**（保留判断依据）。
+- 新欠债必须先写"触发偿付条件"，否则不入表。
+- ADR-0001/0006/0007 已覆盖的能力缺口（音素级 GOP、韵律、100% Rust 迁移）**不在本表重复登记**，只引用。

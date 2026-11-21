@@ -217,10 +217,14 @@ fn is_cjk(c: char) -> bool {
 }
 
 fn round1(v: f32) -> f32 {
-    (v * 10.0).round() / 10.0
+    norm0((v * 10.0).round() / 10.0)
 }
 fn round2(v: f32) -> f32 {
-    (v * 100.0).round() / 100.0
+    norm0((v * 100.0).round() / 100.0)
+}
+/// 把 `-0.0` 归一成 `0.0`：JSON 里 `-0.0` 会污染 `progress` 汇总与 diff。
+fn norm0(v: f32) -> f32 {
+    if v == 0.0 { 0.0 } else { v }
 }
 
 #[cfg(test)]
@@ -239,6 +243,14 @@ mod tests {
             degraded: false,
             infer_ms: 0.0,
         }
+    }
+
+    #[test]
+    fn rounding_never_yields_negative_zero() {
+        // JSON 里 -0.0 会让 progress 汇总带符号
+        assert!(round2(-0.0001).is_sign_positive(), "round2 产生了 -0.0");
+        assert!(round1(-0.01).is_sign_positive(), "round1 产生了 -0.0");
+        assert_eq!(round2(-0.0001), 0.0);
     }
 
     #[test]

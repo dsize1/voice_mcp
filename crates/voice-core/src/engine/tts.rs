@@ -24,6 +24,30 @@ pub const KOKORO_VOICES: [&str; 54] = [
     "zm_yunxi", "zm_yunxia", "zm_yunyang",
 ];
 
+/// 跟读示范的慢速倍率（跟 skill 约定的固定值）
+pub const SLOW_SPEED: f32 = 0.75;
+
+/// 决定一次示范要生成哪几个语速版本。
+///
+/// 语义（曾经踩过的坑）：`slow_too=true` 表示"慢速 + 常速"一对，此时 `speed`
+/// 若等于慢速值（0.75）就**不能**被当成常速再次使用，否则两个文件语速相同、
+/// 常速示范实际缺席。因此 slow 分支里常速取 `speed` 仅在它明显快于慢速时生效，
+/// 否则回落到配置默认（1.0）。
+pub fn demo_speeds(
+    slow_too: bool,
+    speed: Option<f32>,
+    default_speed: f32,
+) -> Vec<(&'static str, f32)> {
+    let norm = speed
+        .filter(|s| *s > SLOW_SPEED + 0.01)
+        .unwrap_or(default_speed);
+    if slow_too {
+        vec![("slow", SLOW_SPEED), ("norm", norm)]
+    } else {
+        vec![("norm", speed.unwrap_or(default_speed))]
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Synthesized {
     pub samples: Vec<f32>,
@@ -197,6 +221,20 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), 54, "音色名有重复");
+    }
+
+    #[test]
+    fn demo_speeds_slow_pair_is_not_duplicated() {
+        // 传 0.75 + slow_too：常速必须是 1.0，不能也是 0.75
+        let v = demo_speeds(true, Some(0.75), 1.0);
+        assert_eq!(v, vec![("slow", 0.75), ("norm", 1.0)]);
+        // 不传 speed：常速用配置默认
+        assert_eq!(demo_speeds(true, None, 1.0), vec![("slow", 0.75), ("norm", 1.0)]);
+        // 显式给一个更快语速：尊重它
+        assert_eq!(demo_speeds(true, Some(1.2), 1.0), vec![("slow", 0.75), ("norm", 1.2)]);
+        // 不要慢速版时 speed 原样生效
+        assert_eq!(demo_speeds(false, Some(0.9), 1.0), vec![("norm", 0.9)]);
+        assert_eq!(demo_speeds(false, None, 1.0), vec![("norm", 1.0)]);
     }
 
     #[test]

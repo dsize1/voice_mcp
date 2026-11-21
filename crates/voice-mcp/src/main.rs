@@ -280,11 +280,11 @@ impl VoiceServer {
             let seq = session.next_seq()?;
             let scene = p.scene.clone().unwrap_or_else(|| "tts".into());
             let prefix = session.take_prefix(seq, &scene);
-            let speeds: Vec<(&str, f32)> = if p.slow_too {
-                vec![("slow", 0.75), ("norm", p.speed.unwrap_or(app.cfg.synth_speed))]
-            } else {
-                vec![("norm", p.speed.unwrap_or(app.cfg.synth_speed))]
-            };
+            let speeds = voice_core::engine::demo_speeds(
+                p.slow_too,
+                p.speed,
+                app.cfg.synth_speed,
+            );
             let voice = p.voice.clone().unwrap_or_else(|| "af_heart".into());
 
             let files = app.with_engines(|e| {
@@ -563,8 +563,14 @@ impl VoiceServer {
             let seq = session.next_seq()?;
             let scene = p.scene.clone().unwrap_or_else(|| "assess".into());
             let prefix = session.take_prefix(seq, &scene);
-            let orig = session.import_original(&src, &prefix)?;
-            let decoded = audio::load_16k(&orig)?;
+            let orig0 = session.import_original(&src, &prefix)?;
+            let decoded = audio::load_16k(&orig0)?;
+            let orig = align_original_name(
+                &session.dir,
+                orig0,
+                &prefix,
+                decoded.info.source_sr,
+            );
             let norm = session.write_norm_wav(&prefix, &decoded.samples, decoded.sample_rate)?;
 
             let lang = p.lang.clone().unwrap_or_else(|| "auto".into());
@@ -704,7 +710,34 @@ impl VoiceServer {
 }
 
 fn round3(v: f32) -> f32 {
-    (v * 1000.0).round() / 1000.0
+    let r = (v * 1000.0).round() / 1000.0;
+    if r == 0.0 { 0.0 } else { r } // 避免 JSON 里出现 -0.0
+}
+
+/// 源文件命名与 record 侧对齐：非 16 kHz 的 wav 存成 `<prefix>.raw<sr>.wav`，
+/// 这样 24 kHz 示范音与 48 kHz 麦克风录音看文件名就能区分。
+fn align_original_name(
+    dir: &std::path::Path,
+    orig: std::path::PathBuf,
+    prefix: &str,
+    sr: u32,
+) -> std::path::PathBuf {
+    let is_wav = orig
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("wav"))
+        .unwrap_or(false);
+    if !is_wav || sr == voice_core::INTERNAL_SR {
+        return orig;
+    }
+    let want = dir.join("takes").join(format!("{prefix}.raw{sr}.wav"));
+    if want == orig {
+        return orig;
+    }
+    match std::fs::rename(&orig, &want) {
+        Ok(()) => want,
+        Err(_) => orig,
+    }
 }
 
 // ------------------------------------------------------------------ 入口

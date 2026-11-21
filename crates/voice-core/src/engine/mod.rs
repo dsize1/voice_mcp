@@ -5,7 +5,7 @@ pub mod tts;
 pub mod vad;
 
 pub use asr::{Asr, AsrEngine, AsrKind, Transcript, Word};
-pub use tts::{KOKORO_VOICES, Synthesized, TtsEngine, VoiceInfo};
+pub use tts::{demo_speeds, KOKORO_VOICES, SLOW_SPEED, Synthesized, TtsEngine, VoiceInfo};
 
 use anyhow::Result;
 

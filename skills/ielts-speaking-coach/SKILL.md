@@ -25,7 +25,7 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 | 工具（MCP `voice`） | 用途 |
 |---|---|
 | `mcp__voice__status` | 自检：`mic` 是否为 null、模型是否齐全 |
-| `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`speed` 0.75/1.0、`play=true` 服务端出声、`slow_too=true` 同时出慢速版 |
+| `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`speed` 0.75/1.0、`play=true` 服务端出声、`slow_too=true` 一次产出 slow(0.75)+norm(1.0) 两个文件 |
 | `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"` |
 | `mcp__voice__record` | 麦克风录音（静音自动停）。`mic` 为 null 时不可用 |
 
@@ -81,7 +81,8 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 ① 选素材        → drill_queue 优先；条目若是 {bank_id} 就用素材库（读 $VOICE_HOME/bank/index.jsonl
                   取 text/中文/参考音频路径），否则用内联 text；都没有则按 focus 现场造 2–3 句
 ② 播示范        → synthesize(text=句, speed=0.75, play=true, slow_too=true)
-                  再 synthesize(text=句, speed=1.0, play=true)
+                  → 返回 files 里 label="slow"(0.75) 与 label="norm"(1.0) 一对；play 播的是慢速版
+                  再 play(path=<label="norm" 的 path>) 播常速，**不要**再 synthesize(speed=1.0)
 ③ 用户跟读      → record 或让用户用录音机
 ④ 评测          → assess(path="last", reference=句, lang="en", scene="drill")
 ⑤ 反馈（核心）  → 按第 4 节优先级挑 1–2 条；给"具体位置 + 为什么 + 怎么改 + 再示范一次"

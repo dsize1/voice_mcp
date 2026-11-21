@@ -138,10 +138,14 @@
 | `voice` | string | | 音色名（`af_heart`/`bf_emma`/`am_michael`/`zf_xiaobei`…）或 sid 数字，默认 `af_heart` |
 | `speed` | number | | 语速，默认 1.0；跟读示范建议 0.75 |
 | `play` | bool | | `true` 时由**服务端**播放（Pi 终端放不出声音，必须用这个） |
-| `slow_too` | bool | | 同时生成 0.75x 慢速版 |
+| `slow_too` | bool | | 同时生成一对：`label=slow`(0.75x) + `label=norm`。**此时 `speed` 只影响 norm，且 `speed ≤ 0.75` 时 norm 回落到 1.0**（否则会出现两个文件语速相同的假慢速版） |
 | `scene` | string | | 场景标签 |
 
 返回 `detail`：`voice` / `sid` / `sample_rate`(24000) / `files[]{label,speed,path,duration,gen_ms,rtf}` / `session` / `prefix`
+
+合成逻辑集中在 `voice_core::engine::demo_speeds`（MCP 与 CLI 共用，有单测）：
+`slow_too=false` → `[norm]`；`slow_too=true` → `[(slow, 0.75), (norm, speed>0.75 ? speed : 1.0)]`。
+`play=true` 只播 `files[0]`（即 slow 版）；要听常速请用 `play(path=<label=norm 的 path>)`，不必再合成一次。
 
 **规则（重要）**：中文讲解与英文示范**必须拆成两次调用**（Kokoro 是单语模型）。
 中文讲解默认只出文字、不必合成音频。
@@ -225,6 +229,8 @@ $VOICE_HOME (默认 D:/voice_data)
     ├── session.json
     └── takes/
         ├── 001_<scene>.m4a           ← 原始输入，永不修改
+        ├── 001_<scene>.raw48000.wav  ← 设备采样率的原始证据（record）
+        ├── 001_<scene>.raw24000.wav  ← 非 16 kHz 的 wav 输入被 align 成这个形状（assess/prepare）
         ├── 001_<scene>.16k.wav       ← 派生（可删可重建）
         ├── 001_<scene>.asr.json      ← 转写全文 + words[] + tokens[]
         ├── 001_<scene>.audio.json    ← 解码后的声学指标

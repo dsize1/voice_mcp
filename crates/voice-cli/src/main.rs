@@ -406,17 +406,12 @@ fn say(
 
     let voice_name = voice.unwrap_or("af_heart");
     let sid = tts.resolve_sid(voice_name);
-    let speed = speed.unwrap_or(cfg.synth_speed);
 
     let seq = session.next_seq()?;
     let prefix = session.take_prefix(seq, scene);
 
     let mut out = Vec::new();
-    let speeds: Vec<(&str, f32)> = if slow_too {
-        vec![("slow", 0.75), ("norm", speed)]
-    } else {
-        vec![("norm", speed)]
-    };
+    let speeds = voice_core::engine::demo_speeds(slow_too, speed, cfg.synth_speed);
     for (label, sp) in &speeds {
         let s = tts.synthesize(text, sid, *sp)?;
         let p = session.write_reference(&prefix, label, &s.samples, s.sample_rate, text, &s.voice, *sp)?;

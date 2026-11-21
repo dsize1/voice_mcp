@@ -22,6 +22,54 @@ pub use ctc::{align, greedy, Aligned, PhoneRef};
 pub use g2p::{G2p, TextPhones};
 pub use model::PhonemeCtc;
 
+use std::sync::{Mutex, OnceLock};
+
+/// 全局惰性加载的 GOP 引擎（模型 1.2 GB，只在真正需要时载入）。
+///
+/// 为什么不放进 `Engines`：ASR/TTS 是每轮必用，GOP 是可选增强；
+/// 把它常驻会白占 1.2 GB 内存 + 2 s 启动。
+static GOP_ENGINE: OnceLock<Mutex<Option<GopEngine>>> = OnceLock::new();
+
+pub struct GopEngine {
+    pub model: PhonemeCtc,
+    pub g2p: G2p,
+}
+
+impl GopEngine {
+    /// 默认路径：`$VOICE_PHONEME_MODEL` / `$VOICE_G2P_DICT` 可覆盖。
+    pub fn load_default() -> Result<Self> {
+        let model_dir = std::env::var("VOICE_PHONEME_MODEL")
+            .unwrap_or_else(|_| model::MODEL_DIR.to_string());
+        let dict = std::env::var("VOICE_G2P_DICT")
+            .unwrap_or_else(|_| "C:/voice_models/g2p/cmudict.dict".to_string());
+        Ok(Self {
+            model: PhonemeCtc::load(&model_dir)?,
+            g2p: G2p::load(std::path::Path::new(&dict))?,
+        })
+    }
+}
+
+/// 在全局引擎上跑一次闭包（首次调用会加载模型，约 1–2 s）。
+pub fn with_engine<T>(f: impl FnOnce(&mut GopEngine) -> Result<T>) -> Result<T> {
+    let cell = GOP_ENGINE.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock().map_err(|_| anyhow::anyhow!("GOP 引擎锁被 poison"))?;
+    if guard.is_none() {
+        *guard = Some(GopEngine::load_default()?);
+    }
+    f(guard.as_mut().expect("刚初始化"))
+}
+
+/// 是否值得跑 GOP（纯判断，便于单测）。
+///
+/// 三个前提：有参考文本、带宽够（≥24 kHz）、有音素模型。
+pub fn should_run(with_gop: bool, has_reference: bool, band_limited: bool) -> bool {
+    with_gop && has_reference && !band_limited
+}
+
+/// 给 `limitations` 用的固定措辞：GOP 现在只能当排序信号。
+pub const GOP_LIMITATION: &str =
+    "音素级 GOP 精度有限（so762 标定：FP=10% 时精确率 0.15–0.24），只能作为句内排序与趋势参考，不能单独判定某个音素读错";
+
 use anyhow::Result;
 use serde::Serialize;
 

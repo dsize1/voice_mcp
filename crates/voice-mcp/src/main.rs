@@ -131,6 +131,9 @@ struct AssessParams {
     /// auto | en | zh | mixed
     #[serde(default)]
     lang: Option<String>,
+    /// 同时跑音素级 GOP（需 reference；首次调用加载 1.2 GB 模型，约 1–2 s）
+    #[serde(default)]
+    with_gop: bool,
     /// 强制引擎 sense-voice | whisper
     #[serde(default)]
     engine: Option<String>,
@@ -617,6 +620,7 @@ impl VoiceServer {
                         engine: p.engine.as_deref(),
                         reference: p.reference.as_deref(),
                         source_sr: Some(decoded.info.source_sr),
+                        with_gop: p.with_gop,
                     },
                 )
             })?;
@@ -699,6 +703,23 @@ impl VoiceServer {
                     .map(|d| d.timestamp_alignment),
             });
 
+            // GOP 摘要：只回最可疑的 5 个——精度有限，给多了会诱导 LLM 逐个下结论
+            let gop_json = assessment.gop.as_ref().map(|g| {
+                let mut v: Vec<&voice_core::gop::PhoneScore> = g.phones.iter().collect();
+                v.sort_by(|a, b| a.z.partial_cmp(&b.z).unwrap_or(std::cmp::Ordering::Equal));
+                serde_json::json!({
+                    "version": g.version,
+                    "phones_total": g.phones.len(),
+                    "oov": g.oov,
+                    "unmapped": g.unmapped,
+                    "worst": v.iter().take(5).map(|p| serde_json::json!({
+                        "phone": p.phone, "heard": p.best_symbol,
+                        "t0_ms": p.t0_ms, "t1_ms": p.t1_ms,
+                        "gop": round3(p.gop), "z": p.z,
+                    })).collect::<Vec<_>>(),
+                })
+            });
+
             Ok(serde_json::json!({
                 "summary": summary,
                 "issues": issues,
@@ -728,6 +749,7 @@ impl VoiceServer {
                     "peak_dbfs": round3(assessment.audio.peak_dbfs),
                     "silent_ratio": round3(assessment.audio.silent_ratio),
                 },
+                "gop": gop_json,
                 "limitations": assessment.limitations,
                 "scorer_version": assessment.scorer_version,
                 "evidence": {

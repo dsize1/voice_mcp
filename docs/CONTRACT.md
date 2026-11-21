@@ -33,6 +33,7 @@
 | `reference` | string | | 参考文本（跟读目标句）。为空则只做语流分析 |
 | `lang` | string | | `auto`/`en`/`zh`/`mixed` |
 | `engine` | string | | 强制 `sense-voice`/`whisper` |
+| `with_gop` | bool | | 同时跑音素级 GOP（需 `reference`；首次调用加载 1.2 GB 模型，约 1–2 s） |
 | `scene` | string | | 场景标签（仅外部文件新建会话时生效；本机 take 沿用原前缀） |
 
 **留证位置（重要）**：`path` 指向本机 `sessions/<date>/<id>/takes/` 下的文件时，
@@ -268,3 +269,19 @@ $VOICE_HOME (默认 D:/voice_data)
 ```
 
 `manifest.jsonl` 可直接 `grep`，也是 `progress` 趋势分析的数据源。
+
+## assess: `with_gop=true` 的返回
+
+新增 `gop` 字段（只回最可疑的 5 个，避免诱导 LLM 逐个下结论）：
+
+```json
+{"gop": {
+  "version": "gop-sf-0.1", "phones_total": 18, "oov": [], "unmapped": [],
+  "worst": [{"phone": "ER", "heard": "ɜ", "t0_ms": 2840, "t1_ms": 2860, "gop": -2.89, "z": -1.60}]
+}}
+```
+
+**精度事实（必须落到措辞）**：so762 标定（120 句 / 2 015 音素 / 223 错读）——
+句级 ρ≈0.67；音素级 AUROC 0.63–0.66，FP=10% 处精确率 **0.15–0.24**。
+因此 `assess` 会在 `limitations` 追加 `gop_precision_low`；Skill 也只能把它当排序/趋势信号。
+带宽不足（`band_limited`）或缺 `reference` 时不跑 GOP，并明确写进 `limitations`。

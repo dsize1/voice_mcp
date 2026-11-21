@@ -28,6 +28,9 @@ pub struct Assessment {
     pub flow: flow::FlowMetrics,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_diff: Option<TextDiff>,
+    /// 音素级 GOP（`with_gop=true` 才有）。只能当排序/趋势，不能当判决。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gop: Option<crate::gop::GopResult>,
     /// 是否为降级结果（无词级时间戳 / 无音素级对齐）
     pub degraded: bool,
     /// 还缺哪些能力（给 Agent 解释为什么结论有限）
@@ -63,6 +66,8 @@ pub struct AssessRequest<'a> {
     /// 原始文件/设备的采样率。用于正确判断 `band_limited`
     /// （分析用的采样率恒为 16 kHz，不能拿它判断"源音频是否窄带"）。
     pub source_sr: Option<u32>,
+    /// 是否跑音素级 GOP（需要参考文本；首次调用会加载 1.2 GB 模型）
+    pub with_gop: bool,
 }
 
 /// 一次完成：ASR → 语流指标 → 词级差异。
@@ -77,7 +82,20 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         .map(|r| diff::compare(r, &transcript))
         .filter(|_| !transcript.words.is_empty() || !transcript.text.is_empty());
 
-    let mut limitations = Vec::new();
+    let band_limited = audio.band_limited;
+    let mut limitations: Vec<String> = Vec::new();
+    let mut gop = None;
+    if crate::gop::should_run(req.with_gop, req.reference.is_some(), band_limited) {
+        let text = req.reference.unwrap_or_default();
+        match crate::gop::with_engine(|e| crate::gop::score_text(&mut e.model, req.samples, text, &e.g2p)) {
+            Ok(g) => gop = Some(g),
+            Err(e) => limitations.push(format!("音素级 GOP 不可用：{e}")),
+        }
+    } else if req.with_gop && req.reference.is_none() {
+        limitations.push("未提供参考文本，跳过音素级 GOP".into());
+    } else if req.with_gop && band_limited {
+        limitations.push("源音频带宽不足（<24 kHz），跳过音素级 GOP".into());
+    }
     let mut degraded = transcript.degraded || transcript.words.is_empty();
 
     // D02：VAD 静默失败检测——转写出了词，却几乎没有检测到语音段。
@@ -113,7 +131,11 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
             "SenseVoice 给出的是 CTC token 时间戳（±0.5 s 量级），词界停顿时序只能作参考；             逐词精确定位需要音素级对齐".to_string(),
         );
     }
-    limitations.push("尚无音素级强制对齐（GOP），因此不能给出音素级发音分数".to_string());
+    match &gop {
+        Some(_) => limitations.push(crate::gop::GOP_LIMITATION.to_string()),
+        None => limitations
+            .push("尚无音素级强制对齐（GOP），因此不能给出音素级发音分数".to_string()),
+    }
 
     Ok(Assessment {
         degraded,
@@ -121,6 +143,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         audio,
         flow,
         text_diff,
+        gop,
         limitations,
         scorer_version: SCORER_VERSION.to_string(),
     })

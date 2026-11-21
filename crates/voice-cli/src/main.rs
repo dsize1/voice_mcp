@@ -68,6 +68,9 @@ enum Cmd {
         lang: String,
         #[arg(long)]
         engine: Option<String>,
+        /// 同时跑音素级 GOP（需 --reference）
+        #[arg(long)]
+        with_gop: bool,
         #[arg(long, default_value = "assess")]
         scene: String,
     },
@@ -315,8 +318,8 @@ fn main() -> Result<()> {
         Cmd::Rec { max_sec, silence, start_timeout, stt: then_stt, lang, scene } => {
             rec(&cfg, max_sec, silence, start_timeout, then_stt, &lang, &scene)
         }
-        Cmd::Assess { path, reference, lang, engine, scene } => {
-            assess_cmd(&cfg, &path, reference.as_deref(), &lang, engine.as_deref(), &scene)
+        Cmd::Assess { path, reference, lang, engine, with_gop, scene } => {
+            assess_cmd(&cfg, &path, reference.as_deref(), &lang, engine.as_deref(), with_gop, &scene)
         }
         Cmd::Watch { dir, lang } => watch(&cfg, dir.as_deref(), &lang),
         Cmd::TtsProbe { text } => tts_probe(&cfg, &text),
@@ -635,6 +638,7 @@ fn lesson(
             engine: None,
             reference: Some(&reference),
             source_sr: Some(decoded.info.source_sr),
+            with_gop: false,
         },
     )?;
     let td = a.text_diff.as_ref();
@@ -818,6 +822,7 @@ fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
                 lang: &case.lang,
                 engine: case.engine.as_deref(),
                 reference: reference.as_deref(),
+                with_gop: false,
                 source_sr: Some(decoded.info.source_sr),
             },
         )?;
@@ -983,6 +988,7 @@ fn assess_cmd(
     reference: Option<&str>,
     lang: &str,
     engine: Option<&str>,
+    with_gop: bool,
     scene: &str,
 ) -> Result<()> {
     let store = Store::open(&cfg.data_dir)?;
@@ -1024,6 +1030,7 @@ fn assess_cmd(
             engine,
             reference,
             source_sr: Some(decoded.info.source_sr),
+            with_gop,
         },
     )?;
 

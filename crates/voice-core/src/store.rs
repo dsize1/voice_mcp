@@ -113,6 +113,40 @@ impl Store {
         }))
     }
 
+    /// 反查 take 所属会话：`sessions/<date>/<id>/takes/<file>` → `(Session, prefix)`。
+    ///
+    /// 用于 `assess` 就地写回源 take（不再新建 assess 会话、不再复制音频）。
+    /// 路径不在本机 `sessions/` 下（如录音机目录、`cases_audio`）时返回 `None`，
+    /// 调用方继续走“新建 assess 会话”的老路径。
+    pub fn session_for_take(&self, path: &Path) -> Option<(Session, String)> {
+        let canon = path.canonicalize().ok()?;
+        let sessions = self.root.canonicalize().ok()?.join("sessions");
+        let rel = canon.strip_prefix(&sessions).ok()?;
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+        // 只认 `<date>/<id>/takes/<file>` 四段
+        if parts.len() != 4 || parts[2] != "takes" {
+            return None;
+        }
+        let (date, sid, file) = (&parts[0], &parts[1], &parts[3]);
+        let prefix = prefix_of_take_file(file)?;
+        let dir = sessions.join(date).join(sid);
+        if !dir.is_dir() {
+            return None;
+        }
+        Some((
+            Session {
+                root: self.root.clone(),
+                dir,
+                id: format!("{date}/{sid}"),
+                kind: sid.split('_').skip(1).collect::<Vec<_>>().join("_"),
+            },
+            prefix,
+        ))
+    }
+
     /// 最近一次 take 的原始音频（`path: "last"` 的解析目标）
     pub fn last_take(&self) -> Option<PathBuf> {
         let p = self.root.join("last_take");
@@ -291,6 +325,19 @@ fn read_dirs(p: &Path) -> Result<Vec<PathBuf>> {
     Ok(v)
 }
 
+/// 从 take 文件名推出前缀：`001_drill.raw48000.wav` → `001_drill`。
+///
+/// 前缀由 `take_prefix()` 生成（`{seq:03}_{scene}`），`sanitize` 已把 `.` 换成 `_`，
+/// 所以“第一个点之前”就是前缀；且必须以数字段开头，否则不认。
+pub fn prefix_of_take_file(file: &str) -> Option<String> {
+    let base = file.split('.').next()?;
+    let head = base.split('_').next()?;
+    if head.is_empty() || !head.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(base.to_string())
+}
+
 fn read_files(p: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
     let p = p.as_ref();
     if !p.is_dir() {
@@ -327,6 +374,38 @@ mod tests {
         assert_eq!(p, "001_read_the_third_time");
         std::fs::write(s.dir.join("takes").join(format!("{p}.asr.json")), "{}").unwrap();
         assert_eq!(s.next_seq().unwrap(), 2);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn prefix_from_take_file() {
+        assert_eq!(prefix_of_take_file("001_drill.raw48000.wav").as_deref(), Some("001_drill"));
+        assert_eq!(prefix_of_take_file("012_read_third.16k.wav").as_deref(), Some("012_read_third"));
+        assert_eq!(prefix_of_take_file("003_retry.metrics.json").as_deref(), Some("003_retry"));
+        assert_eq!(prefix_of_take_file("003_retry.md").as_deref(), Some("003_retry"));
+        assert_eq!(prefix_of_take_file("003_retry.ref_slow.wav").as_deref(), Some("003_retry"));
+        // 不以数字段开头的不认（防误伤手册/脚本文件）
+        assert_eq!(prefix_of_take_file("notes.md"), None);
+        assert_eq!(prefix_of_take_file("session.json"), None);
+    }
+
+    #[test]
+    fn session_for_take_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("voice_store_test3_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = Store::open(&tmp).unwrap();
+        let s = store.new_session("drill").unwrap();
+        let prefix = s.take_prefix(1, "drill");
+        let raw = s.dir.join("takes").join(format!("{prefix}.raw48000.wav"));
+        std::fs::write(&raw, b"x").unwrap();
+        let (found, pre) = store.session_for_take(&raw).expect("应能反查到会话");
+        assert_eq!(found.id, s.id);
+        assert_eq!(found.kind, "drill");
+        assert_eq!(pre, prefix);
+        // 外部文件不认
+        let outside = tmp.join("outside.m4a");
+        std::fs::write(&outside, b"x").unwrap();
+        assert!(store.session_for_take(&outside).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

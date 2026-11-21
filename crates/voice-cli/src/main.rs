@@ -825,12 +825,32 @@ fn assess_cmd(
 ) -> Result<()> {
     let store = Store::open(&cfg.data_dir)?;
     let src = resolve_path(&store, path)?;
-    let session = store.new_session("assess")?;
-    let seq = session.next_seq()?;
-    let prefix = session.take_prefix(seq, scene);
-    let orig = session.import_original(&src, &prefix)?;
-    let decoded = audio::load_16k(&orig)?;
-    let norm = session.write_norm_wav(&prefix, &decoded.samples, decoded.sample_rate)?;
+    // 与 MCP assess 一致：源在 sessions/ 内就地写回，不复制、不新建会话
+    let (session, prefix, orig, feed) = match store.session_for_take(&src) {
+        Some((s, pre)) => {
+            let p16 = s.dir.join("takes").join(format!("{pre}.16k.wav"));
+            let feed = if p16.is_file() { p16 } else { src.clone() };
+            (s, pre, src.clone(), feed)
+        }
+        None => {
+            let s = store.new_session("assess")?;
+            let seq = s.next_seq()?;
+            let pre = s.take_prefix(seq, scene);
+            let orig = s.import_original(&src, &pre)?;
+            (s, pre, orig.clone(), orig)
+        }
+    };
+    let seq = prefix
+        .split('_')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(1);
+    let decoded = audio::load_16k(&feed)?;
+    let norm = if feed.file_name().map(|f| f.to_string_lossy().ends_with(".16k.wav")) == Some(true) {
+        feed.clone()
+    } else {
+        session.write_norm_wav(&prefix, &decoded.samples, decoded.sample_rate)?
+    };
 
     let engines = Engines::load(cfg.clone())?;
     let a = voice_core::assess::assess(
@@ -845,8 +865,27 @@ fn assess_cmd(
         },
     )?;
 
+    let metrics_path = session.dir.join("takes").join(format!("{prefix}.metrics.json"));
+    if metrics_path.is_file() {
+        let _ = std::fs::copy(
+            &metrics_path,
+            session.dir.join("takes").join(format!("{prefix}.metrics.prev.json")),
+        );
+    }
     session.write_json(&prefix, "metrics", &a)?;
     session.write_json(&prefix, "asr", &a.transcript)?;
+    // 反馈骨架（与 MCP assess 一致，保证“5 件套”在任何入口都成立）
+    let feedback = session.dir.join("takes").join(format!("{prefix}.md"));
+    if !feedback.is_file() {
+        std::fs::write(
+            &feedback,
+            format!(
+                "# 反馈 · {prefix}\n\n<!-- Agent 在这里写本轮反馈；结构：问题 / 怎么改 / 示范 / 再来一次 -->\n\n- 参考文本：{}\n- 识别结果：{}\n",
+                reference.unwrap_or("(未提供，仅语流分析)"),
+                a.transcript.text
+            ),
+        )?;
+    }
     voice_core::store::finish_take(
         &store,
         ManifestEntry {
@@ -861,7 +900,7 @@ fn assess_cmd(
             dur: Some(a.transcript.duration),
             text: Some(a.transcript.text.clone()),
             degraded: Some(a.degraded),
-            feedback_ref: None,
+            feedback_ref: Some(feedback.to_string_lossy().to_string()),
         },
     )?;
 

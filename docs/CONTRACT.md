@@ -33,7 +33,23 @@
 | `reference` | string | | 参考文本（跟读目标句）。为空则只做语流分析 |
 | `lang` | string | | `auto`/`en`/`zh`/`mixed` |
 | `engine` | string | | 强制 `sense-voice`/`whisper` |
-| `scene` | string | | 场景标签 |
+| `scene` | string | | 场景标签（仅外部文件新建会话时生效；本机 take 沿用原前缀） |
+
+**留证位置（重要）**：`path` 指向本机 `sessions/<date>/<id>/takes/` 下的文件时，
+`assess` **就地在那个 take 上写回**，不新建会话、不复制音频：
+
+```text
+sessions/<date>/<hhmmss>_drill/takes/
+├── 001_drill.raw48000.wav   record 写的原始证据
+├── 001_drill.16k.wav        派生（assess 优先吃这一份，不会覆写）
+├── 001_drill.asr.json       assess 写
+├── 001_drill.metrics.json   assess 写（重复评测时上一份留成 .metrics.prev.json）
+└── 001_drill.md             assess 写的反馈骨架（已存在则不覆盖）
+```
+
+外部文件（录音机目录、`cases_audio`）仍走“新建 `HHMMSS_assess` 会话 + 导入副本”的老路径。
+反查规则：`Store::session_for_take()` + `prefix_of_take_file()`（前缀 = 第一个点之前，且须以数字段开头）。
+副作用：`last_take` 不再被 assess 推到副本上（仍指向 record 的 `.raw48000.wav`）。
 
 返回 `detail` 关键字段：
 
@@ -235,6 +251,8 @@ $VOICE_HOME (默认 D:/voice_data)
         ├── 001_<scene>.asr.json      ← 转写全文 + words[] + tokens[]
         ├── 001_<scene>.audio.json    ← 解码后的声学指标
         ├── 001_<scene>.capture.json  ← 采集元信息 + 能量包络（record）
+        ├── 001_<scene>.metrics.json  ← 评测指标（assess；重复评测时上一份为 .metrics.prev.json）
+        ├── 001_<scene>.md            ← 反馈骨架（assess 建，Agent 填）
         ├── 001_<scene>.ref_norm.wav  ← 示范音（1.0x）
         ├── 001_<scene>.ref_slow.wav  ← 示范音（0.75x）
         └── 001_<scene>.ref_*.json    ← text/voice/speed/model

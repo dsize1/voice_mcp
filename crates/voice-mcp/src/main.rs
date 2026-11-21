@@ -559,19 +559,44 @@ impl VoiceServer {
         let app = self.app.clone();
         let r = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
             let src = app.resolve(&p.path)?;
-            let session = app.store.new_session("assess")?;
-            let seq = session.next_seq()?;
-            let scene = p.scene.clone().unwrap_or_else(|| "assess".into());
-            let prefix = session.take_prefix(seq, &scene);
-            let orig0 = session.import_original(&src, &prefix)?;
-            let decoded = audio::load_16k(&orig0)?;
-            let orig = align_original_name(
-                &session.dir,
-                orig0,
-                &prefix,
-                decoded.info.source_sr,
-            );
-            let norm = session.write_norm_wav(&prefix, &decoded.samples, decoded.sample_rate)?;
+            // 源在本机 sessions/ 内 → 就地复用该 take：不新建会话、不复制音频、
+            // metrics/md 直接长在 record 的目录下（STATE.md 第 4 条“5 件套”成立）。
+            // 外部文件（录音机目录/cases_audio）→ 保持原行为（新建 assess 会话 + 导入副本）。
+            let reuse = app.store.session_for_take(&src);
+            let (session, prefix, orig, feed) = match reuse {
+                Some((s, pre)) => {
+                    let p16 = s.dir.join("takes").join(format!("{pre}.16k.wav"));
+                    // 优先吃已生成的 16k（VAD 去静音版），且不覆写 record 的派生文件
+                    let feed = if p16.is_file() { p16 } else { src.clone() };
+                    (s, pre, src.clone(), feed)
+                }
+                None => {
+                    let s = app.store.new_session("assess")?;
+                    let seq = s.next_seq()?;
+                    let scene = p.scene.clone().unwrap_or_else(|| "assess".into());
+                    let pre = s.take_prefix(seq, &scene);
+                    let orig0 = s.import_original(&src, &pre)?;
+                    let sr = audio::load_16k(&orig0)?.info.source_sr;
+                    let orig = align_original_name(&s.dir, orig0, &pre, sr);
+                    (s, pre, orig.clone(), orig)
+                }
+            };
+            let seq = prefix
+                .split('_')
+                .next()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(1);
+            let scene = p
+                .scene
+                .clone()
+                .unwrap_or_else(|| session.kind.clone());
+
+            let decoded = audio::load_16k(&feed)?;
+            let norm = if feed.file_name().map(|f| f.to_string_lossy().ends_with(".16k.wav")) == Some(true) {
+                feed.clone()
+            } else {
+                session.write_norm_wav(&prefix, &decoded.samples, decoded.sample_rate)?
+            };
 
             let lang = p.lang.clone().unwrap_or_else(|| "auto".into());
             let assessment = app.with_engines(|e| {
@@ -588,7 +613,14 @@ impl VoiceServer {
                 )
             })?;
 
-            // 留证：metrics + 转写
+            // 留证：metrics + 转写。同一 take 重复评测时把上一份 metrics 留成 .prev
+            let metrics_path = session.dir.join("takes").join(format!("{prefix}.metrics.json"));
+            if metrics_path.is_file() {
+                let _ = std::fs::copy(
+                    &metrics_path,
+                    session.dir.join("takes").join(format!("{prefix}.metrics.prev.json")),
+                );
+            }
             session.write_json(&prefix, "metrics", &assessment)?;
             session.write_json(&prefix, "asr", &assessment.transcript)?;
             let feedback_path = session.dir.join("takes").join(format!("{prefix}.md"));

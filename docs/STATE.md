@@ -54,7 +54,8 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 - [ ] 1. `/reload` → 确认 `mcp__voice__*` 8 个工具与 2 个 Skill 都在
 - [ ] 2. 建档：3 句诊断（`I think this is the third time.` / `He lives in a very small village.` / `Would you like a cup of tea?`）+ 30–60 s 自由说 → 写 `$VOICE_HOME/learner.json`
 - [ ] 3. 单轮训练：`synthesize(slow_too, play)` → `record(silence_sec=2.2)` → `assess(reference=句)` → 只挑 1 个问题 → 重读 `scene=retry` 对比
-- [ ] 4. 验证留证完整：`bank` 之外的 `sessions/<date>/<id>/takes/` 应同时有 `.raw48000.wav` + `.16k.wav` + `.asr.json` + `.metrics.json` + `.md`
+- [ ] 4. 验证留证完整：`sessions/<date>/<id>/takes/` 里同前缀应有 `.raw48000.wav` + `.16k.wav` + `.asr.json` + `.metrics.json` + `.md`
+   （assess 已改为就地写回源 take，不再另开 assess 会话；外部文件仍新建会话）
 - [ ] 5. 验证 Skill 遵守铁律：`hint=unclear` 不下结论、`likely_asr_miss` 不指责、一次只 1–2 个问题
 - [ ] 6. 修掉实跑中暴露的问题（这是 P3 的主要产出）
 

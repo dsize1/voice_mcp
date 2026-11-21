@@ -1,0 +1,22 @@
+[
+  {"id":"ielts/custom/p1-hometown","part":1,"task":"short_answer","topics":["hometown"],"level":2,
+   "text":"Where is your hometown and what is it like?","zh":"你的家乡在哪里？是个什么样的地方？"},
+  {"id":"ielts/custom/p1-homework","part":1,"task":"short_answer","topics":["study"],"level":2,
+   "text":"Do you prefer studying at home or in a library? Why?","zh":"你更喜欢在家还是在图书馆学习？为什么？"},
+  {"id":"ielts/custom/p1-routine","part":1,"task":"short_answer","topics":["daily routine"],"level":2,
+   "text":"What part of your daily routine do you enjoy most?","zh":"你一天里最喜欢哪个环节？"},
+  {"id":"ielts/custom/p1-weather","part":1,"task":"short_answer","topics":["weather"],"level":2,
+   "text":"Does the weather in your city change much through the year?","zh":"你所在城市的天气一年里变化大吗？"},
+  {"id":"ielts/custom/p3-technology","part":3,"task":"discussion","topics":["technology"],"level":4,
+   "text":"Some people think technology makes us less patient. Do you agree or disagree?","zh":"有人认为科技让人变得更没耐心，你同意吗？"},
+  {"id":"ielts/custom/p3-education","part":3,"task":"discussion","topics":["education"],"level":4,
+   "text":"Should universities focus more on practical skills than on theory?","zh":"大学是否应更重视实践技能而非理论？"},
+  {"id":"ielts/custom/p3-public-transport","part":3,"task":"discussion","topics":["transport"],"level":4,
+   "text":"What could governments do to encourage people to use public transport?","zh":"政府可以怎样鼓励人们使用公共交通？"},
+  {"id":"ielts/custom/p2-describe-person","part":2,"task":"cue_card","topics":["people"],"level":4,
+   "text":"Describe a person who has influenced you. You should say who this person is, how you know them, and why they influenced you.","zh":"描述一个影响过你的人：他是谁、你怎么认识他、为什么影响了你。"},
+  {"id":"ielts/custom/p2-describe-place","part":2,"task":"cue_card","topics":["places"],"level":4,
+   "text":"Describe a place you like to visit. You should say where it is, how often you go there, and why you like it.","zh":"描述一个你喜欢去的地方：在哪、多久去一次、为什么喜欢。"},
+  {"id":"ielts/custom/p2-describe-skill","part":2,"task":"cue_card","topics":["skills"],"level":4,
+   "text":"Describe a skill you would like to learn. You should say what it is, why you want to learn it, and how you would learn it.","zh":"描述一项你想学的技能：是什么、为什么想学、打算怎么学。"}
+]

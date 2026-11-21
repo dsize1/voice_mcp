@@ -107,9 +107,34 @@ voice-cli bank show <id>        # 质量指标 + 音频是否存在
 voice-cli bank drill <id>       # 播原声 + 打印句子/中文/level/tags
 ```
 
-- 选材顺序：`learner.json.drill_queue` 里的 `bank_id` → `focus` 对应的 `tags`（与 `references/phoneme-map.md` 的 id 同名）→ 同 `level` 的顺序素材。
+- 选材顺序（**目标优先**）：
+  1. `learner.json.drill_queue` 里的 `bank_id`
+  2. **雅思语料**（`--corpus ielts`）命中 `focus` 的 tags —— 有就一定先用
+  3. **NCE 教材**（`--corpus nce`）命中 `focus` 的 tags —— 当前唯一可用的存量素材
+  4. 同 `level` 的顺序补齐
 - 每轮只取 **1–3 条**；`fragment`（30.7%）里的半句不要当句练，除非用户要求。
 - 把选中的 `id` 写回 `learner.json.drill_queue`，作业句也用它（详情不在正文重复，只给 id 与句子）。
+
+**语料≠考试：必须主动声明来源**（用户的目标是雅思，NCE 只是存量素材）：
+
+```
+这句来自《新概念英语》第 2 册第 2 课（教材句，**不是雅思真题**）。
+发音维度可迁移（/θ/、词尾辅音、语速节奏），
+但话题与任务形态不等于雅思 Part 1/3 —— 表达与话题拓展另练。
+```
+
+雅思语料命中时则说明题型："这是 IELTS Part 1 的短答问题（`--part 1`）"。
+
+`kind=prompt` 的素材**没有原生音频**（`ref_audio=tts`）：示范音用 `synthesize` 生成，
+不要对用户说"跟读原声"；`kind=read_aloud` 才先播原声（`bank drill`）。
+
+**能力边界（不要越界）**：
+
+| 素材类型 | 音素级诊断 | 流利度 | 表达/语法 |
+|---|---|---|---|
+| NCE 逐句（native） | ✅ | ✅ | 有限（教材句不是真实表达） |
+| IELTS Part 1/3 题面（tts） | ✅（TTS 参考） | ✅ | ✅ 重点 |
+| IELTS Part 2 cue card（长独白） | ❌ 不做音素结论 | ✅ | ✅ 重点 |
 
 **反馈模板**（严格按这个结构，L1/L2 用中文，L3/L4 逐步换英文）：
 

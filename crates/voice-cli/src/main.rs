@@ -164,6 +164,8 @@ enum BankCmd {
     /// 列素材
     List {
         #[arg(long)]
+        corpus: Option<String>,
+        #[arg(long)]
         level: Option<u8>,
         #[arg(long)]
         tag: Option<String>,
@@ -192,6 +194,18 @@ enum BankCmd {
         level: Option<u8>,
         #[arg(long)]
         book: Option<String>,
+        /// 语料集合：nce | ielts | custom
+        #[arg(long)]
+        corpus: Option<String>,
+        /// 雅思 Part（1/2/3）
+        #[arg(long)]
+        part: Option<u8>,
+        /// 雅思话题（匹配 exam.topics）
+        #[arg(long)]
+        topic: Option<String>,
+        /// read_aloud | prompt
+        #[arg(long)]
+        kind: Option<String>,
         #[arg(long, default_value_t = 5)]
         limit: usize,
         #[arg(long, default_value_t = 0)]
@@ -206,6 +220,10 @@ enum BankCmd {
         #[arg(long)]
         allow_noise: bool,
     },
+    /// 把索引升级到当前 schema（补 corpus/kind/ref_audio）
+    Migrate,
+    /// 导入只有题面的素材（雅思口语题库 JSON 数组）
+    Import { file: String },
     /// 重算全部素材的 tags（纯文本规则，不动音频）
     Retag,
 }
@@ -233,17 +251,37 @@ fn main() -> Result<()> {
             BankCmd::Ingest { from_dir, book, limit, dry_run, overwrite } => {
                 bank_ingest(&cfg, from_dir.as_deref(), &book, limit, dry_run, overwrite)
             }
-            BankCmd::List { level, tag, book, limit } => {
-                bank_list(&cfg, level, tag.as_deref(), book.as_deref(), limit)
+            BankCmd::List { corpus, level, tag, book, limit } => {
+                bank_list(&cfg, corpus.as_deref(), level, tag.as_deref(), book.as_deref(), limit)
             }
             BankCmd::Show { id } => bank_show(&cfg, &id),
             BankCmd::Drill { id, quiet } => bank_drill(&cfg, &id, quiet),
-            BankCmd::Stats => bank_stats(&cfg),
-            BankCmd::Pick { tags, level, book, limit, offset, seed, allow_noise, no_weighted } => {
-                bank_pick(
-                    &cfg, tags, level, book.as_deref(), limit, offset, seed, allow_noise, !no_weighted,
-                )
+            BankCmd::Migrate => {
+                let n = voice_core::bank::migrate(Path::new(&cfg.data_dir))?;
+                println!("{}", serde_json::json!({"migrated": n}));
+                Ok(())
             }
+            BankCmd::Import { file } => {
+                let text = std::fs::read_to_string(&file)
+                    .with_context(|| format!("读取 {file} 失败"))?;
+                let docs: Vec<serde_json::Value> = serde_json::from_str(&text)
+                    .with_context(|| format!("{file} 必须是 JSON 数组"))?;
+                let (added, skipped) =
+                    voice_core::bank::import_prompts(Path::new(&cfg.data_dir), &docs)?;
+                println!("{}", serde_json::json!({"added": added, "skipped": skipped}));
+                Ok(())
+            }
+            BankCmd::Stats => bank_stats(&cfg),
+            BankCmd::Pick {
+                tags, level, book, corpus, part, topic, kind, limit, offset, seed, allow_noise,
+                no_weighted,
+            } => bank_pick(
+                &cfg,
+                BankPickArgs {
+                    tags, level, book, corpus, part, topic, kind, limit, offset, seed,
+                    allow_noise, weighted: !no_weighted,
+                },
+            ),
             BankCmd::Retag => {
                 let n = voice_core::bank::retag(Path::new(&cfg.data_dir))?;
                 println!("{}", serde_json::json!({"retagged": n}));
@@ -1232,6 +1270,7 @@ fn bank_ingest(
 
 fn bank_list(
     cfg: &Config,
+    corpus: Option<&str>,
     level: Option<u8>,
     tag: Option<&str>,
     book: Option<&str>,
@@ -1239,6 +1278,7 @@ fn bank_list(
 ) -> Result<()> {
     let home = Path::new(&cfg.data_dir);
     let mut idx = voice_core::bank::read_index(home)?;
+    idx.retain(|e| corpus.map(|c| e.corpus.eq_ignore_ascii_case(c)).unwrap_or(true));
     idx.retain(|e| level.map(|l| e.level == l).unwrap_or(true));
     idx.retain(|e| book.map(|b| e.book.eq_ignore_ascii_case(b)).unwrap_or(true));
     if let Some(t) = tag {
@@ -1250,7 +1290,9 @@ fn bank_list(
         serde_json::to_string_pretty(&serde_json::json!({
             "count": idx.len(),
             "items": idx.iter().map(|e| serde_json::json!({
-                "id": e.id, "level": e.level, "wpm": f1(e.wpm), "words": e.words,
+                "id": e.id, "corpus": e.corpus, "kind": e.kind,
+                "part": e.exam.as_ref().and_then(|x| x.part),
+                "level": e.level, "wpm": f1(e.wpm), "words": e.words,
                 "text": e.text, "zh": e.zh, "tags": e.tags,
             })).collect::<Vec<_>>(),
         }))?
@@ -1292,16 +1334,26 @@ fn bank_drill(cfg: &Config, id: &str, quiet: bool) -> Result<()> {
         bail!("素材库里没有 id={id}");
     };
     let src = home.join(&e.src);
-    if !src.is_file() {
-        bail!("素材音频缺失: {}", src.display());
+    if e.src.is_empty() || !src.is_file() {
+        // prompt 类素材没有原生音频：不报错，提示改用 TTS 示范
+        println!("（无原生音频 → 用 synthesize 生成示范音；kind={} ref_audio={}）", e.kind, e.ref_audio);
+        return Ok(());
     }
     println!("{}", e.text);
     if !e.zh.is_empty() {
         println!("{}", e.zh);
     }
+    let exam = e
+        .exam
+        .as_ref()
+        .and_then(|x| x.part)
+        .map(|p| format!(" · IELTS Part {p}"))
+        .unwrap_or_default();
     println!(
-        "[{}] level {} · {} 词 · {:.0} wpm · {:.2}s · tags: {}",
+        "[{}] {}{} level {} · {} 词 · {:.0} wpm · {:.2}s · tags: {}",
         e.id,
+        e.corpus.to_uppercase(),
+        exam,
         e.level,
         e.words,
         e.wpm,
@@ -1314,31 +1366,40 @@ fn bank_drill(cfg: &Config, id: &str, quiet: bool) -> Result<()> {
     Ok(())
 }
 
-fn bank_pick(
-    cfg: &Config,
+struct BankPickArgs {
     tags: Vec<String>,
     level: Option<u8>,
-    book: Option<&str>,
+    book: Option<String>,
+    corpus: Option<String>,
+    part: Option<u8>,
+    topic: Option<String>,
+    kind: Option<String>,
     limit: usize,
     offset: usize,
     seed: Option<u64>,
     allow_noise: bool,
     weighted: bool,
-) -> Result<()> {
+}
+
+fn bank_pick(cfg: &Config, a: BankPickArgs) -> Result<()> {
     let home = Path::new(&cfg.data_dir);
     let q = voice_core::bank::PickQuery {
-        level,
-        tags,
-        book: book.map(|s| s.to_string()),
-        exclude_tags: if allow_noise {
+        corpus: a.corpus,
+        part: a.part,
+        topic: a.topic,
+        kind: a.kind,
+        level: a.level,
+        tags: a.tags,
+        book: a.book,
+        exclude_tags: if a.allow_noise {
             Vec::new()
         } else {
             voice_core::bank::PickQuery::default().exclude_tags
         },
-        limit,
-        offset,
-        weighted,
-        seed,
+        limit: a.limit,
+        offset: a.offset,
+        weighted: a.weighted,
+        seed: a.seed,
     };
     let picked = voice_core::bank::pick(home, &q)?;
     println!(
@@ -1353,6 +1414,12 @@ fn bank_pick(
                 "words": e.words,
                 "wpm": f1(e.wpm),
                 "dur": f2(e.dur),
+                "corpus": e.corpus,
+                "kind": e.kind,
+                "ref_audio": e.ref_audio,
+                "exam": e.exam.as_ref().map(|x| serde_json::json!({
+                    "framework": x.framework, "part": x.part, "topics": x.topics, "task": x.task
+                })),
                 "tags": e.tags,
                 "tag_weights": e.tags.iter().map(|t| serde_json::json!({
                     "tag": t, "weight": f3(voice_core::bank::tag_weight(t))

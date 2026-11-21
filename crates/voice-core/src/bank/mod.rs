@@ -33,9 +33,35 @@ pub struct Quality {
     pub speech_ratio: f32,
 }
 
+/// 雅思对齐信息（ADR-0009 S0c）。NCE 教材素材没有这一层。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExamAlignment {
+    #[serde(default)]
+    pub framework: String,
+    /// 1 | 2 | 3（Part 2 是长独白，不做逐句 GOP）
+    #[serde(default)]
+    pub part: Option<u8>,
+    #[serde(default)]
+    pub topics: Vec<String>,
+    /// short_answer | cue_card | discussion
+    #[serde(default)]
+    pub task: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BankEntry {
     pub id: String,
+    /// 语料集合：nce | ielts | custom（旧数据缺省时从 id 推断）
+    #[serde(default)]
+    pub corpus: String,
+    /// read_aloud（有原生音频，可切片）| prompt（只有题面，示范音靠 TTS）
+    #[serde(default)]
+    pub kind: String,
+    /// native | tts —— 决定 GOP 参考音素序列的可信度
+    #[serde(default)]
+    pub ref_audio: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exam: Option<ExamAlignment>,
     pub book: String,
     pub lesson: String,
     pub seq: u32,
@@ -341,6 +367,31 @@ pub fn quarantine_path(home: &Path) -> PathBuf {
     bank_dir(home).join("quarantine.jsonl")
 }
 
+/// 给旧索引补齐 S0c 新字段（不落盘；要落盘就跑 `bank migrate`）。
+pub fn normalize_entry(e: &mut BankEntry) {
+    if e.corpus.is_empty() {
+        let head = e.id.split('/').next().unwrap_or_default().to_lowercase();
+        e.corpus = if head.starts_with("nce") {
+            "nce".to_string()
+        } else if head == "ielts" {
+            "ielts".to_string()
+        } else if head.is_empty() {
+            "custom".to_string()
+        } else {
+            head
+        };
+    }
+    if e.kind.is_empty() {
+        e.kind = if e.src.is_empty() { "prompt".into() } else { "read_aloud".into() };
+    }
+    if e.ref_audio.is_empty() {
+        e.ref_audio = if e.src.is_empty() { "tts".into() } else { "native".into() };
+    }
+    if e.words == 0 {
+        e.words = crate::assess::normalize::words(&e.text).len();
+    }
+}
+
 pub fn read_index(home: &Path) -> Result<Vec<BankEntry>> {
     let p = index_path(home);
     if !p.is_file() {
@@ -354,7 +405,10 @@ pub fn read_index(home: &Path) -> Result<Vec<BankEntry>> {
             continue;
         }
         match serde_json::from_str::<BankEntry>(line) {
-            Ok(e) => out.push(e),
+            Ok(mut e) => {
+                normalize_entry(&mut e);
+                out.push(e)
+            }
             Err(e) => eprintln!("[bank] 索引第 {} 行无法解析，已跳过: {e}", i + 1),
         }
     }
@@ -581,6 +635,10 @@ pub fn ingest_file(
 
         let entry = BankEntry {
             id: id.clone(),
+            corpus: if book.to_lowercase().starts_with("nce") { "nce".into() } else { slug(&book) },
+            kind: "read_aloud".into(),
+            ref_audio: "native".into(),
+            exam: None,
             book: book.clone(),
             lesson: lesson_name.clone(),
             seq,
@@ -755,6 +813,98 @@ pub fn ingest_dir(
     Ok(out)
 }
 
+/// 把索引里的旧条目升级成当前 schema（补 corpus/kind/ref_audio），并重写文件。
+pub fn migrate(home: &Path) -> Result<usize> {
+    let mut idx = read_index(home)?;
+    if idx.is_empty() {
+        return Ok(0);
+    }
+    for e in idx.iter_mut() {
+        normalize_entry(e);
+    }
+    idx.sort_by(|a, b| a.id.cmp(&b.id));
+    write_index(home, &idx)?;
+    Ok(idx.len())
+}
+
+/// 导入"只有题面"的素材（雅思口语题库）：`kind=prompt`，示范音由 TTS 生成。
+///
+/// 为什么单独一个入口：这类素材**没有原生音频**，走不了 `ingest`（那边要 mp3+lrc），
+/// 但 schema 与选材逻辑必须和教材素材一致，否则 Skill 要写两套分支。
+pub fn import_prompts(home: &Path, docs: &[serde_json::Value]) -> Result<(usize, usize)> {
+    let mut idx = read_index(home)?;
+    let mut added = 0;
+    let mut skipped = 0;
+    for d in docs {
+        let text = d.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if text.is_empty() {
+            bail!("素材缺 text 字段: {d}");
+        }
+        let id = d
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("ielts/custom/{:04}", idx.len() + 1));
+        if idx.iter().any(|e| e.id == id) {
+            skipped += 1;
+            continue;
+        }
+        let part = d.get("part").and_then(|v| v.as_u64()).map(|p| p as u8);
+        if let Some(p) = part {
+            if !(1..=3).contains(&p) {
+                bail!("{id}: part={p} 不在 1..=3");
+            }
+        }
+        let topics: Vec<String> = d
+            .get("topics")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+        let words = crate::assess::normalize::words(&text).len();
+        idx.push(BankEntry {
+            id: id.clone(),
+            corpus: d.get("corpus").and_then(|v| v.as_str()).unwrap_or("ielts").to_string(),
+            kind: d.get("kind").and_then(|v| v.as_str()).unwrap_or("prompt").to_string(),
+            ref_audio: d.get("ref_audio").and_then(|v| v.as_str()).unwrap_or("tts").to_string(),
+            exam: Some(ExamAlignment {
+                framework: "IELTS".into(),
+                part,
+                topics,
+                task: d.get("task").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            }),
+            book: d.get("book").and_then(|v| v.as_str()).unwrap_or("IELTS prompts").to_string(),
+            lesson: d.get("lesson").and_then(|v| v.as_str()).unwrap_or("custom").to_string(),
+            seq: idx.len() as u32 + 1,
+            text: text.clone(),
+            zh: d.get("zh").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            t0: 0.0,
+            t1: 0.0,
+            dur: 0.0,
+            words,
+            wpm: 0.0,
+            level: d
+                .get("level")
+                .and_then(|v| v.as_u64())
+                .map(|l| l.clamp(1, 4) as u8)
+                .unwrap_or_else(|| level_of(words, 0.0)),
+            src: String::new(),
+            ref_slow: None,
+            quality: Quality {
+                line_sim: 0.0,
+                asr: "none".into(),
+                band_limited: false,
+                lrc_fit_scale: 1.0,
+                speech_ratio: 0.0,
+            },
+            tags: tags_for(&text),
+        });
+        added += 1;
+    }
+    idx.sort_by(|a, b| a.id.cmp(&b.id));
+    write_index(home, &idx)?;
+    Ok((added, skipped))
+}
+
 /// 重算全部素材的 tags（tags 只依赖文本，不需要音频）。
 pub fn retag(home: &Path) -> Result<usize> {
     let mut idx = read_index(home)?;
@@ -777,6 +927,12 @@ pub fn retag(home: &Path) -> Result<usize> {
 /// 取材查询：Skill 用 focus 的 tags + 难度从 3 000+ 条里挑 1–3 条练。
 #[derive(Debug, Clone)]
 pub struct PickQuery {
+    /// nce | ielts | custom
+    pub corpus: Option<String>,
+    /// 雅思 Part（只有 kind=prompt/read_aloud 且 exam.part 有值时才命中）
+    pub part: Option<u8>,
+    pub topic: Option<String>,
+    pub kind: Option<String>,
     pub level: Option<u8>,
     pub tags: Vec<String>,
     pub book: Option<String>,
@@ -793,6 +949,10 @@ pub struct PickQuery {
 impl Default for PickQuery {
     fn default() -> Self {
         Self {
+            corpus: None,
+            part: None,
+            topic: None,
+            kind: None,
             level: None,
             tags: Vec::new(),
             book: None,
@@ -834,6 +994,32 @@ pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
         }
         if let Some(b) = &q.book {
             if !e.book.eq_ignore_ascii_case(b) {
+                continue;
+            }
+        }
+        if let Some(c) = &q.corpus {
+            if !e.corpus.eq_ignore_ascii_case(c) {
+                continue;
+            }
+        }
+        if let Some(k) = &q.kind {
+            if !e.kind.eq_ignore_ascii_case(k) {
+                continue;
+            }
+        }
+        if let Some(pt) = q.part {
+            match e.exam.as_ref().and_then(|x| x.part) {
+                Some(p) if p == pt => {}
+                _ => continue,
+            }
+        }
+        if let Some(t) = &q.topic {
+            let hit = e
+                .exam
+                .as_ref()
+                .map(|x| x.topics.iter().any(|y| y.eq_ignore_ascii_case(t)))
+                .unwrap_or(false);
+            if !hit {
                 continue;
             }
         }
@@ -966,6 +1152,10 @@ mod tests {
     fn mk_entry(id: &str, level: u8, tags: &[&str]) -> BankEntry {
         BankEntry {
             id: id.into(),
+            corpus: "nce".into(),
+            kind: "read_aloud".into(),
+            ref_audio: "native".into(),
+            exam: None,
             book: "NCE2".into(),
             lesson: "x".into(),
             seq: 1,
@@ -988,6 +1178,55 @@ mod tests {
             },
             tags: tags.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn legacy_entries_get_new_fields() {
+        // 旧索引入口（S0c 之前写的行）只有 id/src，其余字段缺省
+        let mut e: BankEntry = serde_json::from_str(
+            r#"{"id":"nce2/02/003","book":"NCE2","lesson":"02","seq":3,"text":"I never get up early on Sundays.",
+                "zh":"","t0":1.0,"t1":2.0,"dur":1.0,"words":0,"wpm":0.0,"level":2,
+                "src":"bank/nce2/02/003.ref.wav","ref_slow":null,
+                "quality":{"line_sim":1.0,"asr":"sense-voice","band_limited":false,"lrc_fit_scale":1.0,"speech_ratio":0.9},
+                "tags":["v_to_w"]}"#,
+        )
+        .unwrap();
+        normalize_entry(&mut e);
+        assert_eq!(e.corpus, "nce");
+        assert_eq!(e.kind, "read_aloud");
+        assert_eq!(e.ref_audio, "native");
+        assert_eq!(e.words, 7, "words=0 时应按文本回填");
+    }
+
+    #[test]
+    fn import_prompts_validates_and_dedupes() {
+        let tmp = std::env::temp_dir().join(format!("voice_bank_import_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("bank")).unwrap();
+
+        let docs = vec![
+            serde_json::json!({"id":"ielts/custom/x","part":1,"topics":["hometown"],
+                "text":"Where is your hometown?","level":2}),
+            serde_json::json!({"id":"ielts/custom/x","part":1,"text":"重复 id 应被跳过"}),
+        ];
+        let (added, skipped) = import_prompts(&tmp, &docs).unwrap();
+        assert_eq!((added, skipped), (1, 1));
+
+        let idx = read_index(&tmp).unwrap();
+        assert_eq!(idx[0].corpus, "ielts");
+        assert_eq!(idx[0].kind, "prompt");
+        assert_eq!(idx[0].ref_audio, "tts");
+        assert_eq!(idx[0].exam.as_ref().unwrap().part, Some(1));
+        assert!(idx[0].tags.contains(&"question_rise".to_string()));
+
+        // 空 text / 非法 part 必须报错，而不是静默入库
+        assert!(import_prompts(&tmp, &[serde_json::json!({"text":"   "})]).is_err());
+        assert!(import_prompts(
+            &tmp,
+            &[serde_json::json!({"id":"ielts/custom/y","part":9,"text":"bad part"})]
+        )
+        .is_err());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1025,6 +1264,12 @@ mod tests {
         // 难度过滤
         let q1 = PickQuery { level: Some(1), ..Default::default() };
         assert_eq!(pick(&tmp, &q1).unwrap().len(), 2);
+
+        // 语料过滤：全是 NCE2，没有 ielts
+        let qc = PickQuery { corpus: Some("ielts".into()), ..Default::default() };
+        assert_eq!(pick(&tmp, &qc).unwrap().len(), 0);
+        let qc2 = PickQuery { corpus: Some("nce".into()), ..Default::default() };
+        assert_eq!(pick(&tmp, &qc2).unwrap().len(), 3);
 
         // seed 可复现
         let qs = PickQuery { seed: Some(42), ..Default::default() };

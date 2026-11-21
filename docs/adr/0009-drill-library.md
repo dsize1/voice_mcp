@@ -222,3 +222,21 @@ voice-cli bank show <id> / bank drill <id>
 
 `weight = 实测错读率 × 可理解度影响`；无音素级证据的 tag（`linking_missing` / `question_rise` / …）权重为 0，
 不参与排序但可显式选用。`--no-weighted` 可退回旧行为做 A/B。
+
+## S0c：多语料与考试对齐（2026-11-22）
+
+用户的目标是**雅思**，NCE 只是当前唯一的存量素材。所以 `bank` 不能把"素材来源"当成"目标"：
+
+| 新字段 | 取值 | 作用 |
+|---|---|---|
+| `corpus` | `nce` / `ielts` / `custom` | 选材优先级 + 话术里的来源声明 |
+| `kind` | `read_aloud` / `prompt` | 有没有原生音频；`prompt` 的示范音只能 TTS |
+| `ref_audio` | `native` / `tts` | GOP 参考音素序列的可信度 |
+| `exam{framework,part,topics,task}` | `IELTS` / 1–3 / 话题 / short_answer·cue_card·discussion | 题型对齐，Part 2 不做逐句音素结论 |
+
+- **向后兼容**：`read_index()` 对旧行补默认值（`corpus` 从 id 首段推断、`kind` 看有没有 `src`），
+  `bank migrate` 把补齐结果落盘；旧 `nce2/02/003` 的 id 不变。
+- **导入只有题面的素材**：`bank import data/ielts-prompts.json`（`kind=prompt`，无音频、无切片），
+  校验 `text` 非空、`part ∈ 1..=3`、同 id 跳过。
+- **选材**：`bank pick --corpus ielts --part 1 --topic hometown`；`--kind` 可限定形态。
+- 默认语料优先级由 Skill 决定（雅思 → NCE），代码只提供过滤能力。

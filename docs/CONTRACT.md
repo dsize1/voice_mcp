@@ -110,6 +110,9 @@ sessions/<date>/<hhmmss>_drill/takes/
    - **ASR 伪缩略**：`did't`/`could't` 这类不存在的词形（识别引擎把 `did not` 糊成一个 token），
      自动展开成 `did + not`，不得报成“漏读 + 替换”两条错误。合法缩略仍走缩写表。
    所以：**看到 `accuracy` 下降时，先看 `issues` 是否集中在导语/拼写变体/功能词**，再决定要不要当真。
+9. **停顿要看 `flow.pauses`（VAD，以音频为真），不是 `flow.word_gaps`（ASR 时间戳）。**
+   两者矛盾时（例：`pause_count 0` 但 `word_gaps` 出现 2.3 s 空隙），说明 **ASR 漏词造成了假空隙**，
+   不得说“你停了 2.3 秒”；只能提示“这段识别有漏词”。`word_gaps` 仅用于比较词界粘连的相对趋势。
 
 ---
 

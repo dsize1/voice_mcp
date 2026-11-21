@@ -109,6 +109,9 @@ enum Cmd {
         /// 多久没声音算说完（秒）。单词 1.2 / 短句 1.8 / 整句 2.2 / 自由说 2.5
         #[arg(long, default_value_t = 2.0)]
         silence: f32,
+        /// 等说话的超时（秒）。默认 8；自由说建议 20
+        #[arg(long, default_value_t = 8.0)]
+        start_timeout: f32,
         /// 录完立即转写
         #[arg(long)]
         stt: bool,
@@ -152,8 +155,8 @@ fn main() -> Result<()> {
         }
         Cmd::Cases { dir, only } => run_cases(&cfg, &dir, only.as_deref()),
         Cmd::Mic { secs } => mic(&cfg, &secs),
-        Cmd::Rec { max_sec, silence, stt: then_stt, lang, scene } => {
-            rec(&cfg, max_sec, silence, then_stt, &lang, &scene)
+        Cmd::Rec { max_sec, silence, start_timeout, stt: then_stt, lang, scene } => {
+            rec(&cfg, max_sec, silence, start_timeout, then_stt, &lang, &scene)
         }
         Cmd::Assess { path, reference, lang, engine, scene } => {
             assess_cmd(&cfg, &path, reference.as_deref(), &lang, engine.as_deref(), &scene)
@@ -730,6 +733,7 @@ fn rec(
     cfg: &Config,
     max_sec: f32,
     silence: f32,
+    start_timeout: f32,
     then_stt: bool,
     lang: &str,
     scene: &str,
@@ -737,11 +741,12 @@ fn rec(
     let store = Store::open(&cfg.data_dir)?;
     let session = store.new_session("drill")?;
 
-    eprintln!("[voice] 开始录音（上限 {max_sec}s，静音 {silence}s 自动停止）… 请说话");
+    eprintln!("[voice] 开始录音（上限 {max_sec}s，静音 {silence}s 自动停止，等说话 {start_timeout}s）… 请说话");
     let opts = capture::RecordOptions {
         max_sec,
         silence_sec: silence,
         prefer_sr: cfg.capture_sr,
+        start_timeout_sec: start_timeout,
         ..Default::default()
     };
     let cap = capture::record_with(cfg.mic.as_deref(), &opts)?;

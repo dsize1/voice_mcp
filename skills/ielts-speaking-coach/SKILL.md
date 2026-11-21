@@ -112,8 +112,8 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 | **P0 可理解度** | `kind=substitution` 且 `hint=likely_pronunciation` | 该词的音素（查 `references/phoneme-map.md`） |
 | **P0 可理解度** | `kind=substitution` 且 `hint=unclear` | **不下结论**，让用户重录该词或对照示范音确认 |
 | **P0 可理解度** | `kind=omitted` 且 `hint=likely_asr_miss` | **不算问题**。短功能词（is/a/the）被 ASR 吞掉很常见；让用户只重读该短语，或用 `engine="whisper"` 复核。不要写进 `error_stats` |
-| **P1 流利度** | `pause_count ≥ 3` 或 `pause_longest > 1.0` | 断句位置、意群 |
-| **P1 流利度** | `word_boundary_breaks ≥ 2` | 连读/词界（`not at all`、`an apple`） |
+| **P1 流利度** | `pause_count ≥ 3` 或 `pause_longest > 1.0` | 断句位置、意群（**以 `flow.pauses` 为准**） |
+| **P1 流利度** | `word_boundary_breaks ≥ 2` | 连读/词界（`not at all`、`an apple`）；若 `pause_count 0` 但有很大的 `word_gaps`，先怀疑 ASR 漏词，不要报“停顿” |
 | **P1 流利度** | `filler_rate > 5`（每百词）或 `repetitions ≥ 2` | 用呼吸代替 um/uh |
 | **P1 流利度** | 语速 < 80 wpm（读句子）或 > 190 wpm | 节奏，不是越快越好 |
 | **P2 韵律** | 上面都干净时 | 句末升降、重音落点（当前只能靠听示范音定性对比，无量化工具） |

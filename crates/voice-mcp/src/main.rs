@@ -115,6 +115,10 @@ struct RecordParams {
     /// 输入设备名子串（蓝牙耳机用 "Hands-Free"）；不填用配置 mic 或系统默认
     #[serde(default)]
     device: Option<String>,
+    /// 开始前等说话的超时（秒）。默认 8；自由说/长独白建议 20——
+    /// 8 s 太短时会出现“人已经在说、工具却报没检测到说话”。
+    #[serde(default)]
+    start_timeout_sec: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
@@ -342,6 +346,7 @@ impl VoiceServer {
                 max_sec: p.max_sec.unwrap_or(app.cfg.record_max_sec),
                 silence_sec: p.silence_sec.unwrap_or(app.cfg.record_silence_sec),
                 prefer_sr: app.cfg.capture_sr,
+                start_timeout_sec: p.start_timeout_sec.unwrap_or(8.0),
                 ..Default::default()
             };
             let device = p.device.clone().or_else(|| app.cfg.mic.clone());

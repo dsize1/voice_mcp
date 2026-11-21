@@ -294,10 +294,16 @@ fn words_from_tokens(text: &str, tokens: &[Word]) -> Vec<Word> {
     }
     let has_cjk = text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
     let raw_words: Vec<String> = if has_cjk {
-        // 中文按字切；中英混说时把连续的 ASCII 字母数字聚成一个词（不能拆成单字母）
+        // 中文按字切；中英混说时把连续的 ASCII 字母数字聚成一个词（不能拆成单字母）。
+        // **标点必须当分隔符丢掉**：否则 `，` `。` 会被当成“词”，把 word_count 与 cpm 抬高。
         let mut v: Vec<String> = Vec::new();
         let mut cur = String::new();
         for c in text.chars().filter(|c| !c.is_whitespace()) {
+            let is_word_char = c.is_ascii_alphanumeric()
+                || c == '\''
+                || ('\u{4e00}'..='\u{9fff}').contains(&c)
+                || ('\u{3400}'..='\u{4dbf}').contains(&c)
+                || ('\u{3040}'..='\u{30ff}').contains(&c);
             if c.is_ascii_alphanumeric() || c == '\'' {
                 cur.push(c);
                 continue;
@@ -305,7 +311,9 @@ fn words_from_tokens(text: &str, tokens: &[Word]) -> Vec<Word> {
             if !cur.is_empty() {
                 v.push(std::mem::take(&mut cur));
             }
-            v.push(c.to_string());
+            if is_word_char {
+                v.push(c.to_string());
+            }
         }
         if !cur.is_empty() {
             v.push(cur);
@@ -408,6 +416,14 @@ mod tests {
         let ws = words_from_tokens("我 think 这是", &toks);
         assert_eq!(ws.len(), 4);
         assert_eq!(ws[1].w, "think");
+    }
+
+    #[test]
+    fn cjk_punctuation_is_not_a_word() {
+        let toks = vec![tok("我", 0.0), tok("想", 0.2), tok("，", 0.4), tok("这", 0.6)];
+        let ws = words_from_tokens("我想，这", &toks);
+        assert_eq!(ws.len(), 3, "标点不能算作一个词");
+        assert_eq!(ws.iter().map(|w| w.w.as_str()).collect::<Vec<_>>(), vec!["我", "想", "这"]);
     }
 
     #[test]

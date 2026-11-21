@@ -276,6 +276,14 @@ fn norm_word(w: &str) -> String {
         .to_lowercase()
 }
 
+/// 取前 n 个**字符**的安全前缀（不会切在 UTF-8 边界中间）。
+fn char_prefix(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
+}
+
 /// 把 token 序列映射到文本里的词边界，得到词级时间戳。
 ///
 /// 策略：先按空白切词（含 CJK 的文本按字符切），再用贪心方式把 token 逐个拼进当前词，
@@ -286,10 +294,23 @@ fn words_from_tokens(text: &str, tokens: &[Word]) -> Vec<Word> {
     }
     let has_cjk = text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
     let raw_words: Vec<String> = if has_cjk {
-        text.chars()
-            .filter(|c| !c.is_whitespace())
-            .map(|c| c.to_string())
-            .collect()
+        // 中文按字切；中英混说时把连续的 ASCII 字母数字聚成一个词（不能拆成单字母）
+        let mut v: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        for c in text.chars().filter(|c| !c.is_whitespace()) {
+            if c.is_ascii_alphanumeric() || c == '\'' {
+                cur.push(c);
+                continue;
+            }
+            if !cur.is_empty() {
+                v.push(std::mem::take(&mut cur));
+            }
+            v.push(c.to_string());
+        }
+        if !cur.is_empty() {
+            v.push(cur);
+        }
+        v
     } else {
         text.split_whitespace().map(|s| s.to_string()).collect()
     };
@@ -306,11 +327,13 @@ fn words_from_tokens(text: &str, tokens: &[Word]) -> Vec<Word> {
         while ti < tokens.len() {
             acc.push_str(&norm_token(&tokens[ti].w));
             ti += 1;
-            if acc.len() >= target.len() && target.starts_with(&acc[..acc.len().min(target.len())]) {
+            // 用字符前缀比较，不能在 UTF-8 中间截断（中文/日文/emoji 会直接 panic）
+            let head_chars = target.chars().count();
+            let head = char_prefix(&acc, head_chars);
+            if !target.starts_with(head) {
                 break;
             }
-            // 已经偏离目标 → 停止吞并，避免吃掉后面的词
-            if !target.starts_with(&acc[..acc.len().min(target.len())]) {
+            if head.chars().count() >= head_chars {
                 break;
             }
         }
@@ -353,6 +376,38 @@ mod tests {
         assert_eq!(ws[5].w, "third");
         assert!((ws[5].t0 - 1.4).abs() < 1e-6);
         assert!((ws[6].t1 - 2.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn handles_cjk_without_panicking() {
+        // 中文是 3 字节字符，按字节截断会 panic（真机验收时踩到的）
+        let toks = vec![
+            tok("我", 0.0),
+            tok("想", 0.2),
+            tok("这", 0.4),
+            tok("是", 0.6),
+            tok("第", 0.8),
+            tok("三", 1.0),
+            tok("次", 1.2),
+        ];
+        let ws = words_from_tokens("我想这是第三次", &toks);
+        assert_eq!(ws.len(), 7);
+        assert_eq!(ws[0].w, "我");
+        assert!((ws[0].t0 - 0.0).abs() < 1e-6);
+        assert!((ws[6].t0 - 1.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn handles_mixed_script() {
+        let toks = vec![
+            tok("我", 0.0),
+            tok("\u{2581}think", 0.3),
+            tok("这", 0.7),
+            tok("是", 0.9),
+        ];
+        let ws = words_from_tokens("我 think 这是", &toks);
+        assert_eq!(ws.len(), 4);
+        assert_eq!(ws[1].w, "think");
     }
 
     #[test]

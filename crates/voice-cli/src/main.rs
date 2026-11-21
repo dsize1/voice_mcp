@@ -183,6 +183,26 @@ enum BankCmd {
     },
     /// 统计：条数/时长/难度分布/标签排行/quarantine 数
     Stats,
+    /// 按 focus 取材：给 Skill 用（默认排除导语/片段）
+    Pick {
+        /// focus 标签，可重复：--tag theta_to_s --tag final_consonant_drop
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
+        level: Option<u8>,
+        #[arg(long)]
+        book: Option<String>,
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// 可复现洗牌
+        #[arg(long)]
+        seed: Option<u64>,
+        /// 连导语/片段一起给（默认排除）
+        #[arg(long)]
+        allow_noise: bool,
+    },
     /// 重算全部素材的 tags（纯文本规则，不动音频）
     Retag,
 }
@@ -216,6 +236,9 @@ fn main() -> Result<()> {
             BankCmd::Show { id } => bank_show(&cfg, &id),
             BankCmd::Drill { id, quiet } => bank_drill(&cfg, &id, quiet),
             BankCmd::Stats => bank_stats(&cfg),
+            BankCmd::Pick { tags, level, book, limit, offset, seed, allow_noise } => {
+                bank_pick(&cfg, tags, level, book.as_deref(), limit, offset, seed, allow_noise)
+            }
             BankCmd::Retag => {
                 let n = voice_core::bank::retag(Path::new(&cfg.data_dir))?;
                 println!("{}", serde_json::json!({"retagged": n}));
@@ -1283,6 +1306,51 @@ fn bank_drill(cfg: &Config, id: &str, quiet: bool) -> Result<()> {
     if !quiet {
         play::play_wav(&src)?;
     }
+    Ok(())
+}
+
+fn bank_pick(
+    cfg: &Config,
+    tags: Vec<String>,
+    level: Option<u8>,
+    book: Option<&str>,
+    limit: usize,
+    offset: usize,
+    seed: Option<u64>,
+    allow_noise: bool,
+) -> Result<()> {
+    let home = Path::new(&cfg.data_dir);
+    let q = voice_core::bank::PickQuery {
+        level,
+        tags,
+        book: book.map(|s| s.to_string()),
+        exclude_tags: if allow_noise {
+            Vec::new()
+        } else {
+            voice_core::bank::PickQuery::default().exclude_tags
+        },
+        limit,
+        offset,
+        seed,
+    };
+    let picked = voice_core::bank::pick(home, &q)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "count": picked.len(),
+            "items": picked.iter().map(|e| serde_json::json!({
+                "id": e.id,
+                "text": e.text,
+                "zh": e.zh,
+                "level": e.level,
+                "words": e.words,
+                "wpm": f1(e.wpm),
+                "dur": f2(e.dur),
+                "tags": e.tags,
+                "audio": e.src,
+            })).collect::<Vec<_>>(),
+        }))?
+    );
     Ok(())
 }
 

@@ -197,3 +197,20 @@ top tags   eth_to_z 3 290 · s_ending 2 472 · linking_missing 2 338 · fragment
 - **`--keep-source` 未实现**：整课原 mp3 由外部目录保留，bank 只存切片。
 - 质量门槛与 D5 完全一致；`merge_short_lines` 会把不足 3 词的行并入下一行，
   末尾不足则并入上一行（不丢内容）。
+
+## P4.5 实现（2026-11-22）
+
+原计划是"MCP 新增 `bank_list`/`bank_get`"，实际**没加 MCP 工具**——理由与 ADR D7 一致：
+Skill 只要"按 focus 取 1–3 条"，用 CLI 更省上下文（`index.jsonl` 有 2 MB，直接读会占满窗口）。
+
+```bash
+voice-cli bank pick --tag theta_to_s --tag final_consonant_drop --level 2 --limit 3
+voice-cli bank pick --seed 42 --level 2 --limit 3      # 可复现洗牌
+voice-cli bank show <id> / bank drill <id>
+```
+
+- 排序：命中 tags 数 ↓ → level ↑ → id ↑（`--seed` 时改为稳定哈希序）
+- 默认排除 `lesson_header` / `instruction` / `fragment`（`--allow-noise` 可关）
+- `Learner.drill_queue` 支持 `{"bank_id": "..."}`，向后兼容内联 `text`
+- Skill 侧：第 1.5 节新增"素材库怎么用"，第 3 节把 ④ 的 `scene` 改为 `bank`，
+  第 9 节作业句必须给 `bank_id` 或示范音路径

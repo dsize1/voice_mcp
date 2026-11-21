@@ -28,6 +28,7 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 | `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`speed` 0.75/1.0、`play=true` 服务端出声、`slow_too=true` 一次产出 slow(0.75)+norm(1.0) 两个文件 |
 | `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"` |
 | `mcp__voice__record` | 麦克风录音（静音自动停）。`mic` 为 null 时不可用 |
+| `voice-cli bank …` | **素材库（CLI，非 MCP）**：`pick/show/drill`。`pick` 按 focus tags + level 从 3 368 条里取 1–3 条 |
 
 **`record` 的 `silence_sec` 按场景给**（默认 2.0；给太小会把学员的刻意停顿当句尾，直接丢掉后面的词）：
 
@@ -78,17 +79,37 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 ## 3. 每次训练的固定循环（10–15 分钟）
 
 ```
-① 选素材        → drill_queue 优先；条目若是 {bank_id} 就用素材库（读 $VOICE_HOME/bank/index.jsonl
-                  取 text/中文/参考音频路径），否则用内联 text；都没有则按 focus 现场造 2–3 句
-② 播示范        → synthesize(text=句, speed=0.75, play=true, slow_too=true)
+① 选素材        → drill_queue 优先→ focus 命中的 tags → 同 level 素材（用 `bank pick`，见 1.5 节）
+② 播示范        → 先播**原声**：`bank drill <id>`（真人朗读，不是 TTS）
+                  → 再合成慢速：synthesize(text=句, speed=0.75, play=true, slow_too=true)
                   → 返回 files 里 label="slow"(0.75) 与 label="norm"(1.0) 一对；play 播的是慢速版
                   再 play(path=<label="norm" 的 path>) 播常速，**不要**再 synthesize(speed=1.0)
 ③ 用户跟读      → record 或让用户用录音机
-④ 评测          → assess(path="last", reference=句, lang="en", scene="drill")
+④ 评测          → assess(path="last", reference=句, lang="en", scene="bank")
 ⑤ 反馈（核心）  → 按第 4 节优先级挑 1–2 条；给"具体位置 + 为什么 + 怎么改 + 再示范一次"
 ⑥ 重读对比      → 用户重读 → assess(..., scene="retry") → 对比 accuracy / issues 数量 / pause
 ⑦ 收尾          → 达标：换下一句；不达标：同一句再练一次（最多 3 次，然后换更简单的句子）
 ```
+
+### 1.5 素材库怎么用（P4.5）
+
+素材库在 `$VOICE_HOME/bank/`（默认 `D:/voice_data/bank`），共 **4 997 条**逐句切片，
+其中可直接练的 **3 368 条**（已排除导语/片段）。**不要读 `index.jsonl`**（2 MB，直接读会占满上下文），
+一律用 CLI：
+
+```bash
+# 按 focus 取材（默认排除 lesson_header / instruction / fragment）
+voice-cli bank pick --tag <tag> [--tag <tag>...] --level <1-4> --limit 3
+# 随机换一批（同一个 --seed 结果可复现）
+voice-cli bank pick --seed 42 --level 2 --limit 3
+# 看/播一条
+voice-cli bank show <id>        # 质量指标 + 音频是否存在
+voice-cli bank drill <id>       # 播原声 + 打印句子/中文/level/tags
+```
+
+- 选材顺序：`learner.json.drill_queue` 里的 `bank_id` → `focus` 对应的 `tags`（与 `references/phoneme-map.md` 的 id 同名）→ 同 `level` 的顺序素材。
+- 每轮只取 **1–3 条**；`fragment`（30.7%）里的半句不要当句练，除非用户要求。
+- 把选中的 `id` 写回 `learner.json.drill_queue`，作业句也用它（详情不在正文重复，只给 id 与句子）。
 
 **反馈模板**（严格按这个结构，L1/L2 用中文，L3/L4 逐步换英文）：
 
@@ -150,7 +171,10 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
   "teaching_lang": "zh-en",
   "focus": ["词尾辅音", "θ/s"],
   "error_stats": { "theta_to_s": { "count": 3, "last_seen": "2026-11-19", "examples": ["third→sird"] } },
-  "drill_queue": [{ "text": "I think this is the third time.", "reason": "θ + 词尾 k" }],
+  "drill_queue": [
+    { "bank_id": "nce2/02/003", "text": "I never get up early on Sundays.", "reason": "v_to_w + 词尾 /z/", "level": 2 },
+    { "text": "I think this is the third time.", "reason": "内联句：bank 里没命中时用" }
+  ],
   "streak": { "sessions": 1, "last_session": "2026-11-19" },
   "history": [{ "date": "2026-11-19", "scene": "baseline", "accuracy": 0.86, "speech_rate": 69, "issues": 1 }]
 }
@@ -182,6 +206,6 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 
 1. 用 2 行总结：本轮练了什么、进步在哪、下次练什么。
 2. 更新 `learner.json` 与 `session.md`。
-3. 布置具体作业：**3 句话**（附示范音路径），要求用户明天跟读 5 遍。
-   作业句必须来自本轮出错的地方或 `drill_queue`，不要随机。
+3. 布置具体作业：**3 句话**（附 `bank_id` 或示范音路径），要求用户明天跟读 5 遍。
+   作业句必须来自本轮出错的地方、`drill_queue` 或本轮 `bank pick` 的命中项，不要随机。
 4. 如果用户连续 3 次没来，下次先问"要不要把单次时长降到 5 分钟"。

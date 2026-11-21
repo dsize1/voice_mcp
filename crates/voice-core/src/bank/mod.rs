@@ -187,7 +187,12 @@ pub fn tags_for(text: &str) -> Vec<String> {
     if tl.starts_with("lesson ") || tl.starts_with("new concept english") {
         push("lesson_header");
     }
-    if tl.starts_with("listen to the tape") || tl.starts_with("first listen") || tl.starts_with("now listen") {
+    // 合并后的行可能形如 "Our village Listen to the tape then answer this question." → 用 contains 判定
+    if tl.contains("listen to the tape")
+        || tl.contains("answer this question")
+        || tl.contains("first listen")
+        || tl.contains("now listen")
+    {
         push("instruction");
     }
     // 片段：LRC 把长段落切成了半句（小写开头 / 没有句末标点）→ Skill 优先选整句
@@ -729,6 +734,96 @@ pub fn retag(home: &Path) -> Result<usize> {
     Ok(n)
 }
 
+// ---------------------------------------------------------------- 取材（P4.5）
+
+/// 取材查询：Skill 用 focus 的 tags + 难度从 3 000+ 条里挑 1–3 条练。
+#[derive(Debug, Clone)]
+pub struct PickQuery {
+    pub level: Option<u8>,
+    pub tags: Vec<String>,
+    pub book: Option<String>,
+    /// 默认排除这些标签（导语/片段不该拿来练）
+    pub exclude_tags: Vec<String>,
+    pub limit: usize,
+    pub offset: usize,
+    /// Some(seed) → 可复现的洗牌；None → 按 (命中标签数↓, level↑, id↑) 稳定排序
+    pub seed: Option<u64>,
+}
+
+impl Default for PickQuery {
+    fn default() -> Self {
+        Self {
+            level: None,
+            tags: Vec::new(),
+            book: None,
+            exclude_tags: vec![
+                "lesson_header".into(),
+                "instruction".into(),
+                "fragment".into(),
+            ],
+            limit: 5,
+            offset: 0,
+            seed: None,
+        }
+    }
+}
+
+fn shuffle_key(id: &str, seed: u64) -> u64 {
+    // FNV-1a + 简单 scrambler：同一 seed 下顺序稳定
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ seed;
+    for b in id.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 29;
+    h
+}
+
+/// 按 focus 取材。命中 tags 越多越靠前；同分按 level 升序、再按 id（或 seed 洗牌）。
+pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
+    let idx = read_index(home)?;
+    let mut scored: Vec<(usize, &BankEntry, u64)> = Vec::new();
+    for e in &idx {
+        if let Some(lv) = q.level {
+            if e.level != lv {
+                continue;
+            }
+        }
+        if let Some(b) = &q.book {
+            if !e.book.eq_ignore_ascii_case(b) {
+                continue;
+            }
+        }
+        if q.exclude_tags.iter().any(|t| e.tags.iter().any(|x| x == t)) {
+            continue;
+        }
+        let hits = q.tags.iter().filter(|t| e.tags.iter().any(|x| x == *t)).count();
+        if !q.tags.is_empty() && hits == 0 {
+            continue;
+        }
+        scored.push((hits, e, shuffle_key(&e.id, q.seed.unwrap_or(0))));
+    }
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(a.1.level.cmp(&b.1.level))
+            .then_with(|| {
+                if q.seed.is_some() {
+                    a.2.cmp(&b.2)
+                } else {
+                    a.1.id.cmp(&b.1.id)
+                }
+            })
+    });
+    Ok(scored
+        .into_iter()
+        .skip(q.offset)
+        .take(q.limit)
+        .map(|(_, e, _)| e.clone())
+        .collect())
+}
+
 // ---------------------------------------------------------------- 统计
 
 #[derive(Debug, Serialize)]
@@ -813,6 +908,81 @@ mod tests {
         assert!(tags_for("Lesson 33").contains(&"lesson_header".to_string()));
         assert!(tags_for("Listen to the tape then answer this question.")
             .contains(&"instruction".to_string()));
+        // 标题与导语被合并成一行时也要能识别
+        assert!(tags_for("Our village Listen to the tape then answer this question.")
+            .contains(&"instruction".to_string()));
+    }
+
+    fn mk_entry(id: &str, level: u8, tags: &[&str]) -> BankEntry {
+        BankEntry {
+            id: id.into(),
+            book: "NCE2".into(),
+            lesson: "x".into(),
+            seq: 1,
+            text: "x".into(),
+            zh: String::new(),
+            t0: 0.0,
+            t1: 1.0,
+            dur: 1.0,
+            words: 5,
+            wpm: 100.0,
+            level,
+            src: "x".into(),
+            ref_slow: None,
+            quality: Quality {
+                line_sim: 1.0,
+                asr: "t".into(),
+                band_limited: false,
+                lrc_fit_scale: 1.0,
+                speech_ratio: 1.0,
+            },
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn pick_filters_excludes_and_ranks() {
+        let tmp = std::env::temp_dir().join(format!("voice_bank_pick_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("bank")).unwrap();
+        let entries = vec![
+            mk_entry("nce2/01/001", 2, &["theta_to_s"]),
+            mk_entry("nce2/01/002", 1, &["theta_to_s", "final_consonant_drop"]),
+            mk_entry("nce2/01/003", 1, &["v_to_w"]),
+            mk_entry("nce2/01/004", 1, &["theta_to_s", "fragment"]),
+            mk_entry("nce2/01/005", 3, &["lesson_header"]),
+        ];
+        let mut body = String::new();
+        for e in &entries {
+            body.push_str(&serde_json::to_string(e).unwrap());
+            body.push('\n');
+        }
+        std::fs::write(index_path(&tmp), body).unwrap();
+
+        // 全库取材：默认排除 fragment / lesson_header
+        let all = pick(&tmp, &PickQuery::default()).unwrap();
+        assert_eq!(all.len(), 3, "fragment 与 lesson_header 默认被排除");
+
+        // 按 focus 两个 tag 取材：命中两个的排第一
+        let q = PickQuery {
+            tags: vec!["theta_to_s".into(), "final_consonant_drop".into()],
+            ..Default::default()
+        };
+        let got = pick(&tmp, &q).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].id, "nce2/01/002", "命中两个 tag 的应排第一");
+
+        // 难度过滤
+        let q1 = PickQuery { level: Some(1), ..Default::default() };
+        assert_eq!(pick(&tmp, &q1).unwrap().len(), 2);
+
+        // seed 可复现
+        let qs = PickQuery { seed: Some(42), ..Default::default() };
+        let a: Vec<String> = pick(&tmp, &qs).unwrap().into_iter().map(|e| e.id).collect();
+        let b: Vec<String> = pick(&tmp, &qs).unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(a, b);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

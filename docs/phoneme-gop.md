@@ -74,9 +74,41 @@ log_softmax(每帧) → 单调 CTC 对齐（DP，帧数 T × 音素数 L）
 | ① 模型导出 + 精度/延迟实测 + int8 否决 | ✅（本文档） |
 | ② 音素映射 + 规范化 | ✅ `gop/phones.rs`（含单测） |
 | ③ CTC 对齐 + GOP + 说话人归一化 | ✅ `gop/ctc.rs`、`gop/mod.rs`（9 个单测） |
-| ④ `ort` 接入（Rust 侧推理） | ⏳ 下一步 |
-| ⑤ G2P（CMUdict：文本 → ARPAbet） | ⏳ 下一步 |
-| ⑥ so762 阈值标定 + 与词级 diff 的 A/B | ⏳ |
+| ④ `ort` 接入（Rust 侧推理） | ✅ `gop/model.rs`（load-dynamic + sha256 校验 + blank 校验） |
+| ⑤ G2P（CMUdict：文本 → ARPAbet） | ✅ `gop/g2p.rs`（135 166 词，OOV 显式报出） |
+| ⑥ so762 标定 | ✅ 见下节（结论：**只能当排序信号，不能当逐音素判决**） |
+
+## 6.1 标定结果（2026-11-22，so762，120 句 / 2 015 个音素 / 223 个错读）
+
+口径：`speechocean762` 的 `mispronunciations` 当金标；句级用人工 `accuracy` 分。
+
+| 候选集 / 统计口径 | 句级 Spearman ρ | 音素 AUROC | τ(FP=10%) | 精确率 | 召回 |
+|---|---|---|---|---|---|
+| narrow / span | **0.659** | 0.653 | −1.63 | 0.171 | 0.166 |
+| narrow / soft±2 | 0.564 | **0.659** | −1.08 | 0.227 | 0.238 |
+| medium / span | **0.674** | 0.647 | −1.57 | 0.151 | 0.143 |
+| medium / soft±2 | 0.580 | 0.656 | −1.06 | 0.231 | 0.242 |
+| wide / span | 0.646 | 0.629 | −1.65 | 0.171 | 0.166 |
+| wide / soft±2 | 0.565 | 0.638 | −1.14 | **0.241** | 0.256 |
+
+### 三条硬结论
+
+1. **句子级可用**：mean-GOP 与人工分 ρ≈0.67，方向与量级都对（人工分 0–5 组 mean GOP −1.71，
+   9–10 组 +2.66）。→ 可以进趋势对比。
+2. **音素级不够当判决**：AUROC 只有 0.63–0.66；在"误报 ≤10%"的保守操作点，
+   精确率 **0.15–0.24** —— 也就是**报出的 4–6 个可疑音素里只有 1 个是真的**。
+   这达不到我原先设的 "F1 ≥ 0.55" 目标，**不能对用户说"这个音素你读错了"**。
+3. **加宽候选集并不能救精度**：wide（含 θ/s、v/w 混淆对）只是把召回从 0.166 抬到 0.256，
+   精确率没本质变化 → 说明误差主要来自**对齐/模型判别力**，不是等价类宽度。
+
+### 因此的设计决定（写进 Skill 与 CONTRACT）
+
+- GOP 只用于 **① 句级趋势**、**② 句内排序（top-1/2 提示）**、**③ 与词级 diff 交叉验证**：
+  只有"词级 diff 也标了这个词"**或**"GOP z 极端（< −2.5）且该音素属高影响类（θ/v/w/r-l/词尾辅音）"
+  时才允许说"可能是发音问题"，且必须给"重录/对照示范音"的验证动作。
+- `limitations` 必须带：`gop_precision_low`，措辞里不能出现"你读错了 /θ/"这类断言。
+- 下一步要提升精度的话，按性价比排：① 用 so762 微调音素分类头（MDD）；
+  ② 换更强的音素 CTC（Conformer/更大的 wav2vec2）；③ 用 MMS_FA 做参考对齐、GOP 只在已对齐区间算。
 
 ## 7. 运行时依赖与指纹
 
@@ -90,3 +122,14 @@ log_softmax(每帧) → 单调 CTC 对齐（DP，帧数 T × 音素数 L）
 
 **不变量**：`onnx` 的 sha256 必须与 `metadata.json` 一致；`vocab.json` 的 index 0 必须是 `<pad>`。
 两者任一不符 → 拒绝启用 GOP，回退到词级 diff 并在 `limitations` 标注。
+
+其它运行时依赖（同样有指纹）：
+
+```
+C:/voice_models/onnxruntime/onnxruntime.dll                 sha256 417bed96…（来自 pip onnxruntime 1.31.0，与 ort rc.15 匹配）
+C:/voice_models/onnxruntime/onnxruntime_providers_shared.dll sha256 b5bf6295…
+C:/voice_models/g2p/cmudict.dict  sha256 81917843c7f44ce2b094ac63873c2c7a4cf802040792c455ba3ca406891c3d22  135 166 词
+```
+
+`ort` 用 `load-dynamic`：不下载二进制、不参与链接，运行时按
+`ORT_DYLIB_PATH` → `C:/voice_models/onnxruntime/onnxruntime.dll` 查找，找不到就报错降级。

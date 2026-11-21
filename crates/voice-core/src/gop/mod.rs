@@ -14,9 +14,101 @@
 //! - 带宽 < 24 kHz 或蓝牙 AGC 设备上，后验本身不可靠 → 上游必须拦住。
 
 pub mod ctc;
+pub mod g2p;
+pub mod model;
 pub mod phones;
 
 pub use ctc::{align, greedy, Aligned, PhoneRef};
+pub use g2p::{G2p, TextPhones};
+pub use model::PhonemeCtc;
+
+use anyhow::Result;
+use serde::Serialize;
+
+/// 单个音素的诊断结果（给上层/LLM 用的最小结构）。
+#[derive(Debug, Clone, Serialize)]
+pub struct PhoneScore {
+    pub phone: String,
+    /// 模型在该区间最常命中/最优的符号（解释"听起来像什么"）
+    pub best_symbol: String,
+    pub t0_ms: u32,
+    pub t1_ms: u32,
+    /// 原始 GOP（越负越可疑）
+    pub gop: f32,
+    /// 说话人内 z 分（阈值判据用这个，不是 gop）
+    pub z: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GopResult {
+    pub version: String,
+    pub frames: usize,
+    pub hop_ms: u32,
+    pub phones: Vec<PhoneScore>,
+    /// 词典里没有的词：它们的音素**不在**结果里，不能当成"漏读"
+    pub oov: Vec<String>,
+    /// 有音素但没有可用候选（映射缺失）：同样不能当结论
+    pub unmapped: Vec<String>,
+}
+
+/// 端到端：16 kHz 音频 + 参考文本 → 每个音素的 GOP。
+pub fn score_text(
+    model: &mut PhonemeCtc,
+    samples: &[f32],
+    text: &str,
+    g2p: &G2p,
+) -> Result<GopResult> {
+    let logp = model.log_probs(samples)?;
+    let tp = g2p.text_to_phones(text);
+    let mut refs = Vec::with_capacity(tp.phones.len());
+    let mut unmapped = Vec::new();
+    for p in &tp.phones {
+        let cands = model.phones.candidates(p);
+        if cands.is_empty() {
+            if !unmapped.contains(p) {
+                unmapped.push(p.clone());
+            }
+            continue;
+        }
+        refs.push(PhoneRef { label: p.clone(), cands });
+    }
+    let aligned = align(&logp, &refs, model.phones.blank);
+    let hop = model.hop_ms;
+    match aligned {
+        None => Ok(GopResult {
+            version: GOP_VERSION.to_string(),
+            frames: logp.len(),
+            hop_ms: hop,
+            phones: Vec::new(),
+            oov: tp.oov,
+            unmapped,
+        }),
+        Some(a) => {
+            let gops: Vec<f32> = a.iter().map(|x| x.gop).collect();
+            let z = speaker_normalize(&gops);
+            let phones = a
+                .iter()
+                .zip(z.iter())
+                .map(|(x, zs)| PhoneScore {
+                    phone: x.label.clone(),
+                    best_symbol: model.phones.vocab.get(x.best).cloned().unwrap_or_default(),
+                    t0_ms: x.t0 as u32 * hop,
+                    t1_ms: x.t1 as u32 * hop,
+                    gop: x.gop,
+                    z: crate::round_to(*zs, 2),
+                })
+                .collect();
+            Ok(GopResult {
+                version: GOP_VERSION.to_string(),
+                frames: logp.len(),
+                hop_ms: hop,
+                phones,
+                oov: tp.oov,
+                unmapped,
+            })
+        }
+    }
+}
 pub use phones::{espeak_candidates, norm_symbol, PhoneSet};
 
 /// 评分器版本：写进 metrics，算法升级后可回溯/重算

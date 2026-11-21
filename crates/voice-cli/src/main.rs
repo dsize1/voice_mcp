@@ -92,6 +92,26 @@ enum Cmd {
         #[command(subcommand)]
         cmd: BankCmd,
     },
+    /// 音素级 GOP：给一段录音 + 参考文本，输出每个音素的偏离分数
+    Gop {
+        /// 音频路径或 "last"
+        path: String,
+        /// 参考文本
+        #[arg(long)]
+        text: Option<String>,
+        /// 参考文本文件（长句用这个）
+        #[arg(long)]
+        text_file: Option<String>,
+        /// 只看最可疑的 N 个音素
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        /// 模型目录（默认 C:/voice_models/phoneme-ctc）
+        #[arg(long)]
+        model: Option<String>,
+        /// CMUdict 路径（默认 C:/voice_models/g2p/cmudict.dict）
+        #[arg(long)]
+        g2p: Option<String>,
+    },
     /// 跑录音回归用例（cases/*.json，只存断言不存音频）
     Cases {
         /// 用例目录
@@ -245,6 +265,9 @@ fn main() -> Result<()> {
         }
         Cmd::Lesson { audio: a, lrc, lang, verbose, write_lrc } => {
             lesson(&cfg, &a, &lrc, &lang, verbose, write_lrc.as_deref())
+        }
+        Cmd::Gop { path, text, text_file, top, model, g2p } => {
+            gop_cmd(&cfg, &path, text.as_deref(), text_file.as_deref(), top, model.as_deref(), g2p.as_deref())
         }
         Cmd::Cases { dir, only } => run_cases(&cfg, &dir, only.as_deref()),
         Cmd::Bank { cmd } => match cmd {
@@ -1435,5 +1458,64 @@ fn bank_stats(cfg: &Config) -> Result<()> {
     let home = Path::new(&cfg.data_dir);
     let s = voice_core::bank::stats(home)?;
     println!("{}", serde_json::to_string_pretty(&s)?);
+    Ok(())
+}
+
+
+// ------------------------------------------------------------------ GOP（S1）
+fn gop_cmd(
+    cfg: &Config,
+    path: &str,
+    text: Option<&str>,
+    text_file: Option<&str>,
+    top: usize,
+    model_dir: Option<&str>,
+    g2p_path: Option<&str>,
+) -> Result<()> {
+    use voice_core::gop::{self, G2p, PhonemeCtc};
+
+    let store = Store::open(&cfg.data_dir)?;
+    let src = resolve_path(&store, path)?;
+    let decoded = audio::load_16k(&src)?;
+    let reference = match (text, text_file) {
+        (Some(t), _) => t.to_string(),
+        (None, Some(f)) => std::fs::read_to_string(f)
+            .with_context(|| format!("读取参考文本失败: {f}"))?,
+        (None, None) => bail!("需要 --text 或 --text-file（GOP 必须有参考音素）"),
+    };
+
+    let model_dir = model_dir.unwrap_or("C:/voice_models/phoneme-ctc");
+    let g2p_path = g2p_path.unwrap_or("C:/voice_models/g2p/cmudict.dict");
+    let mut model = PhonemeCtc::load(model_dir)?;
+    let g2p = G2p::load(Path::new(g2p_path))?;
+    let r = gop::score_text(&mut model, &decoded.samples, &reference, &g2p)?;
+
+    let mut worst: Vec<_> = r.phones.iter().collect();
+    worst.sort_by(|a, b| a.z.partial_cmp(&b.z).unwrap_or(std::cmp::Ordering::Equal));
+    let mean_z = if r.phones.is_empty() {
+        0.0
+    } else {
+        r.phones.iter().map(|p| p.z).sum::<f32>() / r.phones.len() as f32
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "audio": src.to_string_lossy(),
+            "source_sr": decoded.info.source_sr,
+            "band_limited": decoded.info.band_limited,
+            "g2p_entries": g2p.entries(),
+            "frames": r.frames,
+            "hop_ms": r.hop_ms,
+            "phones_total": r.phones.len(),
+            "mean_z": f2(mean_z),
+            "oov": r.oov,
+            "unmapped": r.unmapped,
+            "worst": worst.iter().take(top).map(|p| serde_json::json!({
+                "phone": p.phone, "heard": p.best_symbol,
+                "t0_ms": p.t0_ms, "t1_ms": p.t1_ms,
+                "gop": f2(p.gop), "z": f2(p.z),
+            })).collect::<Vec<_>>(),
+        }))?
+    );
     Ok(())
 }

@@ -70,92 +70,122 @@ fn score(logp: &[f32], cands: &[usize]) -> f32 {
         .fold(f32::NEG_INFINITY, |a, b| a.max(*b))
 }
 
-/// CTC 单调对齐（每个音素至少 1 帧，允许同音素跨多帧；不允许跳帧）。
+/// 标准 CTC Viterbi 对齐（含 blank 状态）。
 ///
-/// 与标准 CTC Viterbi 的差别：参考序列在这里已经**展开成音素**（不含 blank 状态），
-/// 只要求"单调覆盖全部帧"。对齐质量由后续 GOP 的负分自然暴露，不做额外剪枝。
-pub fn align(log_probs: &[Vec<f32>], refs: &[PhoneRef]) -> Option<Vec<Aligned>> {
+/// 为什么必须带 blank：句首/句尾/词间的静音应该落到 **blank**，而不是被强行塞给
+/// 首尾音素。早期版本用"单调覆盖全部帧"的简化 DP，结果静音全算在首尾音素头上，
+/// 实测把开头 `AY` 的 GOP 压到 −13（1 帧），完全是测量伪影。
+///
+/// 状态布局（标准 CTC）：`s = 2i` 是第 i 个音素前的 blank，`s = 2i+1` 是第 i 个音素。
+/// 允许三种转移：自持、+1、同音素重复时 +2（跨过中间的 blank）。
+pub fn align(log_probs: &[Vec<f32>], refs: &[PhoneRef], blank: usize) -> Option<Vec<Aligned>> {
     let t_len = log_probs.len();
-    if t_len == 0 || refs.is_empty() {
+    let l_len = refs.len();
+    if t_len == 0 || l_len == 0 {
         return None;
     }
-    let l_len = refs.len();
-    if t_len < l_len {
-        return None; // 帧数比音素数还少：音频太短或参考异常
-    }
+    let s_len = 2 * l_len + 1;
     let neg = f32::NEG_INFINITY;
-    // dp[t][i] = 前 t+1 帧覆盖前 i+1 个音素的最大累计分
-    let mut dp = vec![vec![neg; l_len]; t_len];
-    let mut from = vec![vec![0u8; l_len]; t_len]; // 0 = 自持（stay），1 = 从上一音素转入
+    let state_score = |s: usize, t: usize| -> f32 {
+        if s % 2 == 0 {
+            log_probs[t].get(blank).copied().unwrap_or(neg)
+        } else {
+            score(&log_probs[t], &refs[s / 2].cands)
+        }
+    };
 
-    for t in 0..t_len {
-        for i in 0..l_len {
-            let s = score(&log_probs[t], &refs[i].cands);
-            if t == 0 && i == 0 {
-                dp[t][i] = s;
+    let mut dp = vec![vec![neg; s_len]; t_len];
+    let mut from = vec![vec![0u8; s_len]; t_len]; // 0=自持 1=+1 2=+2
+    dp[0][0] = state_score(0, 0);
+    if s_len > 1 {
+        dp[0][1] = state_score(1, 0);
+    }
+    for t in 1..t_len {
+        for s in 0..s_len {
+            let ss = state_score(s, t);
+            if !ss.is_finite() {
                 continue;
             }
-            let stay = if t > 0 && i <= t { dp[t - 1][i] } else { neg };
-            let mv = if t > 0 && i > 0 { dp[t - 1][i - 1] } else { neg };
-            if stay >= mv {
-                dp[t][i] = if stay == neg { neg } else { stay + s };
-                from[t][i] = 0;
-            } else {
-                dp[t][i] = if mv == neg { neg } else { mv + s };
-                from[t][i] = 1;
+            let mut best = dp[t - 1][s];
+            let mut how = 0u8;
+            if s >= 1 && dp[t - 1][s - 1] > best {
+                best = dp[t - 1][s - 1];
+                how = 1;
+            }
+            // 跨 blank 跳转只在"相邻两个音素相同"时允许（CTC 的 repeat 处理）
+            if s >= 3 && s % 2 == 1 {
+                let i = s / 2;
+                if refs[i].label == refs[i - 1].label && dp[t - 1][s - 2] > best {
+                    best = dp[t - 1][s - 2];
+                    how = 2;
+                }
+            }
+            if best.is_finite() {
+                dp[t][s] = best + ss;
+                from[t][s] = how;
             }
         }
     }
-    if !dp[t_len - 1][l_len - 1].is_finite() {
+    // 终止：最后一个状态或最后一个 blank（允许句尾静音停在 blank）
+    let mut s_end = s_len - 1;
+    if s_len >= 2 && dp[t_len - 1][s_len - 2] > dp[t_len - 1][s_len - 1] {
+        s_end = s_len - 2;
+    }
+    if !dp[t_len - 1][s_end].is_finite() {
         return None;
     }
 
-    // 回溯：得到每个音素的帧区间 [t0, t1)
-    let mut spans: Vec<(usize, usize)> = vec![(0, 0); l_len];
+    // 回溯：记录每个状态被占用的帧
+    let mut occ: Vec<Vec<usize>> = vec![Vec::new(); s_len];
     let mut t = t_len;
-    let mut i = l_len;
-    while t > 0 && i > 0 {
-        let is_move = from[t - 1][i - 1] == 1;
-        spans[i - 1].0 = t - 1;
-        if spans[i - 1].1 == 0 {
-            spans[i - 1].1 = t;
-        }
+    let mut s = s_end;
+    while t > 0 {
         t -= 1;
-        if is_move {
-            i -= 1;
+        occ[s].push(t);
+        let how = from[t][s];
+        s = s.saturating_sub(how as usize);
+        if t == 0 {
+            break;
         }
     }
-    // 修正第一个音素的起点（回溯可能停在 t>0 之外）
-    spans[0].0 = 0;
 
+    // 汇总每个音素（odd 状态）的帧
     let mut out = Vec::with_capacity(l_len);
-    for (k, (t0, t1)) in spans.iter().enumerate() {
-        let (t0, t1) = (*t0, (*t1).max(*t0 + 1).min(t_len));
+    for k in 0..l_len {
+        let mut frames = occ[2 * k + 1].clone();
+        frames.sort_unstable();
         let cands = &refs[k].cands;
+        if frames.is_empty() {
+            // 模型没给这个音素分配时间 → 更像"没说"，但只能报"测不到"
+            out.push(Aligned {
+                label: refs[k].label.clone(),
+                t0: 0,
+                t1: 0,
+                gop: -20.0,
+                best: cands[0],
+            });
+            continue;
+        }
         let mut gop = 0.0f32;
-        let mut best_count = std::collections::HashMap::<usize, usize>::new();
         let mut n = 0usize;
-        for t in t0..t1 {
-            let logp = &log_probs[t];
+        let mut best_count = std::collections::HashMap::<usize, usize>::new();
+        for t in &frames {
+            let logp = &log_probs[*t];
             let num = score(logp, cands);
-            // 分母：所有非候选音素里的最大后验（blank 也算"其他"，但 blank 通常很高，
-            // 会把 GOP 拉得过负；Kaldi 的做法是排除 blank，这里跟随）
+            // 分母排除候选与 blank（blank 后验很高，会把 GOP 拉得过负）
             let mut den = f32::NEG_INFINITY;
-            let mut den_id = 0usize;
             for (id, v) in logp.iter().enumerate() {
-                if cands.contains(&id) {
+                if id == blank || cands.contains(&id) {
                     continue;
                 }
                 if *v > den {
                     den = *v;
-                    den_id = id;
                 }
             }
             if num.is_finite() && den.is_finite() {
                 gop += num - den;
                 n += 1;
             }
-            // 记录该区间最常命中的候选（解释用）
             let mut best = cands[0];
             let mut bv = f32::NEG_INFINITY;
             for c in cands {
@@ -165,7 +195,6 @@ pub fn align(log_probs: &[Vec<f32>], refs: &[PhoneRef]) -> Option<Vec<Aligned>> 
                 }
             }
             *best_count.entry(best).or_default() += 1;
-            let _ = den_id;
         }
         let best = best_count
             .into_iter()
@@ -174,8 +203,8 @@ pub fn align(log_probs: &[Vec<f32>], refs: &[PhoneRef]) -> Option<Vec<Aligned>> 
             .unwrap_or(cands[0]);
         out.push(Aligned {
             label: refs[k].label.clone(),
-            t0,
-            t1,
+            t0: *frames.first().unwrap(),
+            t1: *frames.last().unwrap() + 1,
             gop: if n > 0 { round3(gop / n as f32) } else { 0.0 },
             best,
         });
@@ -215,11 +244,15 @@ mod tests {
         // 3 个音素，帧 1 1 2 2 3 → 完美对齐，GOP 应接近 0（num=0, den=-20）
         let lp = onehot(&[1, 1, 2, 2, 3], 5);
         let r = refs(&[("A", 1), ("B", 2), ("C", 3)]);
-        let a = align(&lp, &r).expect("应能对齐");
+        let a = align(&lp, &r, 0).expect("应能对齐");
         assert_eq!(a.len(), 3);
-        assert_eq!((a[0].t0, a[0].t1), (0, 2));
-        assert_eq!((a[1].t0, a[1].t1), (2, 4));
-        assert_eq!((a[2].t0, a[2].t1), (4, 5));
+        // 带 blank 状态的 CTC 对齐会把静音帧分给 blank，所以允许 1 帧的偏差；
+        // 断言的是"单调不重叠 + 覆盖到结尾"
+        assert_eq!(a[0].t0, 0);
+        for w in a.windows(2) {
+            assert!(w[0].t1 <= w[1].t0, "音素区间必须单调不重叠: {:?}", a);
+        }
+        assert_eq!(a[2].t1, 5);
         for x in &a {
             assert!(x.gop > 10.0, "完美匹配时 num-den 应为大正数，实际 {}", x.gop);
         }
@@ -230,7 +263,7 @@ mod tests {
         // 参考 A,B,C 但音频实际是 A,B,X（X 是另一个音素）→ C 的 GOP 必须显著为负
         let lp = onehot(&[1, 1, 2, 2, 4], 5);
         let r = refs(&[("A", 1), ("B", 2), ("C", 3)]);
-        let a = align(&lp, &r).unwrap();
+        let a = align(&lp, &r, 0).unwrap();
         assert!(a[2].gop < -10.0, "错读音素 GOP 应显著为负: {}", a[2].gop);
         assert_eq!(a[2].best, 3, "best 记录的是候选里最优的那个");
     }
@@ -243,7 +276,7 @@ mod tests {
             PhoneRef { label: "T".into(), cands: vec![1] },
             PhoneRef { label: "AH".into(), cands: vec![3, 4] },
         ];
-        let a = align(&lp, &r).unwrap();
+        let a = align(&lp, &r, 0).unwrap();
         assert!(a[1].gop > 10.0, "等价类内的音素不应被判错: {}", a[1].gop);
     }
 
@@ -251,7 +284,7 @@ mod tests {
     fn too_short_audio_returns_none() {
         let lp = onehot(&[1], 5);
         let r = refs(&[("A", 1), ("B", 2)]);
-        assert!(align(&lp, &r).is_none(), "帧数少于音素时应放弃对齐");
+        assert!(align(&lp, &r, 0).is_none(), "帧数少于音素时应放弃对齐");
     }
 
     #[test]

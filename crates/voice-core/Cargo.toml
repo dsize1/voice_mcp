@@ -12,6 +12,8 @@ symphonia.workspace = true
 sherpa-onnx = { version = "2.0.1", default-features = false, features = ["shared"] }
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 cpal = "0.18"
+ort = { version = "2.0.0-rc.15", default-features = false, features = ["load-dynamic", "std"] }
+sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]

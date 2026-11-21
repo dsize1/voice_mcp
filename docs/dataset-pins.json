@@ -1,0 +1,20 @@
+{
+  "so762": {
+    "id": "mispeech/speechocean762",
+    "revision": "06385584fad212b26134c656fdd3ccf9f093f33e",
+    "license": "apache-2.0",
+    "arxiv": "2104.01378",
+    "files": [
+      {
+        "file": "train-00000-of-00001.parquet",
+        "size": 332843486,
+        "sha256": "b06fe00f49d2c02c7239677714c68502706e914e029bc01d8e8c6c52416326a7"
+      },
+      {
+        "file": "test-00000-of-00001.parquet",
+        "size": 311543671,
+        "sha256": "c951056c8bbc52f776b571c0d02f46b6753f49774a8526f130fcf89400736e98"
+      }
+    ]
+  }
+}

@@ -52,7 +52,7 @@
 | P2 | 评测层：**词级 diff** ✅ / **flow** ✅ / prosody / GOP scorer | 能定位到具体音素错误 | ⏳ 2/4 完成 |
 | P3 | `ielts-speaking-coach` Skill + learner.json + 雅思题库 | 15 分钟完整训练闭环 | 未开始 |
 | P4 | 热键听写、`record`(cpal+VAD)、CosyVoice2、HTTP、流式 | 按需 | 未开始 |
-| P4 | **跟读素材库**（[ADR-0009](adr/0009-drill-library.md)）：NCE1–4 共 276 课 → 逐句切片 + 质量门槛 | 见 ADR 验收标准 | 已设计 |
+| P4 | **跟读素材库**（[ADR-0009](adr/0009-drill-library.md)）：NCE1–4 共 276 课 → 逐句切片 + 质量门槛 | 见 ADR 验收标准 | ✅ CLI 已实现（全量待语料） |
 
 ## 5. 硬件基线（实测）
 

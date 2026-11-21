@@ -87,6 +87,11 @@ enum Cmd {
         #[arg(long)]
         write_lrc: Option<String>,
     },
+    /// 跟读素材库（ADR-0009）：ingest / list / show / drill / stats
+    Bank {
+        #[command(subcommand)]
+        cmd: BankCmd,
+    },
     /// 跑录音回归用例（cases/*.json，只存断言不存音频）
     Cases {
         /// 用例目录
@@ -135,6 +140,51 @@ enum Cmd {
     },
 }
 
+
+#[derive(Subcommand)]
+enum BankCmd {
+    /// 把 LRC 教材切成逐句素材入库（走质量门槛，不合格进 quarantine）
+    Ingest {
+        /// 本地目录（含 `<NN>.<Title>.mp3` + 同名 `.lrc`）
+        #[arg(long)]
+        from_dir: Option<String>,
+        /// 书号，如 NCE2（不填就从路径猜）
+        #[arg(long, default_value = "")]
+        book: String,
+        /// 最多处理几课
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 只算质量门槛，不写文件
+        #[arg(long)]
+        dry_run: bool,
+        /// 已存在的 id 也覆盖
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// 列素材
+    List {
+        #[arg(long)]
+        level: Option<u8>,
+        #[arg(long)]
+        tag: Option<String>,
+        #[arg(long)]
+        book: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// 看一条素材（含质量指标与音轨是否存在）
+    Show { id: String },
+    /// 播原生示范并打印句子/中文
+    Drill {
+        id: String,
+        /// 不播音频，只打印
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// 统计：条数/时长/难度分布/标签排行/quarantine 数
+    Stats,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load()?;
@@ -154,6 +204,17 @@ fn main() -> Result<()> {
             lesson(&cfg, &a, &lrc, &lang, verbose, write_lrc.as_deref())
         }
         Cmd::Cases { dir, only } => run_cases(&cfg, &dir, only.as_deref()),
+        Cmd::Bank { cmd } => match cmd {
+            BankCmd::Ingest { from_dir, book, limit, dry_run, overwrite } => {
+                bank_ingest(&cfg, from_dir.as_deref(), &book, limit, dry_run, overwrite)
+            }
+            BankCmd::List { level, tag, book, limit } => {
+                bank_list(&cfg, level, tag.as_deref(), book.as_deref(), limit)
+            }
+            BankCmd::Show { id } => bank_show(&cfg, &id),
+            BankCmd::Drill { id, quiet } => bank_drill(&cfg, &id, quiet),
+            BankCmd::Stats => bank_stats(&cfg),
+        },
         Cmd::Mic { secs } => mic(&cfg, &secs),
         Cmd::Rec { max_sec, silence, start_timeout, stt: then_stt, lang, scene } => {
             rec(&cfg, max_sec, silence, start_timeout, then_stt, &lang, &scene)
@@ -1083,5 +1144,144 @@ fn ensure_parent(p: &Path) -> Result<()> {
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d)?;
     }
+    Ok(())
+}
+
+// ------------------------------------------------------------------ bank (ADR-0009)
+/// f32 → 干净的 f64（去掉 float 噪声，JSON 里不出现 96.80000305175781）
+fn f1(v: f32) -> f64 {
+    (v as f64 * 10.0).round() / 10.0
+}
+fn f2(v: f32) -> f64 {
+    (v as f64 * 100.0).round() / 100.0
+}
+fn f3(v: f32) -> f64 {
+    (v as f64 * 1000.0).round() / 1000.0
+}
+
+fn bank_ingest(
+    cfg: &Config,
+    from_dir: Option<&str>,
+    book: &str,
+    limit: Option<usize>,
+    dry_run: bool,
+    overwrite: bool,
+) -> Result<()> {
+    let Some(dir) = from_dir else {
+        bail!(
+            "目前只支持 --from-dir（网络拉取请用外部脚本准备好 <NN>.<Title>.mp3 + .lrc，见 ADR-0009 D2）"
+        )
+    };
+    let home = Path::new(&cfg.data_dir);
+    let engines = Engines::load(cfg.clone())?;
+    let opts = voice_core::bank::IngestOptions {
+        book: book.to_string(),
+        overwrite,
+        dry_run,
+    };
+    let out = voice_core::bank::ingest_dir(home, Path::new(dir), &opts, &engines, limit)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "lessons": out.len(),
+            "kept": out.iter().map(|r| r.kept).sum::<usize>(),
+            "rejected": out.iter().map(|r| r.rejected).sum::<usize>(),
+            "dry_run": dry_run,
+            "detail": out.iter().map(|r| serde_json::json!({
+                "lesson": r.lesson_slug, "kept": r.kept, "rejected": r.rejected
+            })).collect::<Vec<_>>(),
+        }))?
+    );
+    Ok(())
+}
+
+fn bank_list(
+    cfg: &Config,
+    level: Option<u8>,
+    tag: Option<&str>,
+    book: Option<&str>,
+    limit: usize,
+) -> Result<()> {
+    let home = Path::new(&cfg.data_dir);
+    let mut idx = voice_core::bank::read_index(home)?;
+    idx.retain(|e| level.map(|l| e.level == l).unwrap_or(true));
+    idx.retain(|e| book.map(|b| e.book.eq_ignore_ascii_case(b)).unwrap_or(true));
+    if let Some(t) = tag {
+        idx.retain(|e| e.tags.iter().any(|x| x == t));
+    }
+    idx.truncate(limit);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "count": idx.len(),
+            "items": idx.iter().map(|e| serde_json::json!({
+                "id": e.id, "level": e.level, "wpm": f1(e.wpm), "words": e.words,
+                "text": e.text, "zh": e.zh, "tags": e.tags,
+            })).collect::<Vec<_>>(),
+        }))?
+    );
+    Ok(())
+}
+
+fn bank_show(cfg: &Config, id: &str) -> Result<()> {
+    let home = Path::new(&cfg.data_dir);
+    let idx = voice_core::bank::read_index(home)?;
+    let Some(e) = idx.iter().find(|e| e.id == id) else {
+        bail!("素材库里没有 id={id}（先跑 bank list 看看）");
+    };
+    let src = home.join(&e.src);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "id": e.id, "book": e.book, "lesson": e.lesson, "seq": e.seq,
+            "text": e.text, "zh": e.zh,
+            "t0": f2(e.t0), "t1": f2(e.t1), "dur": f2(e.dur), "words": e.words, "wpm": f1(e.wpm), "level": e.level,
+            "tags": e.tags,
+            "quality": {
+                "line_sim": f3(e.quality.line_sim),
+                "asr": e.quality.asr,
+                "band_limited": e.quality.band_limited,
+                "lrc_fit_scale": f3(e.quality.lrc_fit_scale),
+                "speech_ratio": f3(e.quality.speech_ratio),
+            },
+            "audio": e.src, "audio_exists": src.is_file(),
+        }))?
+    );
+    Ok(())
+}
+
+fn bank_drill(cfg: &Config, id: &str, quiet: bool) -> Result<()> {
+    let home = Path::new(&cfg.data_dir);
+    let idx = voice_core::bank::read_index(home)?;
+    let Some(e) = idx.iter().find(|e| e.id == id) else {
+        bail!("素材库里没有 id={id}");
+    };
+    let src = home.join(&e.src);
+    if !src.is_file() {
+        bail!("素材音频缺失: {}", src.display());
+    }
+    println!("{}", e.text);
+    if !e.zh.is_empty() {
+        println!("{}", e.zh);
+    }
+    println!(
+        "[{}] level {} · {} 词 · {:.0} wpm · {:.2}s · tags: {}",
+        e.id,
+        e.level,
+        e.words,
+        e.wpm,
+        e.dur,
+        if e.tags.is_empty() { "-".to_string() } else { e.tags.join(",") }
+    );
+    if !quiet {
+        play::play_wav(&src)?;
+    }
+    Ok(())
+}
+
+fn bank_stats(cfg: &Config) -> Result<()> {
+    let home = Path::new(&cfg.data_dir);
+    let s = voice_core::bank::stats(home)?;
+    println!("{}", serde_json::to_string_pretty(&s)?);
     Ok(())
 }

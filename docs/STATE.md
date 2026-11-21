@@ -73,5 +73,5 @@ D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（有 JSON 用例但�
 ## 下一批工作（用户已确认顺序）
 
 1. ~~**P3 真机训练闭环**~~（2026-11-21 完成）
-2. P4 跟读素材库（ADR-0009）：用户会先写脚本拉全 NCE1–4 资源，然后一起做 `bank ingest/list/show/drill`
+2. P4 跟读素材库（ADR-0009）：**CLI 已实现** `bank ingest/list/show/drill/stats`（81 条实测）；待用户拉全 NCE1–4 语料后跑全量 ingest + 人工抽听 20 条
 3. 补一次自由说 30–60 s（把 `learner.json` 的 band 置信度从 low 拉起来）

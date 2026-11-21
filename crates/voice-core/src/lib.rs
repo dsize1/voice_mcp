@@ -6,6 +6,7 @@
 //! - 所有输出留证（音频 + 文字）到 `D:/voice_data`。
 
 pub mod assess;
+pub mod bank;
 pub mod audio;
 pub mod config;
 pub mod engine;

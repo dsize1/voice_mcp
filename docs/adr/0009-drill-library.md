@@ -1,6 +1,6 @@
 # ADR-0009: 跟读素材库（Drill Library）与 NCE 语料接入
 
-- 状态：Proposed（已排期到 P4，与"素材库"同批实现）
+- 状态：**Accepted / P4 已实现**（2026-11-21，见文末「实现进展」）
 - 日期：2026-11-19
 - 相关：ADR-0006（评测边界）、ADR-0008（技术债）、`docs/CONTRACT.md`
 
@@ -158,3 +158,26 @@ MCP 侧暂不新增工具（P4.5 再评估）；Skill 通过文件直接读索�
 | **P4** | `bank ingest / list / show / drill / stats` + 质量门槛 + quarantine（本次要做的全部） |
 | P4.5 | MCP 工具 `bank_list`/`bank_get`（若 Skill 直接读文件不够用） |
 | P5 | 用素材做"批量生成慢速示范音"/"按音素定向组卷"（依赖 P2.5 的 GOP） |
+
+## 实现进展（2026-11-21）
+
+`voice-cli bank ingest / list / show / drill / stats` 已落地，代码在
+`crates/voice-core/src/bank/mod.rs`（纯函数 + 质量门槛 + 索引）+ `voice-cli` 子命令。
+
+| 验收项 | 结果 |
+|---|---|
+| 1. 全量 ingest ≈2 800–3 200 条 | ⏳ 待语料齐全（当前只 ingest 本地已有 5 课 → 81 条 / quarantine 16 条） |
+| 2. 随机抽 20 条人工试听 | ⏳ 待全量后做；现有抽样切片 4.3–5.8 s，16 kHz mono，VAD 语音占比 0.61–0.75 |
+| 3. `bank drill` 端到端 | ✅ 播原生 → 打印句/中文/level/wpm/tags |
+| 4. quarantine 每行有原因 | ✅ 实测原因只有两类：`line_sim`（11）、`speech_ratio`（5） |
+| 5. 重复 ingest 幂等 | ✅ 重跑 index 仍 81 条，无重复 id |
+
+实现取舍（与原 ADR 的差异）：
+
+- **`--from-url` 未实现**：项目不引外部二进制，也不引 TLS 依赖；网络拉取交给外部脚本
+  （用户计划自己拉 NCE1–4），`bank ingest` 只吃本地目录。
+  https 直连若要做，需在 P4.5 引 `ureq`/`rustls` 或复用本机反代。
+- **慢速示范（`ref_slow`）默认不生成**：留字段，P5 批量生成时填。
+- **`--keep-source` 未实现**：整课原 mp3 由外部目录保留，bank 只存切片。
+- 质量门槛与 D5 完全一致；`merge_short_lines` 会把不足 3 词的行并入下一行，
+  末尾不足则并入上一行（不丢内容）。

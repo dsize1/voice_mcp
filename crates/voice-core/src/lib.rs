@@ -10,6 +10,7 @@ pub mod bank;
 pub mod audio;
 pub mod config;
 pub mod engine;
+pub mod gop;
 pub mod store;
 
 pub use assess::{Assessment, AssessRequest};

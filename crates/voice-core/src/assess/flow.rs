@@ -217,14 +217,10 @@ fn is_cjk(c: char) -> bool {
 }
 
 fn round1(v: f32) -> f32 {
-    norm0((v * 10.0).round() / 10.0)
+    crate::round_to(v, 1)
 }
 fn round2(v: f32) -> f32 {
-    norm0((v * 100.0).round() / 100.0)
-}
-/// 把 `-0.0` 归一成 `0.0`：JSON 里 `-0.0` 会污染 `progress` 汇总与 diff。
-fn norm0(v: f32) -> f32 {
-    if v == 0.0 { 0.0 } else { v }
+    crate::round_to(v, 2)
 }
 
 #[cfg(test)]

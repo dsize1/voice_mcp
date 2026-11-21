@@ -27,3 +27,13 @@ pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn sherpa_version() -> &'static str {
     sherpa_onnx::version()
 }
+
+/// 四舍五入到指定小数位，并把 `-0.0` 归一成 `0.0`。
+///
+/// 负零来自“小负数四舍五入到 0”和「零和」，直接进 JSON 会变成 `-0.0`，
+/// 污染 `progress` 汇总与文本 diff。所有对外指标都走这个函数。
+pub fn round_to(v: f32, decimals: u32) -> f32 {
+    let m = 10f32.powi(decimals as i32);
+    let r = (v * m).round() / m;
+    if r == 0.0 { 0.0 } else { r }
+}

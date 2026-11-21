@@ -573,12 +573,12 @@ fn lesson(
                 "alignment": td.map(|d| format!("{:?}", d.timestamp_alignment).to_lowercase()),
             },
             "lines": { "total": lines.len(), "matched_80pct": line_ok,
-                       "mean_line_sim": (mean_sim * 100.0).round() / 100.0,
-                       "mean_start_offset": (mean_off * 100.0).round() / 100.0,
-                       "max_abs_start_offset": (max_off * 100.0).round() / 100.0 },
+                       "mean_line_sim": voice_core::round_to(mean_sim, 2),
+                       "mean_start_offset": voice_core::round_to(mean_off, 2),
+                       "max_abs_start_offset": voice_core::round_to(max_off, 2) },
             "lrc_fit": fit.map(|(a, b)| serde_json::json!({
-                "scale": (a * 1000.0).round() / 1000.0,
-                "offset_sec": (b * 100.0).round() / 100.0,
+                "scale": voice_core::round_to(a, 3),
+                "offset_sec": voice_core::round_to(b, 2),
                 "consistent": (a - 1.0).abs() < 0.02 && b.abs() < 0.6,
                 "hint": if (a - 1.0).abs() < 0.02 && b.abs() < 0.6 {
                     "LRC 与本音轨一致".to_string()

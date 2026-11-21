@@ -745,8 +745,7 @@ impl VoiceServer {
 }
 
 fn round3(v: f32) -> f32 {
-    let r = (v * 1000.0).round() / 1000.0;
-    if r == 0.0 { 0.0 } else { r } // 避免 JSON 里出现 -0.0
+    voice_core::round_to(v, 3)
 }
 
 /// 源文件命名与 record 侧对齐：非 16 kHz 的 wav 存成 `<prefix>.raw<sr>.wav`，

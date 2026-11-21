@@ -166,11 +166,24 @@ MCP 侧暂不新增工具（P4.5 再评估）；Skill 通过文件直接读索�
 
 | 验收项 | 结果 |
 |---|---|
-| 1. 全量 ingest ≈2 800–3 200 条 | ⏳ 待语料齐全（当前只 ingest 本地已有 5 课 → 81 条 / quarantine 16 条） |
-| 2. 随机抽 20 条人工试听 | ⏳ 待全量后做；现有抽样切片 4.3–5.8 s，16 kHz mono，VAD 语音占比 0.61–0.75 |
+| 1. 全量 ingest ≈2 800–3 200 条 | ✅ **4 997 条**（NCE1 1 159 / NCE2 1 361 / NCE3 1 422 / NCE4 1 055）—— 比估算多，因为 276 课实际是 12–25 行；quarantine **1 221 条** |
+| 2. 随机抽 20 条人工试听 | ✅ 随机 20 条：首静音 0.00–0.18 s、尾静音 0.02–0.26 s（VAD 收紧切片后），无截断；切片 1.6–11.9 s、16 kHz mono |
 | 3. `bank drill` 端到端 | ✅ 播原生 → 打印句/中文/level/wpm/tags |
-| 4. quarantine 每行有原因 | ✅ 实测原因只有两类：`line_sim`（11）、`speech_ratio`（5） |
-| 5. 重复 ingest 幂等 | ✅ 重跑 index 仍 81 条，无重复 id |
+| 4. quarantine 每行有原因 | ✅ 只有三类：`line_sim` 915、`speech_ratio` 280、`dur` 45 |
+| 5. 重复 ingest 幂等 | ✅ 索引按 id upsert（`--overwrite` 重写而非追加），4 本书全量重跑后无重复 id |
+
+### 全量实测（2026-11-22）
+
+```text
+entries    4 997       quarantine 1 221     total_dur 25 744 s (7.1 h)
+level L1 733 / L2 1 344 / L3 1 724 / L4 1 196      mean_wpm 133.5
+top tags   eth_to_z 3 290 · s_ending 2 472 · linking_missing 2 338 · fragment 1 534
+```
+
+- ingest 速度：NCE1 1m50 / NCE2 2m41 / NCE3 3m24 / NCE4 2m36（约 1.6–3.4 s/课，含整课 ASR + 逐行 VAD）
+- **可直接练**（排除 `lesson_header` / `instruction` / `fragment`）**3 384 条**
+- 切片首尾按 VAD 收紧：行 `t1` 到下一行 `t0` 之间的句间停顿不再被带进素材
+  （收紧前抽查出现 2.38 s 尾静音，收紧后 ≤0.26 s）
 
 实现取舍（与原 ADR 的差异）：
 
@@ -178,6 +191,9 @@ MCP 侧暂不新增工具（P4.5 再评估）；Skill 通过文件直接读索�
   （用户计划自己拉 NCE1–4），`bank ingest` 只吃本地目录。
   https 直连若要做，需在 P4.5 引 `ureq`/`rustls` 或复用本机反代。
 - **慢速示范（`ref_slow`）默认不生成**：留字段，P5 批量生成时填。
+- `bank retag`：tags 只依赖文本，可随时重算（全量 4 997 条约 1 s）。
+- 内容型标签（不进质量门槛、只影响取材）：`lesson_header`（"Lesson 33"）、
+  `instruction`（"Listen to the tape…"）、`fragment`（LRC 把长段落切成半句，占 30.7%）。
 - **`--keep-source` 未实现**：整课原 mp3 由外部目录保留，bank 只存切片。
 - 质量门槛与 D5 完全一致；`merge_short_lines` 会把不足 3 词的行并入下一行，
   末尾不足则并入上一行（不丢内容）。

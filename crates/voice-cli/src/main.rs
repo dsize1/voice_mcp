@@ -183,6 +183,8 @@ enum BankCmd {
     },
     /// 统计：条数/时长/难度分布/标签排行/quarantine 数
     Stats,
+    /// 重算全部素材的 tags（纯文本规则，不动音频）
+    Retag,
 }
 
 fn main() -> Result<()> {
@@ -214,6 +216,11 @@ fn main() -> Result<()> {
             BankCmd::Show { id } => bank_show(&cfg, &id),
             BankCmd::Drill { id, quiet } => bank_drill(&cfg, &id, quiet),
             BankCmd::Stats => bank_stats(&cfg),
+            BankCmd::Retag => {
+                let n = voice_core::bank::retag(Path::new(&cfg.data_dir))?;
+                println!("{}", serde_json::json!({"retagged": n}));
+                Ok(())
+            }
         },
         Cmd::Mic { secs } => mic(&cfg, &secs),
         Cmd::Rec { max_sec, silence, start_timeout, stt: then_stt, lang, scene } => {

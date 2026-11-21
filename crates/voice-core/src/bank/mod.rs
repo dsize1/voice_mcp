@@ -8,7 +8,6 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::assess::{diff, lrc, normalize};
@@ -183,6 +182,21 @@ pub fn tags_for(text: &str) -> Vec<String> {
     if text.trim_end().ends_with('?') {
         push("question_rise");
     }
+    // 课头/导语：不是跟读素材，Skill 默认跳过
+    let tl = text.trim().to_lowercase();
+    if tl.starts_with("lesson ") || tl.starts_with("new concept english") {
+        push("lesson_header");
+    }
+    if tl.starts_with("listen to the tape") || tl.starts_with("first listen") || tl.starts_with("now listen") {
+        push("instruction");
+    }
+    // 片段：LRC 把长段落切成了半句（小写开头 / 没有句末标点）→ Skill 优先选整句
+    let t = text.trim();
+    let starts_ok = t.chars().next().map(|c| !c.is_lowercase()).unwrap_or(false);
+    let ends_ok = matches!(t.chars().last().unwrap_or(' '), '.' | '?' | '!' | '"' | '\'');
+    if !(starts_ok && ends_ok) {
+        push("fragment");
+    }
     out
 }
 
@@ -304,13 +318,50 @@ pub fn read_index(home: &Path) -> Result<Vec<BankEntry>> {
     Ok(out)
 }
 
-fn append_jsonl<T: Serialize>(path: &Path, v: &T) -> Result<()> {
-    use std::io::Write;
-    if let Some(dir) = path.parent() {
+/// 重写整个索引（按 id 排序）；用临时文件 + rename，避免写一半损坏。
+fn write_index(home: &Path, entries: &[BankEntry]) -> Result<()> {
+    let p = index_path(home);
+    if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(f, "{}", serde_json::to_string(v)?)?;
+    let mut body = String::new();
+    for e in entries {
+        body.push_str(&serde_json::to_string(e)?);
+        body.push('\n');
+    }
+    let tmp = p.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, &p)?;
+    Ok(())
+}
+
+/// quarantine 也按 id upsert（重复 ingest 不堆重复行）。
+fn upsert_quarantine(home: &Path, rows: &[serde_json::Value]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let p = quarantine_path(home);
+    let mut all: Vec<serde_json::Value> = Vec::new();
+    if p.is_file() {
+        for line in std::fs::read_to_string(&p)?.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                all.push(v);
+            }
+        }
+    }
+    for r in rows {
+        let id = r.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        match all.iter().position(|x| x.get("id").and_then(|v| v.as_str()) == Some(id.as_str())) {
+            Some(i) => all[i] = r.clone(),
+            None => all.push(r.clone()),
+        }
+    }
+    let mut body = String::new();
+    for v in &all {
+        body.push_str(&serde_json::to_string(v)?);
+        body.push('\n');
+    }
+    std::fs::write(&p, body)?;
     Ok(())
 }
 
@@ -393,13 +444,18 @@ pub fn ingest_file(
         }
         if !opts.dry_run {
             write_lesson_meta(home, &slug_dir, &meta)?;
-            for r in &meta.rejected {
-                append_jsonl(&quarantine_path(home), &serde_json::json!({
-                    "id": id_for(&book, &lesson_name, r.seq),
-                    "book": book, "lesson": lesson_name, "seq": r.seq,
-                    "text": r.text, "reasons": r.reasons,
-                }))?;
-            }
+            let rows: Vec<serde_json::Value> = meta
+                .rejected
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": id_for(&book, &lesson_name, r.seq),
+                        "book": book, "lesson": lesson_name, "seq": r.seq,
+                        "text": r.text, "reasons": r.reasons,
+                    })
+                })
+                .collect();
+            upsert_quarantine(home, &rows)?;
         }
         return Ok(LessonIngest {
             lesson_slug: slug_dir,
@@ -424,13 +480,23 @@ pub fn ingest_file(
             });
             continue;
         }
-        let slice = &decoded.samples[start..end];
+        // 先按行窗口 + pad 粗切，再用 VAD 把首尾静音收回到 pad：
+        // 行 t1 到下一行 t0 之间常有 1–3 s 句间停顿，直接保留会变成"句子后面拖一段静音"。
+        let raw = &decoded.samples[start..end];
+        let segs = engines.vad.segments(raw);
+        let (slice, offset) = if let (Some(a), Some(b)) = (segs.first(), segs.last()) {
+            let s0 = ((a.t0 - SLICE_PAD).max(0.0) * 16_000.0) as usize;
+            let s1 = (((b.t1 + SLICE_PAD) * 16_000.0) as usize).min(raw.len());
+            if s0 < s1 { (&raw[s0..s1], a.t0 - s0 as f32 / 16_000.0) } else { (raw, 0.0) }
+        } else {
+            (raw, 0.0)
+        };
         let dur = slice.len() as f32 / 16_000.0;
         let words = normalize::words(&l.en).len();
         let wpm = if dur > 0.0 { words as f32 / dur * 60.0 } else { 0.0 };
+        let _ = offset;
 
-        // 该行切片内 VAD 语音占比
-        let segs = engines.vad.segments(slice);
+        // 收紧后的切片内 VAD 语音占比（用于质量门槛）
         let speech: f32 = segs.iter().map(|s| s.dur()).sum();
         let speech_ratio = if dur > 0.0 { (speech / dur).min(1.0) } else { 0.0 };
 
@@ -506,20 +572,38 @@ pub fn ingest_file(
     meta.lines_kept = kept.len();
     if !opts.dry_run {
         write_lesson_meta(home, &slug_dir, &meta)?;
-        let existing: HashSet<String> = read_index(home)?.into_iter().map(|e| e.id).collect();
+        let mut all = read_index(home)?;
+        let mut changed = false;
         for e in &kept {
-            if existing.contains(&e.id) && !opts.overwrite {
-                continue;
+            match all.iter().position(|x| x.id == e.id) {
+                Some(i) => {
+                    if opts.overwrite {
+                        all[i] = e.clone();
+                        changed = true;
+                    }
+                }
+                None => {
+                    all.push(e.clone());
+                    changed = true;
+                }
             }
-            append_jsonl(&index_path(home), e)?;
         }
-        for r in &meta.rejected {
-            append_jsonl(&quarantine_path(home), &serde_json::json!({
-                "id": id_for(&book, &lesson_name, r.seq),
-                "book": book, "lesson": lesson_name, "seq": r.seq,
-                "text": r.text, "reasons": r.reasons,
-            }))?;
+        if changed {
+            all.sort_by(|a, b| a.id.cmp(&b.id));
+            write_index(home, &all)?;
         }
+        let rows: Vec<serde_json::Value> = meta
+            .rejected
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": id_for(&book, &lesson_name, r.seq),
+                    "book": book, "lesson": lesson_name, "seq": r.seq,
+                    "text": r.text, "reasons": r.reasons,
+                })
+            })
+            .collect();
+        upsert_quarantine(home, &rows)?;
         append_attribution(home, &book, &lesson_name, &audio_path.to_string_lossy(), mean_sim)?;
     }
 
@@ -628,6 +712,23 @@ pub fn ingest_dir(
     Ok(out)
 }
 
+/// 重算全部素材的 tags（tags 只依赖文本，不需要音频）。
+pub fn retag(home: &Path) -> Result<usize> {
+    let mut idx = read_index(home)?;
+    let mut n = 0;
+    for e in idx.iter_mut() {
+        let t = tags_for(&e.text);
+        if t != e.tags {
+            e.tags = t;
+            n += 1;
+        }
+    }
+    if n > 0 {
+        write_index(home, &idx)?;
+    }
+    Ok(n)
+}
+
 // ---------------------------------------------------------------- 统计
 
 #[derive(Debug, Serialize)]
@@ -708,6 +809,10 @@ mod tests {
         assert!(v.contains(&"v_to_w".to_string()));
         assert!(v.contains(&"final_consonant_drop".to_string()));
         assert!(tags_for("Would you like a cup of tea?").contains(&"question_rise".to_string()));
+        // 课头/导语要能识别出来
+        assert!(tags_for("Lesson 33").contains(&"lesson_header".to_string()));
+        assert!(tags_for("Listen to the tape then answer this question.")
+            .contains(&"instruction".to_string()));
     }
 
     #[test]

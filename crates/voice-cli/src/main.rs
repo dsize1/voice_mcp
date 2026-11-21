@@ -826,18 +826,19 @@ fn assess_cmd(
     let store = Store::open(&cfg.data_dir)?;
     let src = resolve_path(&store, path)?;
     // 与 MCP assess 一致：源在 sessions/ 内就地写回，不复制、不新建会话
-    let (session, prefix, orig, feed) = match store.session_for_take(&src) {
+    let (session, prefix, orig, feed, pre_norm) = match store.session_for_take(&src) {
         Some((s, pre)) => {
+            // 喂原始文件（保留 source_sr/band_limited 语义）；.16k.wav 只当派生证据
             let p16 = s.dir.join("takes").join(format!("{pre}.16k.wav"));
-            let feed = if p16.is_file() { p16 } else { src.clone() };
-            (s, pre, src.clone(), feed)
+            let pre_norm = if p16.is_file() { Some(p16) } else { None };
+            (s, pre, src.clone(), src.clone(), pre_norm)
         }
         None => {
             let s = store.new_session("assess")?;
             let seq = s.next_seq()?;
             let pre = s.take_prefix(seq, scene);
             let orig = s.import_original(&src, &pre)?;
-            (s, pre, orig.clone(), orig)
+            (s, pre, orig.clone(), orig, None)
         }
     };
     let seq = prefix
@@ -846,10 +847,9 @@ fn assess_cmd(
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(1);
     let decoded = audio::load_16k(&feed)?;
-    let norm = if feed.file_name().map(|f| f.to_string_lossy().ends_with(".16k.wav")) == Some(true) {
-        feed.clone()
-    } else {
-        session.write_norm_wav(&prefix, &decoded.samples, decoded.sample_rate)?
+    let norm = match pre_norm {
+        Some(p) => p,
+        None => session.write_norm_wav(&prefix, &decoded.samples, decoded.sample_rate)?,
     };
 
     let engines = Engines::load(cfg.clone())?;

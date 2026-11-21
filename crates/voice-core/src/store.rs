@@ -120,19 +120,20 @@ impl Store {
     /// 调用方继续走“新建 assess 会话”的老路径。
     pub fn session_for_take(&self, path: &Path) -> Option<(Session, String)> {
         let canon = path.canonicalize().ok()?;
-        let sessions = self.root.canonicalize().ok()?.join("sessions");
-        let rel = canon.strip_prefix(&sessions).ok()?;
+        let root_canon = self.root.canonicalize().ok()?;
+        let rel = canon.strip_prefix(&root_canon).ok()?;
         let parts: Vec<String> = rel
             .components()
             .map(|c| c.as_os_str().to_string_lossy().to_string())
             .collect();
-        // 只认 `<date>/<id>/takes/<file>` 四段
-        if parts.len() != 4 || parts[2] != "takes" {
+        // 只认 `<root>/sessions/<date>/<id>/takes/<file>`；目录从 self.root 拼，
+        // 避免 canonicalize 带来的 `\\?\` 前缀泄漏到 evidence 路径里
+        if parts.len() != 5 || parts[0] != "sessions" || parts[3] != "takes" {
             return None;
         }
-        let (date, sid, file) = (&parts[0], &parts[1], &parts[3]);
+        let (date, sid, file) = (&parts[1], &parts[2], &parts[4]);
         let prefix = prefix_of_take_file(file)?;
-        let dir = sessions.join(date).join(sid);
+        let dir = self.root.join("sessions").join(date).join(sid);
         if !dir.is_dir() {
             return None;
         }

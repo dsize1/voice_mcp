@@ -565,10 +565,12 @@ impl VoiceServer {
             let reuse = app.store.session_for_take(&src);
             let (session, prefix, orig, feed) = match reuse {
                 Some((s, pre)) => {
+                    // 喂**原始文件**：保留 source_sr / band_limited 语义（
+                    // 48 kHz 麦录不能被报成“源音频 ≤16 kHz，不要断言 /θ/ 与 /s/”）；
+                    // 已生成的 .16k.wav 只当派生证据，不覆写、不逆用。
                     let p16 = s.dir.join("takes").join(format!("{pre}.16k.wav"));
-                    // 优先吃已生成的 16k（VAD 去静音版），且不覆写 record 的派生文件
-                    let feed = if p16.is_file() { p16 } else { src.clone() };
-                    (s, pre, src.clone(), feed)
+                    let norm = if p16.is_file() { p16 } else { std::path::PathBuf::new() };
+                    (s, pre, src.clone(), (src.clone(), norm))
                 }
                 None => {
                     let s = app.store.new_session("assess")?;
@@ -578,9 +580,10 @@ impl VoiceServer {
                     let orig0 = s.import_original(&src, &pre)?;
                     let sr = audio::load_16k(&orig0)?.info.source_sr;
                     let orig = align_original_name(&s.dir, orig0, &pre, sr);
-                    (s, pre, orig.clone(), orig)
+                    (s, pre, orig.clone(), (orig.clone(), std::path::PathBuf::new()))
                 }
             };
+            let (feed, pre_norm) = feed;
             let seq = prefix
                 .split('_')
                 .next()
@@ -592,10 +595,10 @@ impl VoiceServer {
                 .unwrap_or_else(|| session.kind.clone());
 
             let decoded = audio::load_16k(&feed)?;
-            let norm = if feed.file_name().map(|f| f.to_string_lossy().ends_with(".16k.wav")) == Some(true) {
-                feed.clone()
-            } else {
+            let norm = if pre_norm.as_os_str().is_empty() {
                 session.write_norm_wav(&prefix, &decoded.samples, decoded.sample_rate)?
+            } else {
+                pre_norm
             };
 
             let lang = p.lang.clone().unwrap_or_else(|| "auto".into());

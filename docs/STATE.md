@@ -4,8 +4,8 @@
 
 ## 一句话现状
 
-**P0/P1/P2(1+2)/P3-Skill 已完成并在真机跑通；下一步是 P3 的"完整训练闭环"实跑。**
-`crates` 5000+ 行 Rust，61 个单测 + 7 个录音回归用例全绿，零编译警告，已推送 origin/main。
+**P3 真机训练闭环已完成并在 2026-11-21 实跑验收（含 5 个真实缺陷修复）；下一步是 P4 跟读素材库。**
+`crates` 5400+ 行 Rust，69 个单测 + 8 个录音回归用例全绿，零编译警告。
 
 ## 已实测的关键数字（别再猜）
 
@@ -49,23 +49,29 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 2. Skill 需要 `/reload`（或重启 pi）才出现在会话里；`pi -p "列出可用 skills"` 可验证。
 3. 没有麦克风时一切文件路径功能仍可用（`assess path=/stt`），只是不能 `record`。
 
-## P3 待办（真机训练闭环）
+## P3 真机训练闭环（2026-11-21 已实跑验收）
 
-- [ ] 1. `/reload` → 确认 `mcp__voice__*` 8 个工具与 2 个 Skill 都在
-- [ ] 2. 建档：3 句诊断（`I think this is the third time.` / `He lives in a very small village.` / `Would you like a cup of tea?`）+ 30–60 s 自由说 → 写 `$VOICE_HOME/learner.json`
-- [ ] 3. 单轮训练：`synthesize(slow_too, play)` → `record(silence_sec=2.2)` → `assess(reference=句)` → 只挑 1 个问题 → 重读 `scene=retry` 对比
-- [ ] 4. 验证留证完整：`sessions/<date>/<id>/takes/` 里同前缀应有 `.raw48000.wav` + `.16k.wav` + `.asr.json` + `.metrics.json` + `.md`
-   （assess 已改为就地写回源 take，不再另开 assess 会话；外部文件仍新建会话）
-- [ ] 5. 验证 Skill 遵守铁律：`hint=unclear` 不下结论、`likely_asr_miss` 不指责、一次只 1–2 个问题
-- [ ] 6. 修掉实跑中暴露的问题（这是 P3 的主要产出）
+设备：EDIFIER W820NB（蓝牙 HFP，48 kHz 单声道）。留证：`sessions/2026-11-21/*_drill/takes/`。
+会话小结：`sessions/2026-11-21/233336_drill/session.md`。建档：`D:/voice_data/learner.json`。
+
+- [x] 1. `mcp__voice__*` 8 个工具与 2 个 Skill 都在（`pi -p "列出可用 skills"` 实测 3 个 skill，含 archify）
+- [x] 2. 建档：3 句诊断（accuracy 1.00 / 1.00 / 1.00）+ retry → `learner.json`（band 6.0，confidence low：未做自由说）
+- [x] 3. 单轮训练：`synthesize(slow_too, play)` → `record(silence_sec=2.2)` → `assess(reference=句)` → 只报 1 条（语速 214.7 wpm）→ `retry` 对比（192.7 wpm，断点 0.96 s）
+- [x] 4. 留证完整：同一 take 目录内 `.raw48000.wav` + `.16k.wav` + `.asr.json` + `.metrics.json` + `.md`（+ `.capture.json`）；重复评测留 `.metrics.prev.json`
+- [x] 5. Skill 铁律在实测中全部生效：`unclear` 不下结论、whisper（`timestamp_alignment=missing`）不报秒数、单轮只报 1 条
+- [x] 6. 实跑暴露的问题已修（共 5 个）：`slow_too` 语速对、assess 证据分裂、中文 panic、16 kHz 派生污染 `band_limited`、英美拼写变体与 ASR 伪缩略误报
+
+**仍缺**：自由说 30–60 s（用户跳过）→ `band_estimate` 置信度仍是 low；`record` 的 8 s 起始等待不可配置（真机连说 4 次“开始”才进齐）。
 
 ## 已知债务（详见 ADR-0008）
 
 S1 级已全部偿还。剩余主要项：
 D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D12 韵律与 GOP（ADR-0007，触发：≥10 次真实训练）
 D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（有 JSON 用例但无合成 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
+**新增** D39 `record` 起始等待（8 s）不可配置 → 真机常见“说了但没开始”误报 · D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）
 
 ## 下一批工作（用户已确认顺序）
 
-1. **P3 真机训练闭环**（本会话的下一步）
+1. ~~**P3 真机训练闭环**~~（2026-11-21 完成）
 2. P4 跟读素材库（ADR-0009）：用户会先写脚本拉全 NCE1–4 资源，然后一起做 `bank ingest/list/show/drill`
+3. 补一次自由说 30–60 s（把 `learner.json` 的 band 置信度从 low 拉起来）

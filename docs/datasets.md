@@ -67,3 +67,44 @@ speakers: train 125 / test 125 / 并集 250 / 交集 0
 对照：`S` 2.77%、`T` 2.90%、`W` 2.54% —— **/θ/ 的错读率是 /s/ 的 2.8 倍**，
 与 `skills/ielts-speaking-coach/references/phoneme-map.md` 里"`theta_to_s` 可理解度影响最高"一致。
 这张表就是 `tags` 权重（S0b）的数据依据，不再靠经验拍。
+
+## S0b：tag 权重（已落地）
+
+`tools/derive_tag_weights.py` 把上面的音素统计聚合到我们的 tag 上，产出
+`docs/tag-weights.json`，Rust 侧常量表在 `voice-core::bank::TAG_WEIGHTS`，
+并有单测 `tag_weights_match_derived_artifact` 保证两侧不漂移。
+
+```
+weight = rate(本数据集实测错读率) × impact(phoneme-map 的可理解度分级)
+```
+
+| tag | rate | impact | **weight** | 样本量 |
+|---|---|---|---|---|
+| `theta_to_s` | 7.70% | 1.0 | **0.0770** | 649 |
+| `r_to_l` | 4.11% | 1.0 | 0.0411 | 6 087 |
+| `ae_to_e` | 4.90% | 0.6 | 0.0294 | 5 393 |
+| `final_consonant_drop` | 2.59% | 1.0 | 0.0259 | 20 426 |
+| `short_long_vowel` | 4.28% | 0.6 | 0.0257 | 19 895 |
+| `w_to_v` / `v_to_w` | 2.54% / 2.47% | 1.0 | 0.0254 / 0.0247 | 3 148 / 1 617 |
+| `eth_to_z` | 2.38% | 0.8 | 0.0190 | 3 027 |
+| `s_ending` / `ed_ending` | 3.23% / 3.19% | 0.6 | 0.0194 / 0.0192 | 6 759 / 11 649 |
+| `linking_missing` / `question_rise` / `tone_flat` / `fragment` | — | — | **0** | 无音素级证据 |
+
+**为什么乘 impact 而不只用 rate**：so762 量的是"错了几次"，不是"错了有多严重"。
+`/v/→/w/` 只占 2.47%，但 `very→wery` 会直接变词；只按 rate 排会把它排到最后。
+
+**为什么无证据的 tag 权重为 0**：`linking_missing`、`question_rise` 这类无法从音素错读率推导，
+给它们编一个权重就是编造依据。它们仍然可以被 `--tag` 显式选中，只是不参与加权排序。
+
+### 用法
+
+```bash
+# 默认按权重排序（同一批 tag 命中的，优先高权重）
+voice-cli bank pick --tag theta_to_s --tag s_ending --tag ed_ending --level 2 --limit 4
+# 退回旧的“命中个数”排序（对比用）
+voice-cli bank pick --tag theta_to_s --tag s_ending --tag ed_ending --level 2 --no-weighted
+```
+
+实测差异：旧排序第 4 条是 `nce1/079/008`（`eth_to_z+ed_ending+s_ending+linking_missing`，无 /θ/），
+新排序换成 `nce1/087/010`（`theta_to_s+s_ending+linking_missing`）——
+权重把"`linking_missing` 无证据 → 0 分"和"/θ/ 权重最高"都算进去了。

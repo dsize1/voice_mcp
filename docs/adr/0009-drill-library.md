@@ -214,3 +214,11 @@ voice-cli bank show <id> / bank drill <id>
 - `Learner.drill_queue` 支持 `{"bank_id": "..."}`，向后兼容内联 `text`
 - Skill 侧：第 1.5 节新增"素材库怎么用"，第 3 节把 ④ 的 `scene` 改为 `bank`，
   第 9 节作业句必须给 `bank_id` 或示范音路径
+
+## S0b：tag 权重来自真实错读统计（2026-11-22）
+
+原 `bank pick` 的排序是"命中几个 tag"，隐含假设所有音素难点等价。
+现改为 `Σ tag 权重`，权重来自 speechocean762 的音素级标注（详见 `docs/datasets.md`）：
+
+`weight = 实测错读率 × 可理解度影响`；无音素级证据的 tag（`linking_missing` / `question_rise` / …）权重为 0，
+不参与排序但可显式选用。`--no-weighted` 可退回旧行为做 A/B。

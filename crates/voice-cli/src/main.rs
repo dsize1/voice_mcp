@@ -199,6 +199,9 @@ enum BankCmd {
         /// 可复现洗牌
         #[arg(long)]
         seed: Option<u64>,
+        /// 按 tag 实测权重排序（默认开）；关掉则退回“命中几个 tag”
+        #[arg(long)]
+        no_weighted: bool,
         /// 连导语/片段一起给（默认排除）
         #[arg(long)]
         allow_noise: bool,
@@ -236,8 +239,10 @@ fn main() -> Result<()> {
             BankCmd::Show { id } => bank_show(&cfg, &id),
             BankCmd::Drill { id, quiet } => bank_drill(&cfg, &id, quiet),
             BankCmd::Stats => bank_stats(&cfg),
-            BankCmd::Pick { tags, level, book, limit, offset, seed, allow_noise } => {
-                bank_pick(&cfg, tags, level, book.as_deref(), limit, offset, seed, allow_noise)
+            BankCmd::Pick { tags, level, book, limit, offset, seed, allow_noise, no_weighted } => {
+                bank_pick(
+                    &cfg, tags, level, book.as_deref(), limit, offset, seed, allow_noise, !no_weighted,
+                )
             }
             BankCmd::Retag => {
                 let n = voice_core::bank::retag(Path::new(&cfg.data_dir))?;
@@ -1318,6 +1323,7 @@ fn bank_pick(
     offset: usize,
     seed: Option<u64>,
     allow_noise: bool,
+    weighted: bool,
 ) -> Result<()> {
     let home = Path::new(&cfg.data_dir);
     let q = voice_core::bank::PickQuery {
@@ -1331,6 +1337,7 @@ fn bank_pick(
         },
         limit,
         offset,
+        weighted,
         seed,
     };
     let picked = voice_core::bank::pick(home, &q)?;
@@ -1347,6 +1354,9 @@ fn bank_pick(
                 "wpm": f1(e.wpm),
                 "dur": f2(e.dur),
                 "tags": e.tags,
+                "tag_weights": e.tags.iter().map(|t| serde_json::json!({
+                    "tag": t, "weight": f3(voice_core::bank::tag_weight(t))
+                })).collect::<Vec<_>>(),
                 "audio": e.src,
             })).collect::<Vec<_>>(),
         }))?

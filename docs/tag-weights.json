@@ -1,0 +1,242 @@
+{
+  "source": {
+    "dataset": "mispeech/speechocean762",
+    "revision": "06385584fad212b26134c656fdd3ccf9f093f33e",
+    "rows": 5000,
+    "phone_tokens": 94445,
+    "mispronounced": 3403,
+    "baseline_rate": 0.036,
+    "note": "weight = rate(本数据集实测错读率) × impact(phoneme-map 的可理解度分级)；rate 用成员音素按出现次数加权；无音素级证据的 tag 权重为 0，不参与排序"
+  },
+  "tags": {
+    "ae_to_e": {
+      "rate": 0.049,
+      "impact": 0.6,
+      "weight": 0.0294,
+      "tokens": 5393,
+      "mispronounced": 264,
+      "phones": [
+        "AE",
+        "EH"
+      ],
+      "lift": 1.36
+    },
+    "cluster_simplify": {
+      "rate": 0.0291,
+      "impact": 0.6,
+      "weight": 0.0175,
+      "tokens": 4222,
+      "mispronounced": 123,
+      "phones": [
+        "CH",
+        "JH",
+        "K",
+        "SH"
+      ],
+      "lift": 0.81
+    },
+    "ed_ending": {
+      "rate": 0.0319,
+      "impact": 0.6,
+      "weight": 0.0192,
+      "tokens": 11649,
+      "mispronounced": 372,
+      "phones": [
+        "D",
+        "T"
+      ],
+      "lift": 0.89
+    },
+    "eth_to_z": {
+      "rate": 0.0238,
+      "impact": 0.8,
+      "weight": 0.019,
+      "tokens": 3027,
+      "mispronounced": 72,
+      "phones": [
+        "DH"
+      ],
+      "lift": 0.66
+    },
+    "final_consonant_drop": {
+      "rate": 0.0259,
+      "impact": 1.0,
+      "weight": 0.0259,
+      "tokens": 20426,
+      "mispronounced": 530,
+      "phones": [
+        "B",
+        "D",
+        "F",
+        "G",
+        "K",
+        "P",
+        "T"
+      ],
+      "lift": 0.72
+    },
+    "l_dark": {
+      "rate": 0.036,
+      "impact": 0.6,
+      "weight": 0.0216,
+      "tokens": 3642,
+      "mispronounced": 131,
+      "phones": [
+        "L"
+      ],
+      "lift": 1.0
+    },
+    "n_to_ng": {
+      "rate": 0.0357,
+      "impact": 0.45,
+      "weight": 0.0161,
+      "tokens": 7113,
+      "mispronounced": 254,
+      "phones": [
+        "N",
+        "NG"
+      ],
+      "lift": 0.99
+    },
+    "r_to_l": {
+      "rate": 0.0411,
+      "impact": 1.0,
+      "weight": 0.0411,
+      "tokens": 6087,
+      "mispronounced": 250,
+      "phones": [
+        "L",
+        "R"
+      ],
+      "lift": 1.14
+    },
+    "s_ending": {
+      "rate": 0.0323,
+      "impact": 0.6,
+      "weight": 0.0194,
+      "tokens": 6759,
+      "mispronounced": 218,
+      "phones": [
+        "S",
+        "Z"
+      ],
+      "lift": 0.9
+    },
+    "short_long_vowel": {
+      "rate": 0.0428,
+      "impact": 0.6,
+      "weight": 0.0257,
+      "tokens": 19895,
+      "mispronounced": 852,
+      "phones": [
+        "AW",
+        "AY",
+        "EY",
+        "IH",
+        "IY",
+        "OW",
+        "OY",
+        "UH",
+        "UW"
+      ],
+      "lift": 1.19
+    },
+    "theta_to_s": {
+      "rate": 0.077,
+      "impact": 1.0,
+      "weight": 0.077,
+      "tokens": 649,
+      "mispronounced": 50,
+      "phones": [
+        "TH"
+      ],
+      "lift": 2.14
+    },
+    "v_to_w": {
+      "rate": 0.0247,
+      "impact": 1.0,
+      "weight": 0.0247,
+      "tokens": 1617,
+      "mispronounced": 40,
+      "phones": [
+        "V"
+      ],
+      "lift": 0.69
+    },
+    "w_to_v": {
+      "rate": 0.0254,
+      "impact": 1.0,
+      "weight": 0.0254,
+      "tokens": 3148,
+      "mispronounced": 80,
+      "phones": [
+        "W"
+      ],
+      "lift": 0.71
+    },
+    "linking_missing": {
+      "rate": 0.0,
+      "tokens": 0,
+      "mispronounced": 0,
+      "phones": [],
+      "lift": 0.0,
+      "no_evidence": true
+    },
+    "schwa_missing": {
+      "rate": 0.0,
+      "tokens": 0,
+      "mispronounced": 0,
+      "phones": [],
+      "lift": 0.0,
+      "no_evidence": true
+    },
+    "stress_misplace": {
+      "rate": 0.0,
+      "tokens": 0,
+      "mispronounced": 0,
+      "phones": [],
+      "lift": 0.0,
+      "no_evidence": true
+    },
+    "tone_flat": {
+      "rate": 0.0,
+      "tokens": 0,
+      "mispronounced": 0,
+      "phones": [],
+      "lift": 0.0,
+      "no_evidence": true
+    },
+    "question_rise": {
+      "rate": 0.0,
+      "tokens": 0,
+      "mispronounced": 0,
+      "phones": [],
+      "lift": 0.0,
+      "no_evidence": true
+    },
+    "fragment": {
+      "rate": 0.0,
+      "tokens": 0,
+      "mispronounced": 0,
+      "phones": [],
+      "lift": 0.0,
+      "no_evidence": true
+    },
+    "lesson_header": {
+      "rate": 0.0,
+      "tokens": 0,
+      "mispronounced": 0,
+      "phones": [],
+      "lift": 0.0,
+      "no_evidence": true
+    },
+    "instruction": {
+      "rate": 0.0,
+      "tokens": 0,
+      "mispronounced": 0,
+      "phones": [],
+      "lift": 0.0,
+      "no_evidence": true
+    }
+  }
+}

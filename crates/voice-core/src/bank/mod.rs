@@ -205,6 +205,44 @@ pub fn tags_for(text: &str) -> Vec<String> {
     out
 }
 
+/// tag 权重 = **实测错读率** × **可理解度影响**。
+///
+/// 来源（由 `tools/derive_tag_weights.py` 生成，`docs/tag-weights.json` 有完整溯源）：
+/// - rate：speechocean762（5 000 句 / 250 名普通话母语者）音素级 mispronunciations 统计，
+///   tag 的成员音素按出现次数加权（基线错读率 3.60%，94 445 个 token）
+/// - impact：`references/phoneme-map.md` 的可理解度分级（high=1.0 / 0.8 / 0.6 / 0.45）
+///
+/// 为什么不只用 rate：so762 量的是"错了多少次"，不是"错了有多严重"。
+/// `/v/→/w/` 在母语者里只 2.47%，但一旦错 `very→wery` 直接变词，影响是 high。
+/// 为什么不只用 impact：那又会把"罕见但严重"的缺点放大成噪声。
+///
+/// 第三列是样本量（音素 token 数），用于判断权重是否可信；<1000 的 tag 建议保持默认。
+pub const TAG_WEIGHTS: &[(&str, f32, u32)] = &[
+    ("theta_to_s", 0.0770, 649),            // rate 7.70% × impact 1.0（lift 2.14x）
+    ("r_to_l", 0.0411, 6087),               // rate 4.11% × impact 1.0（lift 1.14x）
+    ("ae_to_e", 0.0294, 5393),              // rate 4.90% × impact 0.6（lift 1.36x）
+    ("final_consonant_drop", 0.0259, 20426),// rate 2.59% × impact 1.0（lift 0.72x）
+    ("short_long_vowel", 0.0257, 19895),    // rate 4.28% × impact 0.6（lift 1.19x）
+    ("w_to_v", 0.0254, 3148),               // rate 2.54% × impact 1.0（lift 0.71x）
+    ("v_to_w", 0.0247, 1617),               // rate 2.47% × impact 1.0（lift 0.69x）
+    ("l_dark", 0.0216, 3642),               // rate 3.60% × impact 0.6（lift 1.00x）
+    ("s_ending", 0.0194, 6759),             // rate 3.23% × impact 0.6（lift 0.90x）
+    ("ed_ending", 0.0192, 11649),           // rate 3.19% × impact 0.6（lift 0.89x）
+    ("eth_to_z", 0.0190, 3027),             // rate 2.38% × impact 0.8（lift 0.66x）
+    ("cluster_simplify", 0.0175, 4222),     // rate 2.91% × impact 0.6（lift 0.81x）
+    ("n_to_ng", 0.0161, 7113),              // rate 3.57% × impact 0.45（lift 0.99x）
+];
+
+/// 查 tag 权重；没有实测证据的 tag（`linking_missing` / `question_rise` / `tone_flat` …）
+/// 返回 0，**不参与加权排序**——宁可不排，也不编造依据。
+pub fn tag_weight(tag: &str) -> f32 {
+    TAG_WEIGHTS
+        .iter()
+        .find(|(t, _, _)| *t == tag)
+        .map(|(_, w, _)| *w)
+        .unwrap_or(0.0)
+}
+
 /// 文件名/标题 → 稳定 slug（小写、非字母数字折成 '-'）。
 pub fn slug(s: &str) -> String {
     let mut out = String::new();
@@ -746,7 +784,9 @@ pub struct PickQuery {
     pub exclude_tags: Vec<String>,
     pub limit: usize,
     pub offset: usize,
-    /// Some(seed) → 可复现的洗牌；None → 按 (命中标签数↓, level↑, id↑) 稳定排序
+    /// true（默认）→ 按 tag 权重之和排序；false → 退回"命中几个 tag"
+    pub weighted: bool,
+    /// Some(seed) → 可复现的洗牌；None → 按 (权重↓, level↑, id↑) 稳定排序
     pub seed: Option<u64>,
 }
 
@@ -763,6 +803,7 @@ impl Default for PickQuery {
             ],
             limit: 5,
             offset: 0,
+            weighted: true,
             seed: None,
         }
     }
@@ -784,7 +825,7 @@ fn shuffle_key(id: &str, seed: u64) -> u64 {
 /// 按 focus 取材。命中 tags 越多越靠前；同分按 level 升序、再按 id（或 seed 洗牌）。
 pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
     let idx = read_index(home)?;
-    let mut scored: Vec<(usize, &BankEntry, u64)> = Vec::new();
+    let mut scored: Vec<(f32, usize, &BankEntry, u64)> = Vec::new();
     for e in &idx {
         if let Some(lv) = q.level {
             if e.level != lv {
@@ -799,20 +840,29 @@ pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
         if q.exclude_tags.iter().any(|t| e.tags.iter().any(|x| x == t)) {
             continue;
         }
-        let hits = q.tags.iter().filter(|t| e.tags.iter().any(|x| x == *t)).count();
+        let mut score = 0.0f32;
+        let mut hits = 0usize;
+        for t in &q.tags {
+            if e.tags.iter().any(|x| x == t) {
+                hits += 1;
+                score += if q.weighted { tag_weight(t) } else { 1.0 };
+            }
+        }
         if !q.tags.is_empty() && hits == 0 {
             continue;
         }
-        scored.push((hits, e, shuffle_key(&e.id, q.seed.unwrap_or(0))));
+        scored.push((score, hits, e, shuffle_key(&e.id, q.seed.unwrap_or(0))));
     }
     scored.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then(a.1.level.cmp(&b.1.level))
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.1.cmp(&a.1))
+            .then(a.2.level.cmp(&b.2.level))
             .then_with(|| {
                 if q.seed.is_some() {
-                    a.2.cmp(&b.2)
+                    a.3.cmp(&b.3)
                 } else {
-                    a.1.id.cmp(&b.1.id)
+                    a.2.id.cmp(&b.2.id)
                 }
             })
     });
@@ -820,7 +870,7 @@ pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
         .into_iter()
         .skip(q.offset)
         .take(q.limit)
-        .map(|(_, e, _)| e.clone())
+        .map(|(_, _, e, _)| e.clone())
         .collect())
 }
 
@@ -983,6 +1033,48 @@ mod tests {
         assert_eq!(a, b);
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn weighted_pick_prefers_high_rate_tags() {
+        // theta_to_s 权重 0.0770 > s_ending+ed_ending+n_to_ng (0.0194+0.0192+0.0161)
+        let q = PickQuery {
+            tags: vec![
+                "theta_to_s".into(),
+                "s_ending".into(),
+                "ed_ending".into(),
+                "n_to_ng".into(),
+            ],
+            weighted: true,
+            ..Default::default()
+        };
+        assert!(tag_weight("theta_to_s") > tag_weight("s_ending") + tag_weight("ed_ending") + tag_weight("n_to_ng"));
+        // 没证据的 tag 权重必须是 0（否则等于编造依据）
+        assert_eq!(tag_weight("question_rise"), 0.0);
+        assert_eq!(tag_weight("linking_missing"), 0.0);
+        assert_eq!(q.weighted, true);
+    }
+
+    #[test]
+    fn tag_weights_match_derived_artifact() {
+        // docs/tag-weights.json 由 tools/derive_tag_weights.py 从 so762 生成；
+        // 这里有漂移就说明"代码里的权重"和"数据推导出的权重"不一致。
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/tag-weights.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读不到 {}: {e}", path.display()));
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let tags = v["tags"].as_object().expect("tags 字段");
+        for (tag, w, _n) in TAG_WEIGHTS {
+            let got = tags
+                .get(*tag)
+                .and_then(|x| x["weight"].as_f64())
+                .unwrap_or_else(|| panic!("artifact 里缺 tag {tag}"));
+            assert!(
+                (got - *w as f64).abs() < 1e-4,
+                "{tag}: 代码 {w} vs artifact {got}"
+            );
+        }
     }
 
     #[test]

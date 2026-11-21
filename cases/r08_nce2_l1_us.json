@@ -1,0 +1,24 @@
+{
+  "id": "r08_nce2_l1_us",
+  "note": "NCE2 L1 美音原声（24 kHz MP3，78.5 s，18 行 LRC 文本为英式拼写）。锁住两件事：1) 英美拼写变体（theatre/theater）不得被判成发音问题；2) ASR 把 `did not`/`could not` 糊成非法缩写（did't/could't）时不得产生「漏读 + 替换」两条错误。12 条 issue 应全部是导语 extra（导语不在 LRC 文本里）。",
+  "audio": "${VOICE_CASES_DIR}/nce2_l1_us.mp3",
+  "reference_file": "${VOICE_CASES_DIR}/nce2_l1_us_ref.txt",
+  "lang": "en",
+  "expect": {
+    "band_limited": false,
+    "timestamp_alignment": "exact",
+    "accuracy": { "gte": 0.88, "lte": 0.95 },
+    "issue_count": { "gte": 10, "lte": 14 },
+    "issues": [
+      { "kind": "extra", "said": "lesson" },
+      { "kind": "extra", "said": "conversation" }
+    ],
+    "absent_issues": [
+      { "kind": "substitution", "reference": "theatre" },
+      { "kind": "substitution", "reference": "theater" },
+      { "kind": "substitution", "reference": "not" },
+      { "kind": "omitted", "reference": "did" },
+      { "kind": "omitted", "reference": "could" }
+    ]
+  }
+}

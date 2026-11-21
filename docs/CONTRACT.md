@@ -104,6 +104,12 @@ sessions/<date>/<hhmmss>_drill/takes/
    - `unclear` → **必须**说明"可能是发音问题，也可能是识别误差"，并提出重录或对照示范音
 6. `limitations` 里出现的每一条都要反映到措辞上（例如 `band_limited` 时不要断言 /θ/ vs /s/）。
 7. `accuracy` 只用于**纵向趋势对比**，不要换算成雅思分数对外承诺。
+8. **规范化会吃掉两类“假错误”**（ADR-0006 补充）：
+   - **英美拼写变体**：`theatre↔theater`、`colour↔color`、`realise↔realize` 等（显式表 `US_UK_VARIANTS`，按同词处理）。
+     教材文本常是英式、音轨是美音，不归并就会把标准发音报成“读错了”。
+   - **ASR 伪缩略**：`did't`/`could't` 这类不存在的词形（识别引擎把 `did not` 糊成一个 token），
+     自动展开成 `did + not`，不得报成“漏读 + 替换”两条错误。合法缩略仍走缩写表。
+   所以：**看到 `accuracy` 下降时，先看 `issues` 是否集中在导语/拼写变体/功能词**，再决定要不要当真。
 
 ---
 

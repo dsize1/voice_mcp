@@ -91,8 +91,91 @@ fn expand_contraction(w: &str) -> Vec<String> {
     if let Some(v) = CONTRACTIONS.iter().find(|(k, _)| *k == lower) {
         return v.1.iter().map(|s| s.to_string()).collect();
     }
-    vec![lower]
+    // ASR 伪词修复：`did't` / `could't` 这类不规范缩写（正确形是 didn't/couldn't），
+    // 是识别引擎把 `did not` 糊成一个 token 的产物。若对应的规范形不在表里，
+    // 按 `{base} + not` 展开，避免被当成“漏读 + 替换”两条错误。
+    if let Some(base) = lower.strip_suffix("'t") {
+        let is_word = !base.is_empty() && base.chars().all(|c| c.is_ascii_alphabetic());
+        if is_word {
+            return vec![base.to_string(), "not".to_string()];
+        }
+    }
+    vec![canonical_variant(&lower)]
 }
+
+/// 英/美拼写变体 → 统一形（否则《新概念》的英式文本配上美语音轨时，
+/// `theatre` 会被当成把 `theater` 读错 —— 学员根本没读）。
+fn canonical_variant(w: &str) -> String {
+    US_UK_VARIANTS
+        .iter()
+        .find(|(a, b)| *a == w || *b == w)
+        .map(|(a, _)| a.to_string())
+        .unwrap_or_else(|| w.to_string())
+}
+
+/// 英美拼写变体对：(统一形, 变体)。两边都映射到第一个。
+///
+/// 故意用**显式表**而不是 `-re→-er` 之类规则：规则会误伤 more/before/nature 这类两边相同的词。
+/// 新增词时注意：两个词必须在**口语上同音**，否则不能归并。
+static US_UK_VARIANTS: &[(&str, &str)] = &[
+    // -re / -er
+    ("theater", "theatre"),
+    ("center", "centre"),
+    ("meter", "metre"),
+    ("liter", "litre"),
+    ("fiber", "fibre"),
+    ("somber", "sombre"),
+    ("maneuver", "manoeuvre"),
+    // -or / -our
+    ("color", "colour"),
+    ("favor", "favour"),
+    ("honor", "honour"),
+    ("labor", "labour"),
+    ("neighbor", "neighbour"),
+    ("behavior", "behaviour"),
+    ("humor", "humour"),
+    ("rumor", "rumour"),
+    ("vapor", "vapour"),
+    ("endeavor", "endeavour"),
+    ("flavor", "flavour"),
+    ("harbor", "harbour"),
+    ("armor", "armour"),
+    // -ize / -ise
+    ("realize", "realise"),
+    ("organize", "organise"),
+    ("recognize", "recognise"),
+    ("apologize", "apologise"),
+    ("criticize", "criticise"),
+    ("memorize", "memorise"),
+    ("summarize", "summarise"),
+    ("analyze", "analyse"),
+    ("paralyze", "paralyse"),
+    ("specialize", "specialise"),
+    // -se / -ce
+    ("defense", "defence"),
+    ("offense", "offence"),
+    ("license", "licence"),
+    ("practice", "practise"),
+    // 双写 / 其他
+    ("traveling", "travelling"),
+    ("traveled", "travelled"),
+    ("canceled", "cancelled"),
+    ("labeled", "labelled"),
+    ("modeling", "modelling"),
+    ("jewelry", "jewellery"),
+    ("program", "programme"),
+    ("catalog", "catalogue"),
+    ("dialog", "dialogue"),
+    ("gray", "grey"),
+    ("plow", "plough"),
+    ("tire", "tyre"),
+    ("curb", "kerb"),
+    ("check", "cheque"),
+    ("aluminum", "aluminium"),
+    ("mom", "mum"),
+    ("math", "maths"),
+    ("airplane", "aeroplane"),
+];
 
 fn number_words(digits: &str) -> Vec<String> {
     const SMALL: [&str; 20] = [
@@ -166,6 +249,12 @@ static CONTRACTIONS: &[(&str, &[&str])] = &[
     ("wouldn't", &["would", "not"]),
     ("couldn't", &["could", "not"]),
     ("shouldn't", &["should", "not"]),
+    ("ain't", &["is", "not"]),
+    ("shan't", &["shall", "not"]),
+    ("daren't", &["dare", "not"]),
+    ("oughtn't", &["ought", "not"]),
+    ("mustn't", &["must", "not"]),
+    ("needn't", &["need", "not"]),
     ("gonna", &["going", "to"]),
     ("wanna", &["want", "to"]),
     ("gotta", &["got", "to"]),
@@ -185,8 +274,28 @@ mod tests {
     }
 
     #[test]
-    fn strips_punctuation_and_case() {
-        assert_eq!(words("Hello, world!  Really?"), vec!["hello", "world", "really"]);
+    fn repairs_pseudo_contractions() {
+        // ASR 把 `did not` 糊成不存在的 `did't`，不能变成两条错误
+        assert_eq!(words("I did't enjoy it"), vec!["i", "did", "not", "enjoy", "it"]);
+        assert_eq!(words("I could't hear"), vec!["i", "could", "not", "hear"]);
+        // 合法缩写仍然走表
+        assert_eq!(words("I didn't go"), vec!["i", "did", "not", "go"]);
+        // ain't 显式收录，不会落到伪词规则
+        assert_eq!(words("I ain't sure"), vec!["i", "is", "not", "sure"]);
+    }
+
+    #[test]
+    fn normalizes_us_uk_spellings() {
+        assert_eq!(words("theatre"), words("theater"));
+        assert_eq!(words("colour"), words("color"));
+        assert_eq!(words("realise"), words("realize"));
+        assert_eq!(words("programme"), words("program"));
+        // 两边写法相同的词不能被误伤
+        assert_eq!(words("more before nature"), vec!["more", "before", "nature"]);
+    }
+
+    #[test]
+    fn strips_punctuation_and_case() {        assert_eq!(words("Hello, world!  Really?"), vec!["hello", "world", "really"]);
     }
 
     #[test]

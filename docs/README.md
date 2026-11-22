@@ -22,8 +22,8 @@
 | [dataset-pins.json](dataset-pins.json) | 数据集指纹（revision + sha256），供复验 | ✅ |
 | [STATE.md](STATE.md) | 交接页：现状 / 实测数字 / 待办 / 硬件障碍 | Living |
 | [adr/0007-prosody-and-gop.md](adr/0007-prosody-and-gop.md) | 韵律与 GOP（**GOP 已实现**，韵律待做） | 部分完成 |
-| [adr/0008-technical-debt.md](adr/0008-technical-debt.md) | **技术欠债登记**（33 条债 + 触发条件 + 偿付顺序） | Living |
-| [adr/0009-drill-library.md](adr/0009-drill-library.md) | 跟读素材库（Drill Library）与 NCE 语料接入 | Accepted（4 997 条） |
+| [adr/0008-technical-debt.md](adr/0008-technical-debt.md) | **技术欠债登记**（45 条债 + 触发条件 + 偿付顺序） | Living |
+| [adr/0009-drill-library.md](adr/0009-drill-library.md) | 跟读素材库（Drill Library）与 NCE 语料接入 | Accepted（5 007 条） |
 | [security-supply-chain.md](security-supply-chain.md) | 模型与原生库供应链校验（工具+结论） | ✅ |
 | [security-hashes.txt](security-hashes.txt) | 已知良好基线哈希 | ✅ |
 
@@ -66,11 +66,11 @@
 | 阶段 | 内容 | 验收 | 状态 |
 |---|---|---|---|
 | P0 | 环境验证：**`.m4a` 解码** ✅ / **sherpa-onnx 原生库** ✅ / **SenseVoice 真机转写** ✅ / **Kokoro 出声** ✅ / whisper 评估 / **供应链校验** ✅ | 4 个 spike 脚本跑通 | ✅ 完成 |
-| P1 | `voice-core` 7 模块 + MCP 7 工具 + `voice-cli doctor/stt/say/play/rec/watch/tts-probe` | Pi 里说话→文字→出声回环 | ✅ 完成（`record` 待麦克风） |
+| P1 | `voice-core` 7 模块 + MCP 8 工具 + `voice-cli doctor/stt/say/play/rec/watch/tts-probe` | Pi 里说话→文字→出声回环 | ✅ 完成（`record` 待麦克风） |
 | P2 | 评测层：**词级 diff** ✅ / **flow** ✅ / prosody ⏳ / **GOP（词级口径）** ✅ | 能定位到具体音素错误 | ✅ 3/4（韵律待做） |
 | P3 | `ielts-speaking-coach` Skill + learner.json + 雅思题库 | 15 分钟完整训练闭环 | ✅ 2026-11-21 真机验收 |
 | P4 | 热键听写、`record`(cpal+VAD)、CosyVoice2、HTTP、流式 | 按需 | 未开始 |
-| P4 | **跟读素材库**（[ADR-0009](adr/0009-drill-library.md)）：NCE1–4 共 276 课 → 逐句切片 + 质量门槛 | 5 项全部通过（4 997 条） | ✅ 完成 |
+| P4 | **跟读素材库**（[ADR-0009](adr/0009-drill-library.md)）：NCE1–4 共 276 课 → 逐句切片 + 质量门槛 | 5 项全部通过（5 007 条） | ✅ 完成 |
 | P4.5 | MDD 微调 + 词级 GOP + TTS 对照基线 + 混淆对信号 | so762 未见说话人：词级 AUROC 0.887 / P@FP10 0.457 | ✅ 2026-11-22 |
 
 ## 5. 硬件基线（实测）

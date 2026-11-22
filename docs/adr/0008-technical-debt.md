@@ -1,6 +1,6 @@
 # ADR-0008: 技术欠债登记（Debt Register）
 
-- 状态：Accepted（活文档，每还一条就更新）
+- 状态：Accepted（活文档，每还一条就更新；最后更新 2026-11-22：D19/D39/D45 已还，D20 部分偿还）
 - 日期：2026-11-19
 - 相关：ADR-0001（运行时路线）、ADR-0006（评测边界）、ADR-0007（韵律与 GOP）
 
@@ -48,6 +48,7 @@
 | D12 | 无 F0/重音/升降调（韵律完全空缺），`tone_flat` 这类问题只能靠人耳定性 | S2 | ADR-0007 触发条件满足 | 3–4d |
 | D13 | 中文只做**字级** diff，无拼音层 | S2 | 有中文发音诊断需求时 | 2d（引入拼音对齐） |
 | D14 | `accuracy = 1-(S+D+I)/N_ref` 对长句不公平（分母大），且不区分错误类型权重 | S3 | 用户开始练长句/Part 2 时 | 0.5d：改用 WER + 关键错误加权 |
+| D41 | 英美拼写/发音变体表 `US_UK_VARIANTS` 需人工维护，只覆盖 50 对高频词；遇到表外变体仍会误报 | 训练中 `theatre/theater` 类误报 | S3 | 出现新的表外变体误报 | 0.5d/次：按真实误报补表，并加回归用例 |
 
 ## 三、工程韧性
 
@@ -57,8 +58,9 @@
 | D16 | 无**取消/中断**：`record` 阻塞最长 30 s、`play` 阻塞到播完，都只能靠客户端超时兜底 | – | S2 | 用户抱怨"卡住没法停" | 1d：`record` 改流式 + 支持 abort |
 | D17 | 引擎加载**失败不缓存**：每次调用都会重试并重新付出加载代价（whisper 1.6 s） | `With_engines` 只缓存成功 | S3 | 出现一次引擎加载失败 | 0.5d |
 | D18 | 原生 DLL 需**手工** `cp .cache/sherpa/lib/*.dll target/release/`，忘掉就启动即崩（Windows loader 报错，没有友好提示） | README 快速开始第 3 步 | S2 | 第二次有人在这台机器上构建 | 0.5d：`build.rs` 或 cargo xtask 自动复制 |
-| D19 | 无 `rust-toolchain.toml`、无 MSRV 声明（edition 2024 → 1.85+），`Cargo.lock` 已提交 | – | S3 | 出现第二个开发环境 | 10 min |
-| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | 当前零警告，但靠自觉 | S2 | 第二次提交代码时 | 0.5d（需先解决 D21） |
+| D19 | 无 `rust-toolchain.toml`、无 MSRV 声明 | **已还**：`rust-toolchain.toml`（stable + rustfmt/clippy）+ `Cargo.toml` `rust-version = "1.99"`（实测版本；edition 2024 理论下限 1.85 未验证） | ~~S3~~ ✅已还 | – | – |
+| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | **部分偿还**：`tools/check.ps1` + `.github/workflows/ci.yml` 已就位，本地实测 97 单测 + 9 用例通过；**GitHub 上尚未首跑** | S2 | 首次 push 后确认 CI 绿 | 0.5h：跑通首轮 |
+| D45 | **没有门禁导致 HEAD 编译失败无人发现**：`{peak_dbfs:.1f}` 在 `4f57a36` 引入后陪着 3 个提交 | `cargo build --release` 报 `unknown format trait f` | ~~S1~~ ✅已还 | – | – |
 | D21 | 回归用例 | **部分偿还**：`cases/*.json` 只存断言（音频留本机，`VOICE_CASES_DIR` 指过去），`voice-cli cases` 一条命令跑全部；已覆盖 16k/48k/TTS/自由说/漏词 5 个场景。仍缺：没有**合成** fixture（正弦/噪声），CI 里无法无音频跑 decode/flow | S2 | 接 CI 前 | 2h |
 | D22 | `assess` 的 MCP 版与 CLI `assess_cmd` **逻辑重复**，两处维护 | 两个文件各 ~80 行 | S3 | 参数再变一次时 | 2h：抽到 `voice-core::pipeline` |
 | D23 | `spike` crate 在 workspace 默认成员里，`cargo build --release` 会编译 8 个二进制 | 曾提交；已用 `default-members` 修复 | ~~S3~~ ✅已还 | – | – |
@@ -69,6 +71,7 @@
 | ID | 欠债 | 级别 | 触发偿付条件 | 预估 |
 |---|---|---|---|---|
 | D25 | `manifest.jsonl` 无轮转；`sessions/` 无保留策略（ADR-0004 提过"仅保留最近 N 天派生文件"，未实现） | S3 | 数据目录 > 5 GB | 3h |
+| D40 | 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声（`accuracy` 被拉低，需人工/规则剔除） | S2 | 做批量评分/自动组卷时 | 0.5d：导语词典 + bank 入库时标 `instruction` |
 | D26 | `watch_state.json` 只增不减，源文件删除后条目仍在 | S3 | 同上 | 1h |
 | D27 | `learner.json` 的 schema 只存在于 SKILL.md 的散文里，**无代码校验、无版本迁移** | S2 | 改一次字段名时（会静默丢档案） | 2h：`voice-core::profile` + `version` 字段 + 迁移 |
 | D28 | `docs/security-hashes.txt` 覆盖不全 | ~~S3~~ ✅已还：`verify_models.py --write-baseline` 全量输出（12 个模型文件 + 3 个 DLL + 1 个轮子 = 22 条） | – | – |
@@ -83,6 +86,7 @@
 | D32 | 无 `LICENSE` 文件（README 只写了许可说明） | ~~S3~~ ✅已还 | – | – |
 | D33 | 项目级 `.pi/mcp.json`、`.pi/settings.json` 因未授信被忽略，与实际生效的全局配置存在**双份真相** | 每次 `pi mcp list` 都会提示 | S3 | 下次交接 | 1h：README 写清"哪个是权威" |
 | D38 | 分块边界仍可能切断词：超长连续朗读（无 VAD 停顿）会按 20 s 硬切，跨块的词会被拆成两条转写 | S3 | 出现长独白（Part 2）素材时 | 0.5d：块间加 0.3 s 重叠 + 末尾词去重 |
+| D39 | `record` 起始等待硬编码 8 s，真机上“人已经在说、工具报没检测到说话” | **已还**：`RecordOptions.start_timeout_sec` + CLI `--start-timeout` + MCP `start_timeout_sec`（默认仍 8，建议自由说 20） | ~~S2~~ ✅已还 | – | – |
 | D37 | 短功能词漏读目前只靠启发式（词长 ≤4 且在功能词表内）降级，没有真正做双引擎交叉验证 | S2 | 出现误判投诉或要提升英文精度 | 0.5d：`assess` 加 `cross_check=true`，对 omitted 的功能词跑 whisper 复核 |
 | D36 | 蓝牙耳机端点底噪高达 **p50 = −54.7 / p99 = −46.0 dBFS**（正常麦克风自噪约 −70 dBFS），说明设备侧 AGC/降噪在强推电平。后果：能量（intensity）维度不能用于重音判断，韵律只能靠时长 + 音高 | S2 | P2.5 韵律上线前必须定口径 | 0.5d（改为时长+音高为主，能量仅作参考并标注设备） |
 | D35 | 蓝牙耳机（A2DP 端点）在 WASAPI 下"可打开、回调在跑、数据是稀疏零值"；cpal 只枚举到该端点，无法选中未激活的 HFP 端点，只能靠文案引导用户去系统设置切换 | S2 | 有第二个蓝牙麦用户 | 1d（用 windows crate 直接走 WASAPI 端点枚举 + MMDevice 选择） |
@@ -98,8 +102,8 @@
 |---|---|---|---|
 | 1 | ~~D03 时间戳错位~~ | 已还（见第七节） | – |
 | 2 | **D07 record 实测** | 没有麦克风，短句跟读体验缺失（`mic=null`） | 硬件到位后立即 |
-| 3 | **D18 + D19 + D21** | 一组低成本工程卫生，做 CI 的前置 | 一次 0.5d 打包 |
-| 4 | **D20 CI** | 没有门禁，回归全靠自觉 | D21 之后 |
+| 3 | ~~D18 + D19 + D21~~ | D19 已还；D18 仍靠 `check.ps1` 加 PATH 缓解；D21 只差合成 fixture | – |
+| 4 | ~~D20 CI~~ | 门禁已落地（D45），待 GitHub 首跑 | 下一次 push |
 | 5 | D12/D09 韵律与 GOP | 能力提升，但需真实数据校准阈值 | ADR-0007 触发条件 |
 
 **暂不偿付**：D25/D26/D30/D31（都是"规模变大才痛"的问题），D24/D14（洁癖级）。
@@ -134,6 +138,9 @@
 | ASR 把合成词拆开造成假问题（lunchtime → lunch time） | `merge_split_compounds`：拼接后是参考词且两部分都不是独立参考词时才合并 |
 | ASR 漏掉弱读短功能词被误判成用户漏读 | `Hint::LikelyAsrMiss`（词长≤4 且在功能词表）+ severity 降为 medium，note 明确写"不能直接判定"，并要求复核 |
 | 1.0 s 静音就判句尾，刻意停顿会丢后半句 | 默认 `silence_sec` 提到 2.0，Skill 里按场景给 1.2/1.8/2.2/2.5 |
+| 没有构建门禁，HEAD 编译失败无人发现（D45） | `tools/check.ps1`（fmt → clippy -D warnings → test）+ `.github/workflows/ci.yml`；同时清掉 36 条 clippy、全仓 fmt |
+| `record` 起始等待硬编码（D39） | `start_timeout_sec` 贯通 core/CLI/MCP（默认 8，自由说建议 20） |
+| 无 toolchain/MSRV 声明（D19） | `rust-toolchain.toml`（stable + rustfmt/clippy）+ `rust-version = "1.99"`（实测） |
 
 ## 八、维护约定
 
@@ -155,3 +162,7 @@
 | **新增 D42** | 蓝牙耳机麦克风增益自动漂移（同一小时内 peak −11.8 ~ −33.5 dBFS）→ 已加绝对电平闸门与 rec 即时提示，但**无法根治**（用户侧设备行为） |
 | **新增 D43** | 音素级精确率受基率锁死（上限 0.45）；下一步方向是"可疑词定向重录"降基率，而不是继续训更大的模型 |
 | **新增 D44** | `bank` 的 tag 是关键词启发式，召回偏低（`theta_to_s` 只命中 237/4 997）；已用 so762 统计数据做权重，但覆盖仍靠人工维护变体表 |
+| **新增 D45** | 无门禁 → HEAD 编译失败 3 个提交无人发现；**已还**（`check.ps1` + CI） |
+| D19 / D39 | **已还**：toolchain+MSRV；`start_timeout_sec` 可配置 |
+| D20 | **部分偿还**：CI workflow 已写，本地门禁跑绿；GitHub 上尚未首跑 |
+| D11 / ADR-0007 触发条件 | **已满足**：`learner.json` history 12 条 → 停顿/语速阈值校准与韵律分析可以开始 |

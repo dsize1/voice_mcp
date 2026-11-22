@@ -181,11 +181,15 @@ top tags   eth_to_z 3 290 · s_ending 2 472 · linking_missing 2 338 · fragment
 ```
 
 - ingest 速度：NCE1 1m50 / NCE2 2m41 / NCE3 3m24 / NCE4 2m36（约 1.6–3.4 s/课，含整课 ASR + 逐行 VAD）
-- **可直接练**（排除 `lesson_header` / `instruction` / `fragment`）**3 384 条**
+- **可直接练**（排除 `lesson_header` / `instruction` / `fragment`）**3 368 条**（NCE 部分；加 10 条 IELTS prompt 后全库 3 378）
 - 切片首尾按 VAD 收紧：行 `t1` 到下一行 `t0` 之间的句间停顿不再被带进素材
   （收紧前抽查出现 2.38 s 尾静音，收紧后 ≤0.26 s）
 
 实现取舍（与原 ADR 的差异）：
+
+> **2026-11-22 后续**：库里新增 10 条 IELTS prompt（`corpus=ielts`、`kind=prompt`、`ref_audio=tts`），
+> 当前 `bank stats`：**entries 5 007 / quarantine 1 221 / 7.1 h**，可直接练 3 378。
+> 上文 4 997 是 NCE 全量快照，保留作为历史证据。
 
 - **`--from-url` 未实现**：项目不引外部二进制，也不引 TLS 依赖；网络拉取交给外部脚本
   （用户计划自己拉 NCE1–4），`bank ingest` 只吃本地目录。

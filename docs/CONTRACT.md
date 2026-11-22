@@ -8,7 +8,7 @@
 { "ok": false, "detail": null,    "error": "人类可读的错误原因" }
 ```
 
-工具清单（7 个）：
+工具清单（8 个）：
 
 | 工具 | 用途 | 副作用 |
 |---|---|---|
@@ -184,7 +184,8 @@ sessions/<date>/<hhmmss>_drill/takes/
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `max_sec` | number | | 录音上限，默认 30 |
-| `silence_sec` | number | | 静音多久自动停止，默认 1.0 |
+| `silence_sec` | number | | 静音多久自动停止，默认 **2.0**（配置 `record_silence_sec`） |
+| `start_timeout_sec` | number | | 开始前等说话的超时，默认 8，最长建议 20（自由说/长独白） |
 | `transcribe` | bool | | 录完直接转写 |
 | `lang` | string | | 转写语言 |
 | `scene` | string | | 场景标签 |
@@ -273,18 +274,27 @@ $VOICE_HOME (默认 D:/voice_data)
 
 ## assess: `with_gop=true` 的返回
 
-新增 `gop` 字段（只回最可疑的 5 个，避免诱导 LLM 逐个下结论）：
+返回 `gop` 字段（首屏只回最可疑的 3 个词 + 5 个音素，避免诱导 LLM 逐个下结论）：
 
 ```json
 {"gop": {
   "version": "gop-sf-0.1", "phones_total": 18, "oov": [], "unmapped": [],
-  "worst": [{"phone": "ER", "heard": "ɜ", "t0_ms": 2840, "t1_ms": 2860, "gop": -2.89, "z": -1.60}]
+  "words_worst": [{"word": "their", "gop_mean": -0.60, "t0_ms": 1170, "t1_ms": 1430,
+                   "worst_phone": "DH", "worst_z": -1.42}],
+  "worst": [{"phone": "DH", "heard": "d", "t0_ms": 1200, "t1_ms": 1220,
+             "gop": -2.89, "z": -1.60,
+             "confusion": "TH→s", "confusion_reportable": true}]
 }}
 ```
 
-**精度事实（必须落到措辞）**：so762 标定（120 句 / 2 015 音素 / 223 错读）——
-句级 ρ≈0.67；音素级 AUROC 0.63–0.66，FP=10% 处精确率 **0.15–0.24**。
-因此 `assess` 会在 `limitations` 追加 `gop_precision_low`；Skill 也只能把它当排序/趋势信号。
+- `words_worst[]` 是**对外唯一允许下结论的粒度**（词级 mean-GOP）。完整词表不随 `assess` 返回；需要全量请用 CLI `gop`。
+- `worst[]` 只是**句内排序**，音素级禁止断言。
+- `confusion` 形如 `TH→s`；`confusion_reportable` 当前只对 TH 系列为 `true`（标定 P 0.50 / R 0.67），其余（`R→l` / `Z→s`）只作内部标记。
+
+**精度事实（必须落到措辞）**：speechocean762 未见说话人标定——
+句级 ρ≈0.67；**词级 AUROC 0.887、FP=10% 处精确率 0.457**；
+音素级 AUROC 0.769、精确率 0.170（基率 7.5% ⇒ 上限 0.45）。
+因此 `assess` 会在 `limitations` 追加 `gop_precision_low`；Skill 只能把音素级当排序/趋势信号。
 带宽不足（`band_limited`）或缺 `reference` 时不跑 GOP，并明确写进 `limitations`。
 
 ## 音频质量闸门（`snr_db` / `peak_dbfs` / `degraded`）
@@ -304,7 +314,7 @@ $VOICE_HOME (默认 D:/voice_data)
 
 ## GOP 对照基线（`baseline_tts`）
 
-`with_gop=true, baseline_tts=true` 时返回 `gop_baseline`（TTS 标准发音的 GOP 结果）。
+`with_gop=true, baseline_tts=true` 时返回 `gop_baseline`（TTS 标准发音的 GOP 结果，字段为 `version` + 全量 `words[]`）。
 
 动机：GOP 绝对值带模型偏好。实测同一个音素 CTC 模型读 `their` 也只有 −0.36，
 所以"用户 −基线"才是可解释的量。

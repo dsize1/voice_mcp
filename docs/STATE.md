@@ -1,11 +1,12 @@
 # 当前状态与下一步（交接用）
 
-> 写于 2026-11-19，最后更新 2026-11-22（GOP/词级诊断 + 真机训练夜）。新会话先读这一页，再读 README / CONTRACT / ADR。
+> 写于 2026-11-19，最后更新 2026-11-22（门禁 + 文档对齐）。新会话先读这一页，再读 README / CONTRACT / ADR。
 
 ## 一句话现状
 
-**P3 闭环 + P4 素材库（4 997 条 NCE）+ 音素级 GOP（词级口径）均已上线并在真机验证。**
-`crates` 7700+ 行 Rust，**97 个单测 + 9 个录音回归用例**全绿，零编译警告。
+**P3 闭环 + P4 素材库（NCE 4 997 + IELTS prompt 10 = 5 007 条）+ 音素级 GOP（词级口径）均已上线并在真机验证。**
+`crates` 10 400+ 行 Rust，**97 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
+已由 `tools/check.ps1` 与 GitHub Actions 守住（ADR-0008 D45）。
 下一步：雅思素材入库 + 按 `error_stats` 做定向训练。
 
 ## 已实测的关键数字（别再猜）
@@ -23,8 +24,8 @@
 | **GOP 判别力（so762 未见说话人）** | 句级 ρ 0.67；**词级 mean-GOP：AUROC 0.887、P@FP10 0.457**；音素级 0.769/0.170（基率上限 0.45） |
 | **MDD 微调（6ep/8L）** | 词级 AUROC 0.883→0.887、音素级 0.690→0.769；训练 65 s/epoch（RTX 5070 Ti cu128） |
 | **混淆对信号（TH→s）** | 命中精确率 0.50、召回 0.67（仅 TH 系列可对用户说） |
-| 素材库 | 4 997 条 / 7.1 h，quarantine 1 221，可直接练 3 368 条 |
-| 素材库（P4，全量） | **4 997 条 / 7.1 h**，quarantine 1 221，可直接练 3 384；ingest 276 课 ≈ 10.5 min |
+| 素材库 | **5 007 条 / 7.1 h**（NCE 4 997 + IELTS prompt 10），quarantine 1 221，可直接练 3 378 |
+| 素材库 ingest | 276 课 ≈ 10.5 min；`bank stats` 是唯一权威计数 |
 
 ## 环境
 
@@ -41,6 +42,8 @@ Skill  tools/install_skills.ps1 已 junction 到 ~/.pi/agent/skills/
 
 ```bash
 cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
+./tools/check.ps1                                # 门禁：fmt + clippy -D warnings + test（提交前必跑）
+./tools/check.ps1 -Cases                         # 额外跑 9 条录音回归（需 VOICE_CASES_DIR）
 ./target/release/voice-cli.exe doctor --load     # 12 项自检
 ./target/release/voice-cli.exe mic --secs 3      # 麦克风能力 + 底噪 + 阈值建议
 ./target/release/voice-cli.exe rec --max-sec 20 --stt --lang en
@@ -71,26 +74,30 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 - [x] 5. Skill 铁律在实测中全部生效：`unclear` 不下结论、whisper（`timestamp_alignment=missing`）不报秒数、单轮只报 1 条
 - [x] 6. 实跑暴露的问题已修（共 5 个）：`slow_too` 语速对、assess 证据分裂、中文 panic、16 kHz 派生污染 `band_limited`、英美拼写变体与 ASR 伪缩略误报
 
-**仍缺**：自由说 30–60 s（用户跳过）→ `band_estimate` 置信度仍是 low；`record` 的 8 s 起始等待不可配置（真机连说 4 次“开始”才进齐）。
+**仍缺**：自由说 30–60 s（用户跳过）→ `band_estimate` 置信度仍是 low。
+（`record` 的 8 s 起始等待已可通过 `start_timeout_sec` 调整，D39 已还。）
 
 ## 已知债务（详见 ADR-0008）
 
 S1 级已全部偿还。剩余主要项：
-D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D12 韵律与 GOP（ADR-0007，触发：≥10 次真实训练）
-D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（有 JSON 用例但无合成 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
-**新增** D39 `record` 起始等待（8 s）不可配置 → 真机常见“说了但没开始”误报 · D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）
+D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D12 韵律与 GOP（ADR-0007，**触发条件已满足**：history 12 条）
+D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（**D20 已有 CI，待首跑**；仍无合成 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
+D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）
+
+已还：D19 rust-toolchain/MSRV · D39 `record.start_timeout_sec` · D45 构建门禁。（D18 只缓解：`check.ps1` 把 DLL 目录加进 PATH。）
 
 ## 下一批工作（用户已确认顺序）
 
 1. ~~**P3 真机训练闭环**~~（2026-11-21 完成）
-2. ~~**P4 跟读素材库**~~（2026-11-22 全量完成）：`bank ingest/list/show/drill/stats/retag`，NCE1–4 共 276 课 → 4 997 条
+2. ~~**P4 跟读素材库**~~（2026-11-22 全量完成）：`bank ingest/list/show/drill/stats/retag`，NCE1–4 共 276 课 → 4 997 条（另加 10 条 IELTS prompt，当前 5 007）
 3. 补一次自由说 30–60 s（把 `learner.json` 的 band 置信度从 low 拉起来）
+4. 韵律分析（F0 / 句末升降 / 平调）：ADR-0007 的触发条件（≥10 次训练）已满足
 
 ## GOP / 诊断层现状（2026-11-22）
 
 **能力**：`assess(with_gop=true)` 返回
-`gop.words[]`（词级，对外）、`gop.phones[]`（音素级，仅排序）、`gop_baseline`（TTS 标准发音对照）、
-`gop.phones[].confusion`（混淆对，如 `TH→s`）。
+`gop.words_worst[]`（词级，对外）、`gop.worst[]`（音素级，仅排序）、`gop_baseline`（TTS 标准发音对照）、
+`gop.worst[].confusion`（混淆对，如 `TH→s`，`confusion_reportable` 当前仅 TH 为 true）。
 
 **硬规则（SKILL 4.0/4.1 已固化）**：
 1. `degraded=true`（snr<13 / peak<−30 dBFS / 削波>0.1%）→ **不报任何发音结论**，只给重录建议；
@@ -104,9 +111,36 @@ D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（有 JSON 用例但�
 
 ## 真机训练记录（2026-11-22 夜）
 
-`D:/voice_data/sessions/2026-11-22/`，`learner.json` history 11 条。已修：
+`D:/voice_data/sessions/2026-11-22/`，`learner.json` history 12 条。已修：
 `why→when`（Δ −4.27→−0.39）、`thank` 的 /θ/（TH→s → heard θ，Δ −0.05）、`valley`（acc 0.83→1.00）。
 待练：`short_long_vowel`（/ɪ/ vs /iː/，seat 第 1 次仍读成 sɪt）、`ae_to_e`（sit→set）、`village` 的 /ɪlɪ/。
 
 **唯一的硬件障碍**：EDIFIER W820NB 的麦克风增益在同小时内漂移 −11.8 ~ −33.5 dBFS，
 开练前先 `rec` 说句 test 确认 `peak` 在 −20 ~ −12 dBFS。
+
+## 门禁与文档对齐（2026-11-22 晚）
+
+**为什么做**：`4f57a36` 在 `format!` 里写了 `{peak_dbfs:.1f}`（Rust 只接受 `{:.1}`），
+`voice-mcp` 直接编译失败，但后面 3 个提交都没人发现 —— 因为没有门禁。
+
+已落地：
+
+- 修掉那 1 处编译错误；`cargo fmt --all` 全仓格式化；清掉全部 36 条 clippy 警告
+  （26 条 collapsible_if 自动修，4 条手工：needless_range_loop / field_reassign ×2 / too_many_arguments 加注）。
+- `tools/check.ps1`：`fmt --check` → `clippy --all-targets -D warnings` → `test`，
+  可选 `-Cases` 跑录音回归。本地实测：**97 单测 + 9 用例全绿**。
+- `.github/workflows/ci.yml`：windows-latest 上跑同一套脚本，先 `fetch_deps.ps1` 取原生库。
+  **尚未在 GitHub 上首跑**（D20 只算部分偿还）。
+- `rust-toolchain.toml` + `Cargo.toml` 的 `rust-version = "1.99"`（实测版本；edition 2024 的理论下限 1.85 未验证）。
+
+同批对齐的文档漂移：
+
+| 文档 | 旧 | 新 |
+|---|---|---|
+| CONTRACT | 工具清单“7 个” | 8 个（transcribe/synthesize/record/play/prepare_audio/voices/status/assess） |
+| CONTRACT | `record.silence_sec` 默认 1.0；无 `start_timeout_sec` | 默认 2.0；已加 `start_timeout_sec`（默认 8） |
+| CONTRACT | GOP “句级 ρ 0.67；音素级 AUROC 0.63–0.66 / P 0.15–0.24” | 补词级 AUROC 0.887 / P@FP10 0.457；音素级 0.769 / 0.170；补 `gop.words_worst` / `gop.worst` / `confusion` / `gop_baseline` 字段 |
+| STATE | 素材 4 997 / ready 3 368 / 3 384（两个数） | 5 007 / ready 3 378（`bank stats` + 索引实测） |
+| STATE | history 11 条 | 12 条 |
+| STATE | D39 仍列为未还 | 已还（`record.start_timeout_sec`） |
+| README / docs/README | 债务“33 条” | 45 条（D01–D45） |

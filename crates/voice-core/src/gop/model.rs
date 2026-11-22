@@ -14,8 +14,10 @@ use anyhow::{Context, Result, bail};
 
 use super::phones::PhoneSet;
 
-/// 与 `tools/export_phoneme_ctc.py` 写出的 metadata 对齐
-pub const MODEL_DIR: &str = "C:/voice_models/phoneme-ctc";
+/// 默认模型目录：MDD 微调版（精度更高，见 docs/mdd.md）。
+/// 不存在时回退到基线模型，并在 `limitations` 里说明 —— 绝不静默降级。
+pub const MODEL_DIR: &str = "C:/voice_models/phoneme-ctc-ft";
+pub const MODEL_DIR_BASELINE: &str = "C:/voice_models/phoneme-ctc";
 pub const EXPECTED_FRAME_HOP_MS: u32 = 20;
 
 pub struct PhonemeCtc {

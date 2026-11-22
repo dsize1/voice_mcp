@@ -33,18 +33,29 @@ static GOP_ENGINE: OnceLock<Mutex<Option<GopEngine>>> = OnceLock::new();
 pub struct GopEngine {
     pub model: PhonemeCtc,
     pub g2p: G2p,
+    /// 实际使用的模型目录（用于在 limitations 里说明是微调版还是基线版）
+    pub model_dir: String,
 }
 
 impl GopEngine {
     /// 默认路径：`$VOICE_PHONEME_MODEL` / `$VOICE_G2P_DICT` 可覆盖。
     pub fn load_default() -> Result<Self> {
-        let model_dir = std::env::var("VOICE_PHONEME_MODEL")
+        let preferred = std::env::var("VOICE_PHONEME_MODEL")
             .unwrap_or_else(|_| model::MODEL_DIR.to_string());
+        let model_dir = if std::path::Path::new(&preferred).join("model.onnx").is_file() {
+            preferred
+        } else if std::path::Path::new(model::MODEL_DIR_BASELINE).join("model.onnx").is_file() {
+            eprintln!("[gop] 未找到微调模型 {preferred}，回退基线 {}", model::MODEL_DIR_BASELINE);
+            model::MODEL_DIR_BASELINE.to_string()
+        } else {
+            preferred // 让 load 报出准确错误
+        };
         let dict = std::env::var("VOICE_G2P_DICT")
             .unwrap_or_else(|_| "C:/voice_models/g2p/cmudict.dict".to_string());
         Ok(Self {
             model: PhonemeCtc::load(&model_dir)?,
             g2p: G2p::load(std::path::Path::new(&dict))?,
+            model_dir,
         })
     }
 }

@@ -1,0 +1,15 @@
+{
+  "id": "r09_why_when",
+  "note": "真人误读的**真实标注样本**：用户自己确认把 `why` 读成了 `when`（2026-11-22 真机，48 kHz，snr 22 dB）。锁住两件事：1) 词级 diff 必须报出 substitution 且 hint=likely_pronunciation；2) 这类「整词替换」不该由 GOP 单独判（同一条录音里 why 的 gop_mean=2.24，GOP 漏掉了它）—— 所以 Skill 必须交叉验证。",
+  "audio": "${VOICE_CASES_DIR}/mic48k_why_when.wav",
+  "reference": "Why do the children thank their mother?",
+  "lang": "en",
+  "expect": {
+    "band_limited": false,
+    "timestamp_alignment": "exact",
+    "accuracy": { "gte": 0.80, "lte": 0.95 },
+    "issues": [
+      { "kind": "substitution", "reference": "why", "said": "when", "hint": "likely_pronunciation" }
+    ]
+  }
+}

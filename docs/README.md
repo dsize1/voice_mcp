@@ -1,6 +1,7 @@
 # Voice MCP Service — 文档索引
 
-> 本地语音 I/O + 发音评测能力，以 MCP 形式暴露给 Pi，配合 Skill 实现英语口语（雅思 7 分目标）训练。
+> 本地语音 I/O + 发音诊断能力（词级 diff + 音素级 GOP），以 MCP 形式暴露给 Pi，
+> 配合 Skill 实现英语口语（雅思 7 分目标）训练。
 > 核心设计原则：**MCP 只做"测量"，Skill + LLM 做"教学"。**
 
 ## 1. 文档地图
@@ -15,8 +16,14 @@
 | [adr/0004-audio-io-and-evidence.md](adr/0004-audio-io-and-evidence.md) | 音频输入/输出契约与留证机制 | Accepted |
 | [adr/0005-deps-and-model-acquisition.md](adr/0005-deps-and-model-acquisition.md) | 第三方依赖与模型获取策略（网络/工具链实测与替代通路） | Accepted |
 | [adr/0006-assessment-scope.md](adr/0006-assessment-scope.md) | 评测层能力边界（P2 词级诊断的三态推断） | Accepted |
+| [phoneme-gop.md](phoneme-gop.md) | 音素级 GOP：模型选型、标定数字、混淆对、能力边界 | ✅ |
+| [mdd.md](mdd.md) | MDD 微调实验：协议、结果（AUROC 0.690→0.769）、GPU 环境 | ✅ |
+| [datasets.md](datasets.md) | 评测数据集（speechocean762）：四层校验、数据画像、tag 权重 | ✅ |
+| [dataset-pins.json](dataset-pins.json) | 数据集指纹（revision + sha256），供复验 | ✅ |
+| [STATE.md](STATE.md) | 交接页：现状 / 实测数字 / 待办 / 硬件障碍 | Living |
+| [adr/0007-prosody-and-gop.md](adr/0007-prosody-and-gop.md) | 韵律与 GOP（**GOP 已实现**，韵律待做） | 部分完成 |
 | [adr/0008-technical-debt.md](adr/0008-technical-debt.md) | **技术欠债登记**（33 条债 + 触发条件 + 偿付顺序） | Living |
-| [adr/0009-drill-library.md](adr/0009-drill-library.md) | 跟读素材库（Drill Library）与 NCE 语料接入 | Proposed (P4) |
+| [adr/0009-drill-library.md](adr/0009-drill-library.md) | 跟读素材库（Drill Library）与 NCE 语料接入 | Accepted（4 997 条） |
 | [security-supply-chain.md](security-supply-chain.md) | 模型与原生库供应链校验（工具+结论） | ✅ |
 | [security-hashes.txt](security-hashes.txt) | 已知良好基线哈希 | ✅ |
 
@@ -31,6 +38,17 @@
 | D5 | 首训做基线录制 | 3 句诊断句 + 1 分钟自由说，写入 learner.json |
 | D6 | 模型放 `C:/voice_models/` | C 盘固态，常驻加载 |
 | D7 | 音频 I/O 以「文件优先」 | 支持 Win11 录音机 .m4a 直入；所有输出留音频 + 文字证据（见 ADR-0004） |
+
+## 2.5 诊断能力的当前口径（重要）
+
+| 粒度 | 指标 | 允许怎么用 |
+|---|---|---|
+| 句级 | mean-GOP 与人工分 ρ 0.67 | 纵向趋势对比 |
+| **词级** | AUROC 0.887、P@FP10 0.457（`gop_mean < −0.70` 时 P 0.596） | **对外只报这一层**，且必须与 TTS 基线比 |
+| 音素级 | AUROC 0.769、P@FP10 0.170（基率 7.5% ⇒ 上限 0.45） | 仅句内排序，**禁止断言** |
+| 混淆对 | 仅 `TH→s` 可用（P 0.50 / R 0.67） | 可说"模型听到的是 /s/ 而不是 /θ/" |
+
+另有四道闸门：`snr_db < 13` / `peak < −30 dBFS` / 削波 > 0.1% / 缺参考文本 → 一律不出诊断结论。
 
 ## 3. 路径约定
 
@@ -49,10 +67,11 @@
 |---|---|---|---|
 | P0 | 环境验证：**`.m4a` 解码** ✅ / **sherpa-onnx 原生库** ✅ / **SenseVoice 真机转写** ✅ / **Kokoro 出声** ✅ / whisper 评估 / **供应链校验** ✅ | 4 个 spike 脚本跑通 | ✅ 完成 |
 | P1 | `voice-core` 7 模块 + MCP 7 工具 + `voice-cli doctor/stt/say/play/rec/watch/tts-probe` | Pi 里说话→文字→出声回环 | ✅ 完成（`record` 待麦克风） |
-| P2 | 评测层：**词级 diff** ✅ / **flow** ✅ / prosody / GOP scorer | 能定位到具体音素错误 | ⏳ 2/4 完成 |
-| P3 | `ielts-speaking-coach` Skill + learner.json + 雅思题库 | 15 分钟完整训练闭环 | 未开始 |
+| P2 | 评测层：**词级 diff** ✅ / **flow** ✅ / prosody ⏳ / **GOP（词级口径）** ✅ | 能定位到具体音素错误 | ✅ 3/4（韵律待做） |
+| P3 | `ielts-speaking-coach` Skill + learner.json + 雅思题库 | 15 分钟完整训练闭环 | ✅ 2026-11-21 真机验收 |
 | P4 | 热键听写、`record`(cpal+VAD)、CosyVoice2、HTTP、流式 | 按需 | 未开始 |
 | P4 | **跟读素材库**（[ADR-0009](adr/0009-drill-library.md)）：NCE1–4 共 276 课 → 逐句切片 + 质量门槛 | 5 项全部通过（4 997 条） | ✅ 完成 |
+| P4.5 | MDD 微调 + 词级 GOP + TTS 对照基线 + 混淆对信号 | so762 未见说话人：词级 AUROC 0.887 / P@FP10 0.457 | ✅ 2026-11-22 |
 
 ## 5. 硬件基线（实测）
 

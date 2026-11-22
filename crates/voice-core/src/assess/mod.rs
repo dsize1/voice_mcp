@@ -24,6 +24,12 @@ pub const SCORER_VERSION: &str = "p2.0-wordlevel";
 /// 削波采样占比上限：超过即判"输入过载"，ASR/GOP 都会失真。
 pub const CLIP_RATIO_MAX: f32 = 0.001; // 0.1%
 
+/// 绝对电平下限（dBFS，采样峰值）。低于此值 ASR 会开始整句丢失。
+///
+/// 实测：peak −24.6 dBFS → ASR acc 0.83（可用）；peak −33.5 dBFS → ASR 只输出 "The."（acc 0.00）。
+/// SNR 闸门抓不到这种情况（房间安静时 SNR 仍然够），所以必须单独看绝对电平。
+pub const LEVEL_MIN_PEAK_DBFS: f32 = -30.0;
+
 /// 可信诊断所需的最低信噪比（dB，口径 = 20 ms 帧 RMS 的 p90−p10）。
 ///
 /// 13 dB 来自实测分界：可用录音 14.3–19.5 dB，ASR 开始出碎片的录音 11.0–11.5 dB。
@@ -156,6 +162,14 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
             "输入过载（削波）：{:.2}% 的采样被削平（阈值 {:.1}%）。             语音会失真，音素与漏读指标不可信；请把系统输入音量调低后用正常音量重读",
             clip_ratio * 100.0,
             CLIP_RATIO_MAX * 100.0
+        ));
+    }
+
+    if audio.peak_dbfs < LEVEL_MIN_PEAK_DBFS {
+        degraded = true;
+        limitations.push(format!(
+            "电平过低（峰值 {:.1} dBFS < {:.0} dBFS）：ASR 会整句丢失，本条不能作为诊断依据。             请把系统输入音量调高或靠近麦克风",
+            audio.peak_dbfs, LEVEL_MIN_PEAK_DBFS
         ));
     }
 

@@ -8,7 +8,7 @@
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
-| [DESIGN.md](DESIGN.md) | 总体架构、分层、数据流 | 待编写（P2 前） |
+| DESIGN.md | 总体架构、分层、数据流 | 未编写（架构图在根 README） |
 | [CONTRACT.md](CONTRACT.md) | MCP 工具清单与 JSON 出入参契约 | ✅ 已对齐实现 |
 | [adr/0001-runtime-strategy.md](adr/0001-runtime-strategy.md) | 运行时路线：当前 Rust 主干 + Python 评分 sidecar；长期 100% Rust | Accepted |
 | [adr/0002-asr-routing.md](adr/0002-asr-routing.md) | ASR 双引擎与语言路由（含中英混说、教学语言分级） | Accepted |

@@ -1,6 +1,7 @@
 # ADR-0001: 运行时路线 —— 当前混合（Rust 主干 + Python 评分 sidecar），目标 100% Rust
 
-- 状态：Accepted（当前阶段 = 路线 B；路线 A 标记为 Planned，不进 P0–P3）
+- 状态：Accepted，**已于 2026-11-22 部分改写**：音素级 GOP 走的是路线 A（纯 Rust `ort` + 自研
+  CTC-Viterbi），**没有引入 Python sidecar**（见 ADR-0007 末尾「实现结果」）。
 - 日期：2026-11-18
 - 相关：ADR-0003（模型选型）、ADR-0004（I/O 契约）
 

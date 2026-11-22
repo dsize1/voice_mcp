@@ -1,6 +1,7 @@
-# ADR-0007: P2 收尾 —— 韵律分析与音素级 GOP（推迟到 P2.5）
+# ADR-0007: P2 收尾 —— 韵律分析与音素级 GOP（GOP 已实现，韵律待做）
 
-- 状态：**Proposed（已排期，暂不实现）**
+- 状态：**部分完成**（2026-11-22）：音素级 GOP 已用**纯 Rust**落地（不做 Python sidecar）；
+  韵律分析仍待做。实现与标定见 [../phoneme-gop.md](../phoneme-gop.md) / [../mdd.md](../mdd.md)。
 - 日期：2026-11-19
 - 相关：ADR-0001（运行时路线）、ADR-0006（评测层能力边界）、CONTRACT.md
 - 决策背景：P2 的 1+2（词级 diff / flow）已上线并被 Skill 使用；3+4 需在 Skill 跑过若干真实训练后再启动，
@@ -98,3 +99,18 @@ wav2vec2 导出 ONNX → Rust 实现 CTC 强制对齐（Viterbi、窄带剪枝�
    作为**定性**提示使用，不阻塞教学闭环。
 
 **触发条件**：完成 ≥ 10 次真实训练（`manifest.jsonl` ≥ 10 个 `scene=drill|retry` 条目）后启动。
+
+## 实现结果（2026-11-22，覆盖本文第二节的 sidecar 方案）
+
+原计划用 Python sidecar（torchaudio forced_align + MMS_FA）做 GOP。实际**不需要 sidecar**：
+音素 CTC 模型（`wav2vec2-lv-60-espeak-cv-ft` → ONNX）直接给逐帧后验，
+用 30 行 DP 做 CTC Viterbi 对齐即可同时得到边界与 GOP —— 运行时纯 Rust（`ort` + `load-dynamic`）。
+
+| 项 | 实测 |
+|---|---|
+| 推理 | CPU RTF 0.04–0.05（3.4 s 音频 110–173 ms）；fp32 1 205 MB；int8 量化漂移 8.21 → 弃用 |
+| 标定（so762 未见说话人） | 句级 ρ 0.67；**词级 AUROC 0.887 / P@FP10 0.457**；音素级 0.769 / 0.170 |
+| MDD 微调 | 音素级 AUROC 0.690 → 0.769（6 epoch，65 s/epoch，RTX 5070 Ti cu128） |
+| 混淆对 | `TH→s` 命中精确率 0.50 / 召回 0.67（其余混淆对精度为 0，不上线） |
+
+**因此本 ADR 的第二项（音素级 GOP）关闭；第一项（韵律）保留**，触发条件仍是 ≥10 次真实训练。

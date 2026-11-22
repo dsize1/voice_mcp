@@ -113,3 +113,16 @@ LRC 拟合立刻变成 `scale=0.999`。真相是：
 | R9 | 真机 48 kHz 录音（句中停 1 s）| SenseVoice 输出 "I think this the third time"（漏 `is`），同一音频 whisper 输出 "I think it is the third time"。→ 短功能词漏读必须标 `hint=likely_asr_miss` + `severity=medium`，不允许当 high 指控用户 |
 | R8 | **真机 48 kHz 麦克风**（Hands-Free，2.22 s 语音）| accuracy=1.0、0 问题、`exact`、`band_limited=false`、`analysis_window`≈1.92 s、speech_rate 218 wpm（快速朗读）。同一句用 16 kHz 录音机录制时曾识别为 "straight"——说明源音频质量直接决定能否捕捉 /θ/ |
 | R7 | **TTS 音频当完美发音者**：`synthesize` 生成的句音频 → `assess(同一个 reference)` | accuracy=1.0、0 问题、`exact`、`band_limited=false`（24 kHz 源）。用于验证"纯净音频不会产生误报" |
+
+
+## 2026-11-22 增补：音素级 GOP 上线后的边界（仍未放宽）
+
+- 音素级 GOP 的**基率上限**：错读率 7.5% ⇒ FP=10% 时精确率数学上限 0.45，实测 0.17
+  → **禁止**用音素级下"你读错了 X"的结论；
+- 对外口径改为**词级**（AUROC 0.887、P@FP10 0.457），且必须与 **TTS 标准发音基线**对比
+  （基线 <0.30 的词一律不报，否则会把模型偏好算到用户头上）；
+- 新增四道闸门：`snr_db < 13`、`peak < −30 dBFS`、削波 > 0.1%、缺参考文本 → 不出任何诊断结论；
+- 唯一允许的音素级断言是混淆对 `TH→s`（P 0.50 / R 0.67）。
+
+真机反例（`cases/r09_why_when.json`）：用户把 `why` 读成 `when`（本人确认），
+词级 diff 命中、GOP 词级给 +2.24（漏检）→ 整词替换必须靠词级 diff，GOP 只做辅助。

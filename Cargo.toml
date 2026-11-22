@@ -8,6 +8,8 @@ default-members = ["crates/voice-core", "crates/voice-mcp", "crates/voice-cli"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+# 实测通过的最低版本；见 rust-toolchain.toml 与 ADR-0008 D19
+rust-version = "1.99"
 
 [workspace.dependencies]
 anyhow = "1"

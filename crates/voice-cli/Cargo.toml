@@ -2,6 +2,7 @@
 name = "voice-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 voice-core = { path = "../voice-core" }

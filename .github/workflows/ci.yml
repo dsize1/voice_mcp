@@ -1,0 +1,48 @@
+name: CI
+
+# 门禁目标只有一个：不让"编译不过 / 格式乱 / clippy 退化 / 单测红"的提交进来。
+# 2026-11-22 的教训：`{peak_dbfs:.1f}` 这种编译错误在 HEAD 上躺了 3 个提交没人发现。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      # 构建需要 sherpa-onnx 的 import lib（.cache/sherpa/lib），由 PyPI 轮子解压得到。
+      # 见 ADR-0005 / tools/fetch_deps.ps1。
+      - name: Cache native libs
+        uses: actions/cache@v4
+        with:
+          path: .cache/sherpa
+          key: sherpa-onnx-2.0.1-windows
+
+      - name: Fetch native libs (sherpa-onnx)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ".cache/sherpa/lib/sherpa-onnx-c-api.dll")) {
+            ./tools/fetch_deps.ps1 -PypiMirror https://pypi.org/simple
+          }
+
+      - name: Gate (fmt + clippy + test)
+        shell: pwsh
+        run: ./tools/check.ps1

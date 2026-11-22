@@ -1545,6 +1545,7 @@ fn gop_cmd(
                 "phone": p.phone, "heard": p.best_symbol,
                 "t0_ms": p.t0_ms, "t1_ms": p.t1_ms,
                 "gop": f2(p.gop), "z": f2(p.z),
+                "confusion": p.confusion,
             })).collect::<Vec<_>>(),
         }))?
     );

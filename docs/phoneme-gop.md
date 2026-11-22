@@ -133,3 +133,32 @@ C:/voice_models/g2p/cmudict.dict  sha256 81917843c7f44ce2b094ac63873c2c7a4cf8020
 
 `ort` 用 `load-dynamic`：不下载二进制、不参与链接，运行时按
 `ORT_DYLIB_PATH` → `C:/voice_models/onnxruntime/onnxruntime.dll` 查找，找不到就报错降级。
+
+## 混淆对信号（`confusion`）：绕开等价类的盲区
+
+等价类把 `/θ/`→`/s/` 当"可接受"（当初为了压误报），结果是**显式的 θ→s 错误看不出来**。
+但模型自己知道它听到了什么 —— `Aligned.best` 对应的符号（`heard`）就是证据。
+
+所以在 so762 未见说话人上单独标定了"混淆对命中"（`heard` 落在该音素的常见混淆集里）：
+
+| 音素 | n | 真错率 | 混淆命中 | **命中精确率** | 召回占比 |
+|---|---|---|---|---|---|
+| **TH** | 28 | 21% | 8 | **0.50** | **0.67** |
+| R | 90 | 10% | 7 | 0.29 | 0.22 |
+| Z | 78 | 14% | 10 | 0.20 | 0.18 |
+| V / W / L / S / DH | 44/112/107/140/101 | 2–5% | 1–4 | **0.00** | 0.00 |
+
+- 只有 **TH 系列（θ→s/f/t）** 达到可用精度（0.50，且能抓住 2/3 的真错），因此只有它允许对用户说；
+- 其余混谱对只作为内部标记（`confusion` 字段有值，但 `confusion_reportable=false`）。
+
+真机验证（同一人三次录音）：
+
+| 音频 | 文本 | `heard` | confusion |
+|---|---|---|---|
+| 161152 | Thank you very much. | s | **TH→s** |
+| 160606 | Why do the children thank… | s | **TH→s** |
+| 160912 | Thank you. | s | **TH→s** |
+| TTS 干净音 | I think this is the third time. | θ | 无 |
+
+即：该学员的 /θ/ 在**单词和句子中都被听成 /s/**，与 `learner.json` 里 `theta_to_s` 的档案一致；
+而 ASR 仍能把 `thank` 转对（ASR 对这类音变鲁棒），所以**只有声学层能抓到它**。

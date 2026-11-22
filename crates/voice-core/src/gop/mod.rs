@@ -96,6 +96,35 @@ pub struct PhoneScore {
     pub gop: f32,
     /// 说话人内 z 分（阈值判据用这个，不是 gop）
     pub z: f32,
+    /// 混淆对命中（只有高影响音素才有）：如 `θ→s`。
+    /// 这是**独立于 GOP 阈值**的信号：等价类会把 /θ/→/s/ 当"可接受"，
+    /// 但 `heard` 字段能直接看出模型听到的是哪个音。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confusion: Option<String>,
+}
+
+/// 高影响音素的混淆对：只有 TH 系列在当前数据上达到可用精度（so762 未见说话人：
+/// 命中精确率 0.50、召回 0.67，n=28）；其余（V/W/L/S/DH）命中精确率为 0，故不启用。
+pub fn confusion_hint(phone: &str, heard: &str) -> Option<String> {
+    let p = phone.trim_end_matches(|c: char| c.is_ascii_digit()).to_uppercase();
+    let h = crate::gop::phones::norm_symbol(heard);
+    let hit = match p.as_str() {
+        "TH" => matches!(h.as_str(), "s" | "f" | "t"),
+        // 数据不足，先只留内部标记，不进话术
+        "R" => matches!(h.as_str(), "l"),
+        "Z" => matches!(h.as_str(), "s"),
+        _ => false,
+    };
+    if hit {
+        Some(format!("{}→{}", p, h))
+    } else {
+        None
+    }
+}
+
+/// 是否允许把该混淆对**说给用户**（目前只有 TH，见 `confusion_hint` 的标定说明）
+pub fn confusion_reportable(hint: &str) -> bool {
+    hint.starts_with("TH→")
 }
 
 /// 词级聚合：**用原始 GOP 的均值**，不要用 z 分。
@@ -211,13 +240,18 @@ pub fn score_text(
             let phones = a
                 .iter()
                 .zip(z.iter())
-                .map(|(x, zs)| PhoneScore {
-                    phone: x.label.clone(),
-                    best_symbol: model.phones.vocab.get(x.best).cloned().unwrap_or_default(),
-                    t0_ms: x.t0 as u32 * hop,
-                    t1_ms: x.t1 as u32 * hop,
-                    gop: x.gop,
-                    z: crate::round_to(*zs, 2),
+                .map(|(x, zs)| {
+                    let heard = model.phones.vocab.get(x.best).cloned().unwrap_or_default();
+                    let confusion = confusion_hint(&x.label, &heard);
+                    PhoneScore {
+                        phone: x.label.clone(),
+                        best_symbol: heard,
+                        t0_ms: x.t0 as u32 * hop,
+                        t1_ms: x.t1 as u32 * hop,
+                        gop: x.gop,
+                        z: crate::round_to(*zs, 2),
+                        confusion,
+                    }
                 })
                 .collect();
             let words = group_words(&tp.words, &word_of, &a, &z, hop);

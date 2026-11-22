@@ -728,6 +728,8 @@ impl VoiceServer {
                         "phone": p.phone, "heard": p.best_symbol,
                         "t0_ms": p.t0_ms, "t1_ms": p.t1_ms,
                         "gop": round3(p.gop), "z": p.z,
+                        "confusion": p.confusion,
+                        "confusion_reportable": p.confusion.as_deref().map(voice_core::gop::confusion_reportable),
                     })).collect::<Vec<_>>(),
                 })
             });

@@ -1,11 +1,12 @@
 # 当前状态与下一步（交接用）
 
-> 写于 2026-11-19。新会话先读这一页，再读 README / CONTRACT / ADR。
+> 写于 2026-11-19，最后更新 2026-11-22（GOP/词级诊断 + 真机训练夜）。新会话先读这一页，再读 README / CONTRACT / ADR。
 
 ## 一句话现状
 
-**P3 真机训练闭环已完成并在 2026-11-21 实跑验收（含 5 个真实缺陷修复）；下一步是 P4 跟读素材库。**
-`crates` 5400+ 行 Rust，69 个单测 + 8 个录音回归用例全绿，零编译警告。
+**P3 闭环 + P4 素材库（4 997 条 NCE）+ 音素级 GOP（词级口径）均已上线并在真机验证。**
+`crates` 7700+ 行 Rust，**97 个单测 + 9 个录音回归用例**全绿，零编译警告。
+下一步：雅思素材入库 + 按 `error_stats` 做定向训练。
 
 ## 已实测的关键数字（别再猜）
 
@@ -18,6 +19,11 @@
 | 麦克风（EDIFIER W820NB 蓝牙 HFP 端点） | 48 kHz 单声道 F32 可用；底噪 p50 −54.7 / p99 −46 dBFS（**偏高，AGC 强**） |
 | 长音频 | **必须分块**（>30 s 单次解码会静默截断 + 时间戳压到 0.77 倍） |
 | 教材对齐精度 | NCE2 L2：19/19 行文本相似度 1.00，行起始偏差 +0.07~+0.29 s，LRC 拟合 scale 0.999 |
+| **音素 CTC（wav2vec2-espeak）** | ONNX 1 205 MB，CPU **RTF 0.04–0.05**；int8 量化漂移 8.21 → 弃用 |
+| **GOP 判别力（so762 未见说话人）** | 句级 ρ 0.67；**词级 mean-GOP：AUROC 0.887、P@FP10 0.457**；音素级 0.769/0.170（基率上限 0.45） |
+| **MDD 微调（6ep/8L）** | 词级 AUROC 0.883→0.887、音素级 0.690→0.769；训练 65 s/epoch（RTX 5070 Ti cu128） |
+| **混淆对信号（TH→s）** | 命中精确率 0.50、召回 0.67（仅 TH 系列可对用户说） |
+| 素材库 | 4 997 条 / 7.1 h，quarantine 1 221，可直接练 3 368 条 |
 | 素材库（P4，全量） | **4 997 条 / 7.1 h**，quarantine 1 221，可直接练 3 384；ingest 276 课 ≈ 10.5 min |
 
 ## 环境
@@ -38,7 +44,10 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe doctor --load     # 12 项自检
 ./target/release/voice-cli.exe mic --secs 3      # 麦克风能力 + 底噪 + 阈值建议
 ./target/release/voice-cli.exe rec --max-sec 20 --stt --lang en
-./target/release/voice-cli.exe assess <audio|last> --reference "原句"
+./target/release/voice-cli.exe assess <audio|last> --reference "原句" --with-gop   # 词级+音素级 GOP + TTS 基线
+./target/release/voice-cli.exe gop <audio> --text "原句"                          # 只跑 GOP（看 heard/confusion）
+./target/release/voice-cli.exe bank pick --tag theta_to_s --level 2 --limit 3     # 按 tag 权重取材
+./target/release/voice-cli.exe bank drill nce1/019/003                            # 播原生音频
 ./target/release/voice-cli.exe lesson <mp3> --lrc <lrc> --verbose
 VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 ```
@@ -76,3 +85,28 @@ D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（有 JSON 用例但�
 1. ~~**P3 真机训练闭环**~~（2026-11-21 完成）
 2. ~~**P4 跟读素材库**~~（2026-11-22 全量完成）：`bank ingest/list/show/drill/stats/retag`，NCE1–4 共 276 课 → 4 997 条
 3. 补一次自由说 30–60 s（把 `learner.json` 的 band 置信度从 low 拉起来）
+
+## GOP / 诊断层现状（2026-11-22）
+
+**能力**：`assess(with_gop=true)` 返回
+`gop.words[]`（词级，对外）、`gop.phones[]`（音素级，仅排序）、`gop_baseline`（TTS 标准发音对照）、
+`gop.phones[].confusion`（混淆对，如 `TH→s`）。
+
+**硬规则（SKILL 4.0/4.1 已固化）**：
+1. `degraded=true`（snr<13 / peak<−30 dBFS / 削波>0.1%）→ **不报任何发音结论**，只给重录建议；
+2. 词级 vs 基线：`Δ ≤ −3 且基线 ≥ 4` 才可说"低于示范"；基线 <0.3 的词一律不报（模型偏好）；
+3. 音素级禁止断言；只有 `confusion` 且 `TH→s` 允许说"模型听到的是 /s/ 而不是 /θ/"；
+4. 整词替换靠词级 diff（GOP 会漏，见 `cases/r09_why_when.json`）。
+
+**已知限制**：音素级精确率天花板 0.45（基率 7.5%）；CTC spike 导致每个音素只有 1–2 帧，
+**不能用时长判断元音长短**；MDD 进一步提升空间 ≈0（词级已贴天花板），下一步方向是"降基率"
+（可疑词定向重录复核）。
+
+## 真机训练记录（2026-11-22 夜）
+
+`D:/voice_data/sessions/2026-11-22/`，`learner.json` history 11 条。已修：
+`why→when`（Δ −4.27→−0.39）、`thank` 的 /θ/（TH→s → heard θ，Δ −0.05）、`valley`（acc 0.83→1.00）。
+待练：`short_long_vowel`（/ɪ/ vs /iː/，seat 第 1 次仍读成 sɪt）、`ae_to_e`（sit→set）、`village` 的 /ɪlɪ/。
+
+**唯一的硬件障碍**：EDIFIER W820NB 的麦克风增益在同小时内漂移 −11.8 ~ −33.5 dBFS，
+开练前先 `rec` 说句 test 确认 `peak` 在 −20 ~ −12 dBFS。

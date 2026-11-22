@@ -38,6 +38,9 @@ pub struct Assessment {
     pub text_diff: Option<TextDiff>,
     /// 稳健信噪比（20 ms 帧 RMS 的 p90−p10，dB）。低于 `SNR_MIN_DB` 时 ASR/VAD 都不可信。
     pub snr_db: f32,
+    /// TTS 标准发音的 GOP 基线（`baseline_tts=true` 才有），用于和用户分数对比。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gop_baseline: Option<crate::gop::GopResult>,
     /// 音素级 GOP（`with_gop=true` 才有）。只能当排序/趋势，不能当判决。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop: Option<crate::gop::GopResult>,
@@ -78,6 +81,12 @@ pub struct AssessRequest<'a> {
     pub source_sr: Option<u32>,
     /// 是否跑音素级 GOP（需要参考文本；首次调用会加载 1.2 GB 模型）
     pub with_gop: bool,
+    /// 同时用 TTS 合成"标准发音"跑一遍同一套 GOP，作为**对照基线**。
+    ///
+    /// 为什么要基线：GOP 的绝对值受模型偏好影响（实测 TTS 自己读的 `their` 也只有 −0.22，
+    /// 因为该模型对 r 化元音偏保守）。只有"用户分数 − 基线分数"才能回答
+    /// "是他读错了，还是模型分辨不出来"。
+    pub baseline_tts: bool,
 }
 
 /// 一次完成：ASR → 语流指标 → 词级差异。
@@ -116,6 +125,24 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     } else if req.with_gop && snr_db < SNR_MIN_DB {
         limitations.push(format!("信噪比过低（{snr_db} dB < {SNR_MIN_DB} dB），跳过音素级 GOP"));
     }
+    // TTS 对照基线：同一段参考文本用标准发音再跑一遍 GOP（失败不影响主流程）
+    let mut gop_baseline = None;
+    if req.baseline_tts && gop.is_some() {
+        if let Some(text) = req.reference {
+            let sid = engines.tts.resolve_sid(&std::env::var("VOICE_GOP_BASELINE_VOICE").unwrap_or_else(|_| "af_heart".into()));
+            match engines.tts.synthesize(text, sid, 1.0) {
+                Ok(syn) => {
+                    let pcm = crate::audio::resample::resample(&syn.samples, syn.sample_rate, crate::INTERNAL_SR);
+                    match crate::gop::with_engine(|e| crate::gop::score_text(&mut e.model, &pcm, text, &e.g2p)) {
+                        Ok(b) => gop_baseline = Some(b),
+                        Err(e) => limitations.push(format!("TTS 基线 GOP 失败：{e}")),
+                    }
+                }
+                Err(e) => limitations.push(format!("TTS 基线合成失败：{e}")),
+            }
+        }
+    }
+
     let mut degraded = transcript.degraded || transcript.words.is_empty();
     // 削波：AGC 把增益顶到满刻度时谐波失真严重，音素后验与 ASR 都不可信
     let clip_ratio = if audio.source_sr > 0 && audio.duration > 0.0 {
@@ -185,6 +212,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         flow,
         text_diff,
         snr_db,
+        gop_baseline,
         gop,
         limitations,
         scorer_version: SCORER_VERSION.to_string(),

@@ -34,6 +34,7 @@
 | `lang` | string | | `auto`/`en`/`zh`/`mixed` |
 | `engine` | string | | 强制 `sense-voice`/`whisper` |
 | `with_gop` | bool | | 同时跑音素级 GOP（需 `reference`；首次调用加载 1.2 GB 模型，约 1–2 s） |
+| `baseline_tts` | bool | | 用 TTS 合成参考文本再跑一遍同一套 GOP，作为**对照基线**（区分"用户读错"与"模型分辨不出"） |
 | `scene` | string | | 场景标签（仅外部文件新建会话时生效；本机 take 沿用原前缀） |
 
 **留证位置（重要）**：`path` 指向本机 `sessions/<date>/<id>/takes/` 下的文件时，
@@ -297,3 +298,21 @@ $VOICE_HOME (默认 D:/voice_data)
 - 为什么用 p90 而不是 p95：蓝牙 AGC 的尖峰帧会把 p95 抬高，两条作废录音会算出 13.0/15.4 dB 的假高 SNR
 - 实测梯度（TTS + 噪声）：名义 30/20/12/8/4 dB → 测得 30.1/23.8/16.9/14.0/11.3 dB，
   最后两档 ASR 仍全对、只有 4 dB 档被拦截 —— 说明该闸门卡在"ASR 开始失效"的位置
+
+## GOP 对照基线（`baseline_tts`）
+
+`with_gop=true, baseline_tts=true` 时返回 `gop_baseline`（TTS 标准发音的 GOP 结果）。
+
+动机：GOP 绝对值带模型偏好。实测同一个音素 CTC 模型读 `their` 也只有 −0.36，
+所以"用户 −基线"才是可解释的量。
+
+实测（`Why do the children thank their mother?`）：
+
+| 词 | 用户 | TTS 基线 | Δ |
+|---|---|---|---|
+| why | 2.24 | 6.51 | **−4.27** |
+| children | 0.58 | 4.18 | −3.60 |
+| their | −0.60 | −0.36 | −0.24（都是低分 → 模型偏好，不怪用户） |
+
+规则：基线 < 0.30 的词直接不报；Δ ≤ −3 且基线 ≥ 4 才算"低于示范"；其余不报。
+声音可用 `VOICE_GOP_BASELINE_VOICE` 指定（默认 `af_heart`）。

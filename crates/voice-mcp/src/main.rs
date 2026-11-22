@@ -134,6 +134,9 @@ struct AssessParams {
     /// 同时跑音素级 GOP（需 reference；首次调用加载 1.2 GB 模型，约 1–2 s）
     #[serde(default)]
     with_gop: bool,
+    /// 同时用 TTS 标准发音跑一遍 GOP 作为对照基线（区分"用户读错"与"模型分辨不出"）
+    #[serde(default)]
+    baseline_tts: bool,
     /// 强制引擎 sense-voice | whisper
     #[serde(default)]
     engine: Option<String>,
@@ -624,6 +627,7 @@ impl VoiceServer {
                         reference: p.reference.as_deref(),
                         source_sr: Some(decoded.info.source_sr),
                         with_gop: p.with_gop,
+                        baseline_tts: p.baseline_tts,
                     },
                 )
             })?;
@@ -759,6 +763,12 @@ impl VoiceServer {
                     "snr_db": assessment.snr_db,
                 },
                 "gop": gop_json,
+                "gop_baseline": assessment.gop_baseline.as_ref().map(|g| serde_json::json!({
+                    "version": g.version,
+                    "words": g.words.iter().map(|w| serde_json::json!({
+                        "word": w.word, "gop_mean": round3(w.gop_mean)
+                    })).collect::<Vec<_>>(),
+                })),
                 "limitations": assessment.limitations,
                 "scorer_version": assessment.scorer_version,
                 "evidence": {

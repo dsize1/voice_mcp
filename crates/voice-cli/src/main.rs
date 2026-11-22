@@ -639,6 +639,7 @@ fn lesson(
             reference: Some(&reference),
             source_sr: Some(decoded.info.source_sr),
             with_gop: false,
+            baseline_tts: false,
         },
     )?;
     let td = a.text_diff.as_ref();
@@ -823,6 +824,7 @@ fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
                 engine: case.engine.as_deref(),
                 reference: reference.as_deref(),
                 with_gop: false,
+                baseline_tts: false,
                 source_sr: Some(decoded.info.source_sr),
             },
         )?;
@@ -1031,6 +1033,7 @@ fn assess_cmd(
             reference,
             source_sr: Some(decoded.info.source_sr),
             with_gop,
+            baseline_tts: with_gop, // CLI assess 默认开启对照基线
         },
     )?;
 

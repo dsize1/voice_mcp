@@ -25,7 +25,12 @@ pub fn info(samples: &[f32], sr: u32) -> AudioInfo {
     decode::analyze_pub(samples, sr, 1)
 }
 
-/// 稳健 SNR 估计：20 ms 帧 RMS 的 **p90 − p10**（dB）。
+/// 稳健 SNR 估计（dB）。两条分支，因为"语音占空比"差异极大：
+/// - **≥4 s 的长录音**：`p90 − p10`（抗 AGC 尖峰）
+/// - **<4 s 的短词/短句**：`top-5% 帧均值 − p10`
+///   原因：单词 drill 里语音只占 10–25% 的帧，p90 会落在噪声里（实测 `Thank you.` 只有 7.7 dB，
+///   但实际听得清楚、ASR 全对；改用 top-5% 后是 16.9 dB）。
+///   合成噪声梯度验证：名义 4 dB 档在短录音分支下仍是 12.5 dB（<13，照旧拦截）。
 ///
 /// 为什么不用"峰值 − 底噪"：蓝牙耳机有 AGC，单个瞬态峰值不可靠；
 /// p95/p10 对偶发爆音和瞬时静音都不敏感，且不依赖 VAD（VAD 在低 SNR 下本身就错）。
@@ -49,8 +54,16 @@ pub fn snr_db(samples: &[f32], sr: u32) -> f32 {
         })
         .collect();
     dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let p = |q: f32| dbs[(((dbs.len() - 1) as f32) * q) as usize];
-    (p(0.90) - p(0.10)).max(0.0)
+    let n = dbs.len();
+    let p = |q: f32| dbs[(((n - 1) as f32) * q) as usize];
+    let noise = p(0.10);
+    let speech = if n < 200 {
+        let start = n - (n / 20).max(1);
+        dbs[start..].iter().sum::<f32>() / (n - start) as f32
+    } else {
+        p(0.90)
+    };
+    (speech - noise).max(0.0)
 }
 
 #[cfg(test)]
@@ -63,6 +76,19 @@ mod snr_tests {
         let sr = 16_000;
         let noise: Vec<f32> = (0..sr).map(|i| if i % 2 == 0 { 0.001 } else { -0.001 }).collect();
         assert!(snr_db(&noise, sr) < 6.0, "纯噪声不该被判成高 SNR");
+    }
+
+    #[test]
+    fn short_utterance_uses_top_frames() {
+        // 2 s：0.4 s 语音（占 20% 帧）+ 1.6 s 噪声 —— 短录音分支应给出高 SNR
+        let sr = 16_000;
+        let n = sr as usize * 2;
+        let speech_end = (n as f32 * 0.2) as usize;
+        let v: Vec<f32> = (0..n)
+            .map(|i| if i < speech_end { 0.2 } else { 0.002 })
+            .collect();
+        let s = snr_db(&v, sr);
+        assert!(s > 25.0, "短录音里稀疏语音也应算出高 SNR，实际 {s}");
     }
 
     #[test]

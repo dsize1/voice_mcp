@@ -16,7 +16,10 @@ fn main() -> Result<()> {
         .get(1)
         .cloned()
         .unwrap_or_else(|| "I think this is the third time.".to_string());
-    let voice = args.get(2).cloned().unwrap_or_else(|| "af_heart".to_string());
+    let voice = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| "af_heart".to_string());
     let dir = args
         .get(3)
         .cloned()
@@ -30,11 +33,13 @@ fn main() -> Result<()> {
             voices: Some(format!("{dir}/voices.bin")),
             tokens: Some(format!("{dir}/tokens.txt")),
             lexicon: Some(lex),
-            lang: Some(if text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) {
-                "zh".into()
-            } else {
-                "en-us".into()
-            }),
+            lang: Some(
+                if text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) {
+                    "zh".into()
+                } else {
+                    "en-us".into()
+                },
+            ),
             ..Default::default()
         },
         num_threads: 4,
@@ -53,7 +58,11 @@ fn main() -> Result<()> {
     let mut results = Vec::new();
     for (label, speed) in [("slow", 0.75f32), ("norm", 1.0f32)] {
         let t1 = Instant::now();
-        let gcfg = GenerationConfig { sid, speed, ..Default::default() };
+        let gcfg = GenerationConfig {
+            sid,
+            speed,
+            ..Default::default()
+        };
         let audio = tts
             .generate_with_config::<fn(&[f32], f32) -> bool>(&text, &gcfg, None)
             .ok_or_else(|| anyhow!("合成失败"))?;

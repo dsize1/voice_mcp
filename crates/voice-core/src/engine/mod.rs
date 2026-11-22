@@ -5,7 +5,7 @@ pub mod tts;
 pub mod vad;
 
 pub use asr::{Asr, AsrEngine, AsrKind, Transcript, Word};
-pub use tts::{demo_speeds, KOKORO_VOICES, SLOW_SPEED, Synthesized, TtsEngine, VoiceInfo};
+pub use tts::{KOKORO_VOICES, SLOW_SPEED, Synthesized, TtsEngine, VoiceInfo, demo_speeds};
 
 use anyhow::Result;
 
@@ -114,16 +114,28 @@ impl Engines {
                 text.push_str(t.text.trim());
             }
             for w in t.words {
-                words.push(crate::engine::Word { t0: w.t0 + t0, t1: w.t1 + t0, ..w });
+                words.push(crate::engine::Word {
+                    t0: w.t0 + t0,
+                    t1: w.t1 + t0,
+                    ..w
+                });
             }
             for w in t.tokens {
-                tokens.push(crate::engine::Word { t0: w.t0 + t0, t1: w.t1 + t0, ..w });
+                tokens.push(crate::engine::Word {
+                    t0: w.t0 + t0,
+                    t1: w.t1 + t0,
+                    ..w
+                });
             }
         }
 
         Ok(crate::engine::Transcript {
             text,
-            lang: if lang_out.is_empty() { lang.to_string() } else { lang_out },
+            lang: if lang_out.is_empty() {
+                lang.to_string()
+            } else {
+                lang_out
+            },
             engine: engine_name,
             duration,
             words,
@@ -171,6 +183,9 @@ mod tests {
         for w in c.windows(2) {
             assert!(w[1].0 >= w[0].1 - 1e-3, "块之间不能重叠");
         }
-        assert!((c.last().unwrap().1 - 80.0).abs() < 1e-3, "末块必须覆盖到最后一个语音段");
+        assert!(
+            (c.last().unwrap().1 - 80.0).abs() < 1e-3,
+            "末块必须覆盖到最后一个语音段"
+        );
     }
 }

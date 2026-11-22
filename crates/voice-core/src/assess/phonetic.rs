@@ -132,14 +132,22 @@ mod tests {
             ("west", "vest"),
         ] {
             let s = similarity(a, b);
-            assert!(s >= 0.55, "{a} vs {b} 音形相似度仅 {s:.2}（keys: {} / {}）", encode(a), encode(b));
+            assert!(
+                s >= 0.55,
+                "{a} vs {b} 音形相似度仅 {s:.2}（keys: {} / {}）",
+                encode(a),
+                encode(b)
+            );
         }
     }
 
     #[test]
     fn unrelated_words_are_far() {
         assert!(similarity("cat", "elephant") < 0.35);
-        assert!(similarity("third", "straight") < 0.55, "third/straight 不应被判成高相似");
+        assert!(
+            similarity("third", "straight") < 0.55,
+            "third/straight 不应被判成高相似"
+        );
     }
 
     #[test]

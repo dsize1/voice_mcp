@@ -101,7 +101,10 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     let transcript = engines.transcribe_long(req.samples, req.sample_rate, req.lang, req.engine)?;
     let segments = engines.vad.segments(req.samples);
     let flow = flow::analyze(req.samples, req.sample_rate, &transcript, &segments);
-    let audio = apply_source(crate::audio::info(req.samples, req.sample_rate), req.source_sr);
+    let audio = apply_source(
+        crate::audio::info(req.samples, req.sample_rate),
+        req.source_sr,
+    );
     let text_diff = req
         .reference
         .map(|r| diff::compare(r, &transcript))
@@ -120,7 +123,9 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         && !clipped_too_much
     {
         let text = req.reference.unwrap_or_default();
-        match crate::gop::with_engine(|e| crate::gop::score_text(&mut e.model, req.samples, text, &e.g2p)) {
+        match crate::gop::with_engine(|e| {
+            crate::gop::score_text(&mut e.model, req.samples, text, &e.g2p)
+        }) {
             Ok(g) => gop = Some(g),
             Err(e) => limitations.push(format!("音素级 GOP 不可用：{e}")),
         }
@@ -129,23 +134,34 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     } else if req.with_gop && band_limited {
         limitations.push("源音频带宽不足（<24 kHz），跳过音素级 GOP".into());
     } else if req.with_gop && snr_db < SNR_MIN_DB {
-        limitations.push(format!("信噪比过低（{snr_db} dB < {SNR_MIN_DB} dB），跳过音素级 GOP"));
+        limitations.push(format!(
+            "信噪比过低（{snr_db} dB < {SNR_MIN_DB} dB），跳过音素级 GOP"
+        ));
     }
     // TTS 对照基线：同一段参考文本用标准发音再跑一遍 GOP（失败不影响主流程）
     let mut gop_baseline = None;
-    if req.baseline_tts && gop.is_some() {
-        if let Some(text) = req.reference {
-            let sid = engines.tts.resolve_sid(&std::env::var("VOICE_GOP_BASELINE_VOICE").unwrap_or_else(|_| "af_heart".into()));
-            match engines.tts.synthesize(text, sid, 1.0) {
-                Ok(syn) => {
-                    let pcm = crate::audio::resample::resample(&syn.samples, syn.sample_rate, crate::INTERNAL_SR);
-                    match crate::gop::with_engine(|e| crate::gop::score_text(&mut e.model, &pcm, text, &e.g2p)) {
-                        Ok(b) => gop_baseline = Some(b),
-                        Err(e) => limitations.push(format!("TTS 基线 GOP 失败：{e}")),
-                    }
+    if req.baseline_tts
+        && gop.is_some()
+        && let Some(text) = req.reference
+    {
+        let sid = engines.tts.resolve_sid(
+            &std::env::var("VOICE_GOP_BASELINE_VOICE").unwrap_or_else(|_| "af_heart".into()),
+        );
+        match engines.tts.synthesize(text, sid, 1.0) {
+            Ok(syn) => {
+                let pcm = crate::audio::resample::resample(
+                    &syn.samples,
+                    syn.sample_rate,
+                    crate::INTERNAL_SR,
+                );
+                match crate::gop::with_engine(|e| {
+                    crate::gop::score_text(&mut e.model, &pcm, text, &e.g2p)
+                }) {
+                    Ok(b) => gop_baseline = Some(b),
+                    Err(e) => limitations.push(format!("TTS 基线 GOP 失败：{e}")),
                 }
-                Err(e) => limitations.push(format!("TTS 基线合成失败：{e}")),
             }
+            Err(e) => limitations.push(format!("TTS 基线合成失败：{e}")),
         }
     }
 
@@ -199,13 +215,13 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
                 .to_string(),
         );
     }
-    if let Some(d) = &text_diff {
-        if d.timestamp_alignment == diff::TimestampAlignment::Estimated {
-            limitations.push(
+    if let Some(d) = &text_diff
+        && d.timestamp_alignment == diff::TimestampAlignment::Estimated
+    {
+        limitations.push(
                 "本次识别分词与规范化分词不一致，问题位置是按比例估算的（可能错位 ±1 个词），                 定位时请以词为准、不要死抠秒数"
                     .to_string(),
             );
-        }
     }
 
     if transcript.engine == "sense-voice" {
@@ -215,8 +231,9 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     }
     match &gop {
         Some(_) => limitations.push(crate::gop::GOP_LIMITATION.to_string()),
-        None => limitations
-            .push("尚无音素级强制对齐（GOP），因此不能给出音素级发音分数".to_string()),
+        None => {
+            limitations.push("尚无音素级强制对齐（GOP），因此不能给出音素级发音分数".to_string())
+        }
     }
 
     Ok(Assessment {

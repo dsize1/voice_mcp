@@ -66,7 +66,10 @@ pub fn decode_to_mono(path: impl AsRef<Path>, target_sr: u32) -> Result<DecodedA
     let probed = symphonia::default::get_probe().format(
         &hint,
         mss,
-        &FormatOptions { enable_gapless: true, ..Default::default() },
+        &FormatOptions {
+            enable_gapless: true,
+            ..Default::default()
+        },
         &MetadataOptions::default(),
     )?;
 
@@ -124,7 +127,11 @@ pub fn decode_to_mono(path: impl AsRef<Path>, target_sr: u32) -> Result<DecodedA
         bail!("解码结果为空（文件损坏或编码不受支持）: {}", path.display());
     }
 
-    let ch = if detected_ch > 0 { detected_ch } else { source_channels.max(1) };
+    let ch = if detected_ch > 0 {
+        detected_ch
+    } else {
+        source_channels.max(1)
+    };
     let sr = if source_sr > 0 { source_sr } else { target_sr };
 
     let info = analyze(&samples, sr, ch);
@@ -135,7 +142,11 @@ pub fn decode_to_mono(path: impl AsRef<Path>, target_sr: u32) -> Result<DecodedA
         (resample_linear(&samples, sr, target_sr), target_sr)
     };
 
-    Ok(DecodedAudio { samples, sample_rate, info })
+    Ok(DecodedAudio {
+        samples,
+        sample_rate,
+        info,
+    })
 }
 
 fn append_mono(buf: &AudioBufferRef<'_>, out: &mut Vec<f32>, ch_out: &mut u32) {
@@ -220,9 +231,7 @@ fn analyze(samples: &[f32], sr: u32, ch: u32) -> AudioInfo {
     }
 
     let rms = (sq_sum / samples.len() as f64).sqrt() as f32;
-    let db = |x: f32| -> f32 {
-        if x <= 0.0 { -120.0 } else { 20.0 * x.log10() }
-    };
+    let db = |x: f32| -> f32 { if x <= 0.0 { -120.0 } else { 20.0 * x.log10() } };
 
     AudioInfo {
         source_sr: sr,

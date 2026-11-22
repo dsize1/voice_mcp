@@ -102,10 +102,10 @@ impl Config {
         if let Ok(v) = std::env::var("VOICE_PROVIDER") {
             cfg.provider = v;
         }
-        if let Ok(v) = std::env::var("VOICE_THREADS") {
-            if let Ok(n) = v.parse() {
-                cfg.num_threads = n;
-            }
+        if let Ok(v) = std::env::var("VOICE_THREADS")
+            && let Ok(n) = v.parse()
+        {
+            cfg.num_threads = n;
         }
         Ok(cfg)
     }

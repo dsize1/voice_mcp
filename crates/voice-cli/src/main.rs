@@ -163,7 +163,6 @@ enum Cmd {
     },
 }
 
-
 #[derive(Subcommand)]
 enum BankCmd {
     /// 把 LRC 教材切成逐句素材入库（走质量门槛，不合格进 quarantine）
@@ -256,30 +255,71 @@ fn main() -> Result<()> {
     let cfg = Config::load()?;
     match cli.cmd {
         Cmd::Doctor { load } => doctor(&cfg, load),
-        Cmd::Stt { path, lang, engine, scene, plain } => {
-            stt(&cfg, &path, &lang, engine.as_deref(), &scene, plain)
-        }
-        Cmd::Say { text, voice, speed, slow_too, play, scene } => {
-            say(&cfg, &text, voice.as_deref(), speed, slow_too, play, &scene)
-        }
+        Cmd::Stt {
+            path,
+            lang,
+            engine,
+            scene,
+            plain,
+        } => stt(&cfg, &path, &lang, engine.as_deref(), &scene, plain),
+        Cmd::Say {
+            text,
+            voice,
+            speed,
+            slow_too,
+            play,
+            scene,
+        } => say(&cfg, &text, voice.as_deref(), speed, slow_too, play, &scene),
         Cmd::Play { path } => {
             play::play_wav(&path)?;
             Ok(())
         }
-        Cmd::Lesson { audio: a, lrc, lang, verbose, write_lrc } => {
-            lesson(&cfg, &a, &lrc, &lang, verbose, write_lrc.as_deref())
-        }
-        Cmd::Gop { path, text, text_file, top, model, g2p } => {
-            gop_cmd(&cfg, &path, text.as_deref(), text_file.as_deref(), top, model.as_deref(), g2p.as_deref())
-        }
+        Cmd::Lesson {
+            audio: a,
+            lrc,
+            lang,
+            verbose,
+            write_lrc,
+        } => lesson(&cfg, &a, &lrc, &lang, verbose, write_lrc.as_deref()),
+        Cmd::Gop {
+            path,
+            text,
+            text_file,
+            top,
+            model,
+            g2p,
+        } => gop_cmd(
+            &cfg,
+            &path,
+            text.as_deref(),
+            text_file.as_deref(),
+            top,
+            model.as_deref(),
+            g2p.as_deref(),
+        ),
         Cmd::Cases { dir, only } => run_cases(&cfg, &dir, only.as_deref()),
         Cmd::Bank { cmd } => match cmd {
-            BankCmd::Ingest { from_dir, book, limit, dry_run, overwrite } => {
-                bank_ingest(&cfg, from_dir.as_deref(), &book, limit, dry_run, overwrite)
-            }
-            BankCmd::List { corpus, level, tag, book, limit } => {
-                bank_list(&cfg, corpus.as_deref(), level, tag.as_deref(), book.as_deref(), limit)
-            }
+            BankCmd::Ingest {
+                from_dir,
+                book,
+                limit,
+                dry_run,
+                overwrite,
+            } => bank_ingest(&cfg, from_dir.as_deref(), &book, limit, dry_run, overwrite),
+            BankCmd::List {
+                corpus,
+                level,
+                tag,
+                book,
+                limit,
+            } => bank_list(
+                &cfg,
+                corpus.as_deref(),
+                level,
+                tag.as_deref(),
+                book.as_deref(),
+                limit,
+            ),
             BankCmd::Show { id } => bank_show(&cfg, &id),
             BankCmd::Drill { id, quiet } => bank_drill(&cfg, &id, quiet),
             BankCmd::Migrate => {
@@ -288,24 +328,47 @@ fn main() -> Result<()> {
                 Ok(())
             }
             BankCmd::Import { file } => {
-                let text = std::fs::read_to_string(&file)
-                    .with_context(|| format!("读取 {file} 失败"))?;
+                let text =
+                    std::fs::read_to_string(&file).with_context(|| format!("读取 {file} 失败"))?;
                 let docs: Vec<serde_json::Value> = serde_json::from_str(&text)
                     .with_context(|| format!("{file} 必须是 JSON 数组"))?;
                 let (added, skipped) =
                     voice_core::bank::import_prompts(Path::new(&cfg.data_dir), &docs)?;
-                println!("{}", serde_json::json!({"added": added, "skipped": skipped}));
+                println!(
+                    "{}",
+                    serde_json::json!({"added": added, "skipped": skipped})
+                );
                 Ok(())
             }
             BankCmd::Stats => bank_stats(&cfg),
             BankCmd::Pick {
-                tags, level, book, corpus, part, topic, kind, limit, offset, seed, allow_noise,
+                tags,
+                level,
+                book,
+                corpus,
+                part,
+                topic,
+                kind,
+                limit,
+                offset,
+                seed,
+                allow_noise,
                 no_weighted,
             } => bank_pick(
                 &cfg,
                 BankPickArgs {
-                    tags, level, book, corpus, part, topic, kind, limit, offset, seed,
-                    allow_noise, weighted: !no_weighted,
+                    tags,
+                    level,
+                    book,
+                    corpus,
+                    part,
+                    topic,
+                    kind,
+                    limit,
+                    offset,
+                    seed,
+                    allow_noise,
+                    weighted: !no_weighted,
                 },
             ),
             BankCmd::Retag => {
@@ -315,12 +378,38 @@ fn main() -> Result<()> {
             }
         },
         Cmd::Mic { secs } => mic(&cfg, &secs),
-        Cmd::Rec { max_sec, silence, start_timeout, stt: then_stt, lang, scene } => {
-            rec(&cfg, max_sec, silence, start_timeout, then_stt, &lang, &scene)
-        }
-        Cmd::Assess { path, reference, lang, engine, with_gop, scene } => {
-            assess_cmd(&cfg, &path, reference.as_deref(), &lang, engine.as_deref(), with_gop, &scene)
-        }
+        Cmd::Rec {
+            max_sec,
+            silence,
+            start_timeout,
+            stt: then_stt,
+            lang,
+            scene,
+        } => rec(
+            &cfg,
+            max_sec,
+            silence,
+            start_timeout,
+            then_stt,
+            &lang,
+            &scene,
+        ),
+        Cmd::Assess {
+            path,
+            reference,
+            lang,
+            engine,
+            with_gop,
+            scene,
+        } => assess_cmd(
+            &cfg,
+            &path,
+            reference.as_deref(),
+            &lang,
+            engine.as_deref(),
+            with_gop,
+            &scene,
+        ),
         Cmd::Watch { dir, lang } => watch(&cfg, dir.as_deref(), &lang),
         Cmd::TtsProbe { text } => tts_probe(&cfg, &text),
     }
@@ -341,7 +430,9 @@ fn doctor(cfg: &Config, load: bool) -> Result<()> {
     println!("\n-- 模型文件");
     for (name, path) in cfg.model_files() {
         if path.is_file() {
-            let mb = std::fs::metadata(&path).map(|m| m.len() as f64 / 1e6).unwrap_or(0.0);
+            let mb = std::fs::metadata(&path)
+                .map(|m| m.len() as f64 / 1e6)
+                .unwrap_or(0.0);
             println!("  [OK]   {name:<20} {mb:>8.1} MB  {}", path.display());
             ok += 1;
         } else {
@@ -577,7 +668,15 @@ fn say(
     let speeds = voice_core::engine::demo_speeds(slow_too, speed, cfg.synth_speed);
     for (label, sp) in &speeds {
         let s = tts.synthesize(text, sid, *sp)?;
-        let p = session.write_reference(&prefix, label, &s.samples, s.sample_rate, text, &s.voice, *sp)?;
+        let p = session.write_reference(
+            &prefix,
+            label,
+            &s.samples,
+            s.sample_rate,
+            text,
+            &s.voice,
+            *sp,
+        )?;
         out.push(serde_json::json!({
             "label": label, "speed": sp, "path": p,
             "dur": round3(s.duration), "gen_ms": round3(s.gen_ms as f32),
@@ -597,12 +696,11 @@ fn say(
         }))?
     );
 
-    if do_play {
-        if let Some(first) = out.first() {
-            if let Some(p) = first["path"].as_str() {
-                play::play_wav(p)?;
-            }
-        }
+    if do_play
+        && let Some(first) = out.first()
+        && let Some(p) = first["path"].as_str()
+    {
+        play::play_wav(p)?;
     }
     Ok(())
 }
@@ -618,8 +716,8 @@ fn lesson(
     write_lrc: Option<&str>,
 ) -> Result<()> {
     use voice_core::assess::lrc;
-    let lrc_text = std::fs::read_to_string(lrc_path)
-        .with_context(|| format!("读 LRC 失败: {lrc_path}"))?;
+    let lrc_text =
+        std::fs::read_to_string(lrc_path).with_context(|| format!("读 LRC 失败: {lrc_path}"))?;
     let decoded = audio::load_16k(audio_path)?;
     let duration = decoded.samples.len() as f32 / decoded.sample_rate as f32;
     let lines = lrc::parse(&lrc_text, duration);
@@ -697,31 +795,41 @@ fn lesson(
         .filter_map(|r| r["start_offset"].as_f64())
         .map(|v| v as f32)
         .collect();
-    let mean_off = if offsets.is_empty() { 0.0 } else { offsets.iter().sum::<f32>() / offsets.len() as f32 };
+    let mean_off = if offsets.is_empty() {
+        0.0
+    } else {
+        offsets.iter().sum::<f32>() / offsets.len() as f32
+    };
     let max_off = offsets.iter().fold(0.0f32, |a, b| a.max(b.abs()));
-    let mean_sim = if matched_sim.is_empty() { 0.0 } else { matched_sim.iter().sum::<f32>() / matched_sim.len() as f32 };
+    let mean_sim = if matched_sim.is_empty() {
+        0.0
+    } else {
+        matched_sim.iter().sum::<f32>() / matched_sim.len() as f32
+    };
 
     // ---- 线性拟合 t_hyp = a * t_lrc + b：判断 LRC 是否属于这条音轨 ----
     let fit = linear_fit(&line_rows);
     let mut retimed = serde_json::Value::Null;
-    if let Some(out) = write_lrc {
-        if let Some((a, b)) = fit {
-            let mut buf = String::new();
-            for l in &lines {
-                let t = (a * l.t0 + b).max(0.0);
-                let mm = (t / 60.0).floor() as u32;
-                let ss = t - mm as f32 * 60.0;
-                let body = if l.zh.is_empty() {
-                    l.en.clone()
-                } else {
-                    format!("{} | {}", l.en, l.zh)
-                };
-                buf.push_str(&format!("[{mm:02}:{ss:05.2}]{body}
-"));
-            }
-            std::fs::write(out, buf)?;
-            retimed = serde_json::json!(out);
+    if let Some(out) = write_lrc
+        && let Some((a, b)) = fit
+    {
+        let mut buf = String::new();
+        for l in &lines {
+            let t = (a * l.t0 + b).max(0.0);
+            let mm = (t / 60.0).floor() as u32;
+            let ss = t - mm as f32 * 60.0;
+            let body = if l.zh.is_empty() {
+                l.en.clone()
+            } else {
+                format!("{} | {}", l.en, l.zh)
+            };
+            buf.push_str(&format!(
+                "[{mm:02}:{ss:05.2}]{body}
+"
+            ));
         }
+        std::fs::write(out, buf)?;
+        retimed = serde_json::json!(out);
     }
 
     println!(
@@ -850,8 +958,11 @@ fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
         }
     }
 
-    println!("
-{} 个用例: {pass} 通过, {fail} 失败", pass + fail);
+    println!(
+        "
+{} 个用例: {pass} 通过, {fail} 失败",
+        pass + fail
+    );
     if fail > 0 {
         bail!("失败用例: {}", failures.join(", "));
     }
@@ -868,17 +979,27 @@ fn mic(cfg: &Config, secs: &f32) -> Result<()> {
             for f in s {
                 println!(
                     "      {:>4} ch {}  {}..{} Hz",
-                    f["channels"], f["format"].as_str().unwrap_or("?"),
-                    f["min_rate"], f["max_rate"]
+                    f["channels"],
+                    f["format"].as_str().unwrap_or("?"),
+                    f["min_rate"],
+                    f["max_rate"]
                 );
             }
         }
     }
-    println!("
-  默认: {}", report["default"].as_str().unwrap_or("(无)"));
-    println!("  配置 mic: {}", cfg.mic.as_deref().unwrap_or("(未指定，用默认)"));
-    println!("
-== 底噪测量（保持安静 {secs}s）");
+    println!(
+        "
+  默认: {}",
+        report["default"].as_str().unwrap_or("(无)")
+    );
+    println!(
+        "  配置 mic: {}",
+        cfg.mic.as_deref().unwrap_or("(未指定，用默认)")
+    );
+    println!(
+        "
+== 底噪测量（保持安静 {secs}s）"
+    );
     let r = capture::measure_noise_with(cfg.mic.as_deref(), *secs)?;
     println!("{}", serde_json::to_string_pretty(&r)?);
     if r.narrowband {
@@ -905,7 +1026,9 @@ fn rec(
     let store = Store::open(&cfg.data_dir)?;
     let session = store.new_session("drill")?;
 
-    eprintln!("[voice] 开始录音（上限 {max_sec}s，静音 {silence}s 自动停止，等说话 {start_timeout}s）… 请说话");
+    eprintln!(
+        "[voice] 开始录音（上限 {max_sec}s，静音 {silence}s 自动停止，等说话 {start_timeout}s）… 请说话"
+    );
     let opts = capture::RecordOptions {
         max_sec,
         silence_sec: silence,
@@ -935,7 +1058,11 @@ fn rec(
         cap.duration,
         cap.sample_rate,
         cap.device_sr,
-        if cap.auto_stopped { "，静音自动停止" } else { "" }
+        if cap.auto_stopped {
+            "，静音自动停止"
+        } else {
+            ""
+        }
     );
 
     // 用 VAD 精修首尾静音
@@ -945,7 +1072,10 @@ fn rec(
     let seq = session.next_seq()?;
     let prefix = session.take_prefix(seq, scene);
     // 原始证据：设备采样率原样落盘（48k 麦克风就是 48k），16k 是可重建的派生
-    let raw_path = session.dir.join("takes").join(format!("{prefix}.raw{}.wav", cap.device_sr));
+    let raw_path = session
+        .dir
+        .join("takes")
+        .join(format!("{prefix}.raw{}.wav", cap.device_sr));
     voice_core::audio::wav::write_wav_i16(&raw_path, &cap.raw, cap.device_sr)?;
     let norm = session.write_norm_wav(&prefix, &trimmed, voice_core::INTERNAL_SR)?;
     session.write_json(
@@ -1053,11 +1183,17 @@ fn assess_cmd(
         },
     )?;
 
-    let metrics_path = session.dir.join("takes").join(format!("{prefix}.metrics.json"));
+    let metrics_path = session
+        .dir
+        .join("takes")
+        .join(format!("{prefix}.metrics.json"));
     if metrics_path.is_file() {
         let _ = std::fs::copy(
             &metrics_path,
-            session.dir.join("takes").join(format!("{prefix}.metrics.prev.json")),
+            session
+                .dir
+                .join("takes")
+                .join(format!("{prefix}.metrics.prev.json")),
         );
     }
     session.write_json(&prefix, "metrics", &a)?;
@@ -1120,7 +1256,12 @@ fn save_seen(cfg: &Config, seen: &std::collections::BTreeMap<String, u64>) {
 fn watch(cfg: &Config, dir: Option<&str>, lang: &str) -> Result<()> {
     let dirs: Vec<PathBuf> = match dir {
         Some(d) => vec![PathBuf::from(d)],
-        None => cfg.watch_dirs.iter().filter(|d| d.is_dir()).cloned().collect(),
+        None => cfg
+            .watch_dirs
+            .iter()
+            .filter(|d| d.is_dir())
+            .cloned()
+            .collect(),
     };
     if dirs.is_empty() {
         bail!("没有可监视的目录（用 --dir 指定）");
@@ -1152,7 +1293,9 @@ fn watch(cfg: &Config, dir: Option<&str>, lang: &str) -> Result<()> {
     loop {
         std::thread::sleep(std::time::Duration::from_millis(700));
         for d in &dirs {
-            let Ok(rd) = std::fs::read_dir(d) else { continue };
+            let Ok(rd) = std::fs::read_dir(d) else {
+                continue;
+            };
             let mut candidates: Vec<(PathBuf, u64)> = Vec::new();
             for entry in rd.filter_map(|e| e.ok()) {
                 let p = entry.path();
@@ -1177,7 +1320,11 @@ fn watch(cfg: &Config, dir: Option<&str>, lang: &str) -> Result<()> {
                     continue;
                 }
                 match import_and_transcribe(cfg, &store, &mut engines, &path, lang) {
-                    Ok(txt) => println!("[watch] {} -> {}", path.file_name().unwrap_or_default().to_string_lossy(), txt),
+                    Ok(txt) => println!(
+                        "[watch] {} -> {}",
+                        path.file_name().unwrap_or_default().to_string_lossy(),
+                        txt
+                    ),
                     Err(e) => eprintln!("[watch] {} 处理失败: {e:#}", path.display()),
                 }
                 seen.insert(path.to_string_lossy().to_string(), size2);
@@ -1244,12 +1391,20 @@ fn tts_probe(cfg: &Config, text: &str) -> Result<()> {
     std::fs::create_dir_all(&out)?;
     let engines = Engines::load(cfg.clone())?;
     let tts = &engines.tts;
-    println!("为 {} 个音色生成样本 -> {}", tts.num_speakers(), out.display());
+    println!(
+        "为 {} 个音色生成样本 -> {}",
+        tts.num_speakers(),
+        out.display()
+    );
     for v in tts.voices() {
         let s = tts.synthesize(text, v.sid, 1.0)?;
         let p = out.join(format!("{:02}_{}_{}.wav", v.sid, v.lang, v.name));
         voice_core::audio::wav::write_wav_i16(&p, &s.samples, s.sample_rate)?;
-        println!("  {:<20} {}", v.name, p.file_name().unwrap_or_default().to_string_lossy());
+        println!(
+            "  {:<20} {}",
+            v.name,
+            p.file_name().unwrap_or_default().to_string_lossy()
+        );
     }
     println!("完成。逐个试听即可校准 音色名 ↔ sid 映射（当前表来自 hexgrad 官方 voices 字典序）");
     Ok(())
@@ -1327,7 +1482,11 @@ fn bank_list(
 ) -> Result<()> {
     let home = Path::new(&cfg.data_dir);
     let mut idx = voice_core::bank::read_index(home)?;
-    idx.retain(|e| corpus.map(|c| e.corpus.eq_ignore_ascii_case(c)).unwrap_or(true));
+    idx.retain(|e| {
+        corpus
+            .map(|c| e.corpus.eq_ignore_ascii_case(c))
+            .unwrap_or(true)
+    });
     idx.retain(|e| level.map(|l| e.level == l).unwrap_or(true));
     idx.retain(|e| book.map(|b| e.book.eq_ignore_ascii_case(b)).unwrap_or(true));
     if let Some(t) = tag {
@@ -1385,7 +1544,10 @@ fn bank_drill(cfg: &Config, id: &str, quiet: bool) -> Result<()> {
     let src = home.join(&e.src);
     if e.src.is_empty() || !src.is_file() {
         // prompt 类素材没有原生音频：不报错，提示改用 TTS 示范
-        println!("（无原生音频 → 用 synthesize 生成示范音；kind={} ref_audio={}）", e.kind, e.ref_audio);
+        println!(
+            "（无原生音频 → 用 synthesize 生成示范音；kind={} ref_audio={}）",
+            e.kind, e.ref_audio
+        );
         return Ok(());
     }
     println!("{}", e.text);
@@ -1407,7 +1569,11 @@ fn bank_drill(cfg: &Config, id: &str, quiet: bool) -> Result<()> {
         e.words,
         e.wpm,
         e.dur,
-        if e.tags.is_empty() { "-".to_string() } else { e.tags.join(",") }
+        if e.tags.is_empty() {
+            "-".to_string()
+        } else {
+            e.tags.join(",")
+        }
     );
     if !quiet {
         play::play_wav(&src)?;
@@ -1487,7 +1653,6 @@ fn bank_stats(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-
 // ------------------------------------------------------------------ GOP（S1）
 fn gop_cmd(
     cfg: &Config,
@@ -1505,8 +1670,9 @@ fn gop_cmd(
     let decoded = audio::load_16k(&src)?;
     let reference = match (text, text_file) {
         (Some(t), _) => t.to_string(),
-        (None, Some(f)) => std::fs::read_to_string(f)
-            .with_context(|| format!("读取参考文本失败: {f}"))?,
+        (None, Some(f)) => {
+            std::fs::read_to_string(f).with_context(|| format!("读取参考文本失败: {f}"))?
+        }
         (None, None) => bail!("需要 --text 或 --text-file（GOP 必须有参考音素）"),
     };
 

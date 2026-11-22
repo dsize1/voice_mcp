@@ -14,14 +14,60 @@ use crate::config::Config;
 
 /// Kokoro v1.0 的 54 个音色（顺序与 voices.bin 一致，按 hexgrad 官方 voices 目录字典序）。
 pub const KOKORO_VOICES: [&str; 54] = [
-    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole",
-    "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir",
-    "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa", "bf_alice", "bf_emma",
-    "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis", "ef_dora",
-    "em_alex", "em_santa", "ff_siwis", "hf_alpha", "hf_beta", "hm_omega", "hm_psi", "if_sara",
-    "im_nicola", "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo", "pf_dora",
-    "pm_alex", "pm_santa", "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian",
-    "zm_yunxi", "zm_yunxia", "zm_yunyang",
+    "af_alloy",
+    "af_aoede",
+    "af_bella",
+    "af_heart",
+    "af_jessica",
+    "af_kore",
+    "af_nicole",
+    "af_nova",
+    "af_river",
+    "af_sarah",
+    "af_sky",
+    "am_adam",
+    "am_echo",
+    "am_eric",
+    "am_fenrir",
+    "am_liam",
+    "am_michael",
+    "am_onyx",
+    "am_puck",
+    "am_santa",
+    "bf_alice",
+    "bf_emma",
+    "bf_isabella",
+    "bf_lily",
+    "bm_daniel",
+    "bm_fable",
+    "bm_george",
+    "bm_lewis",
+    "ef_dora",
+    "em_alex",
+    "em_santa",
+    "ff_siwis",
+    "hf_alpha",
+    "hf_beta",
+    "hm_omega",
+    "hm_psi",
+    "if_sara",
+    "im_nicola",
+    "jf_alpha",
+    "jf_gongitsune",
+    "jf_nezumi",
+    "jf_tebukuro",
+    "jm_kumo",
+    "pf_dora",
+    "pm_alex",
+    "pm_santa",
+    "zf_xiaobei",
+    "zf_xiaoni",
+    "zf_xiaoxiao",
+    "zf_xiaoyi",
+    "zm_yunjian",
+    "zm_yunxi",
+    "zm_yunxia",
+    "zm_yunyang",
 ];
 
 /// 跟读示范的慢速倍率（跟 skill 约定的固定值）
@@ -102,25 +148,35 @@ impl TtsEngine {
             }
         }
 
-        let mut config = OfflineTtsConfig::default();
-        config.model = OfflineTtsModelConfig {
-            kokoro: OfflineTtsKokoroModelConfig {
-                model: Some(model.to_string_lossy().to_string()),
-                voices: Some(voices.to_string_lossy().to_string()),
-                tokens: Some(tokens.to_string_lossy().to_string()),
-                lexicon: if lex.is_empty() { None } else { Some(lex.join(",")) },
+        let config = OfflineTtsConfig {
+            model: OfflineTtsModelConfig {
+                kokoro: OfflineTtsKokoroModelConfig {
+                    model: Some(model.to_string_lossy().to_string()),
+                    voices: Some(voices.to_string_lossy().to_string()),
+                    tokens: Some(tokens.to_string_lossy().to_string()),
+                    lexicon: if lex.is_empty() {
+                        None
+                    } else {
+                        Some(lex.join(","))
+                    },
+                    ..Default::default()
+                },
+                num_threads: cfg.num_threads,
+                provider: Some(cfg.provider.clone()),
                 ..Default::default()
             },
-            num_threads: cfg.num_threads,
-            provider: Some(cfg.provider.clone()),
+            max_num_sentences: 1,
             ..Default::default()
         };
-        config.max_num_sentences = 1;
 
         let tts = OfflineTts::create(&config).ok_or_else(|| anyhow!("TTS 创建失败"))?;
         let sample_rate = tts.sample_rate() as u32;
         let num_speakers = tts.num_speakers();
-        Ok(Self { tts, sample_rate, num_speakers })
+        Ok(Self {
+            tts,
+            sample_rate,
+            num_speakers,
+        })
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -135,7 +191,11 @@ impl TtsEngine {
         let n = self.num_speakers.max(0) as usize;
         (0..n)
             .map(|sid| {
-                let name = KOKORO_VOICES.get(sid).copied().unwrap_or("unknown").to_string();
+                let name = KOKORO_VOICES
+                    .get(sid)
+                    .copied()
+                    .unwrap_or("unknown")
+                    .to_string();
                 VoiceInfo {
                     sid: sid as i32,
                     lang: voice_lang(&name),
@@ -179,7 +239,11 @@ impl TtsEngine {
             samples,
             sample_rate: self.sample_rate,
             duration,
-            voice: KOKORO_VOICES.get(sid as usize).copied().unwrap_or("unknown").to_string(),
+            voice: KOKORO_VOICES
+                .get(sid as usize)
+                .copied()
+                .unwrap_or("unknown")
+                .to_string(),
             sid,
             speed,
             gen_ms,
@@ -229,9 +293,15 @@ mod tests {
         let v = demo_speeds(true, Some(0.75), 1.0);
         assert_eq!(v, vec![("slow", 0.75), ("norm", 1.0)]);
         // 不传 speed：常速用配置默认
-        assert_eq!(demo_speeds(true, None, 1.0), vec![("slow", 0.75), ("norm", 1.0)]);
+        assert_eq!(
+            demo_speeds(true, None, 1.0),
+            vec![("slow", 0.75), ("norm", 1.0)]
+        );
         // 显式给一个更快语速：尊重它
-        assert_eq!(demo_speeds(true, Some(1.2), 1.0), vec![("slow", 0.75), ("norm", 1.2)]);
+        assert_eq!(
+            demo_speeds(true, Some(1.2), 1.0),
+            vec![("slow", 0.75), ("norm", 1.2)]
+        );
         // 不要慢速版时 speed 原样生效
         assert_eq!(demo_speeds(false, Some(0.9), 1.0), vec![("norm", 0.9)]);
         assert_eq!(demo_speeds(false, None, 1.0), vec![("norm", 1.0)]);

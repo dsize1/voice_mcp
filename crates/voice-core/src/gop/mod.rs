@@ -18,7 +18,7 @@ pub mod g2p;
 pub mod model;
 pub mod phones;
 
-pub use ctc::{align, greedy, Aligned, PhoneRef};
+pub use ctc::{Aligned, PhoneRef, align, greedy};
 pub use g2p::{G2p, TextPhones};
 pub use model::PhonemeCtc;
 
@@ -40,12 +40,21 @@ pub struct GopEngine {
 impl GopEngine {
     /// 默认路径：`$VOICE_PHONEME_MODEL` / `$VOICE_G2P_DICT` 可覆盖。
     pub fn load_default() -> Result<Self> {
-        let preferred = std::env::var("VOICE_PHONEME_MODEL")
-            .unwrap_or_else(|_| model::MODEL_DIR.to_string());
-        let model_dir = if std::path::Path::new(&preferred).join("model.onnx").is_file() {
+        let preferred =
+            std::env::var("VOICE_PHONEME_MODEL").unwrap_or_else(|_| model::MODEL_DIR.to_string());
+        let model_dir = if std::path::Path::new(&preferred)
+            .join("model.onnx")
+            .is_file()
+        {
             preferred
-        } else if std::path::Path::new(model::MODEL_DIR_BASELINE).join("model.onnx").is_file() {
-            eprintln!("[gop] 未找到微调模型 {preferred}，回退基线 {}", model::MODEL_DIR_BASELINE);
+        } else if std::path::Path::new(model::MODEL_DIR_BASELINE)
+            .join("model.onnx")
+            .is_file()
+        {
+            eprintln!(
+                "[gop] 未找到微调模型 {preferred}，回退基线 {}",
+                model::MODEL_DIR_BASELINE
+            );
             model::MODEL_DIR_BASELINE.to_string()
         } else {
             preferred // 让 load 报出准确错误
@@ -63,7 +72,9 @@ impl GopEngine {
 /// 在全局引擎上跑一次闭包（首次调用会加载模型，约 1–2 s）。
 pub fn with_engine<T>(f: impl FnOnce(&mut GopEngine) -> Result<T>) -> Result<T> {
     let cell = GOP_ENGINE.get_or_init(|| Mutex::new(None));
-    let mut guard = cell.lock().map_err(|_| anyhow::anyhow!("GOP 引擎锁被 poison"))?;
+    let mut guard = cell
+        .lock()
+        .map_err(|_| anyhow::anyhow!("GOP 引擎锁被 poison"))?;
     if guard.is_none() {
         *guard = Some(GopEngine::load_default()?);
     }
@@ -78,8 +89,7 @@ pub fn should_run(with_gop: bool, has_reference: bool, band_limited: bool) -> bo
 }
 
 /// 给 `limitations` 用的固定措辞：GOP 现在只能当排序信号。
-pub const GOP_LIMITATION: &str =
-    "音素级 GOP 精度有限（so762 标定：FP=10% 时精确率 0.15–0.24），只能作为句内排序与趋势参考，不能单独判定某个音素读错";
+pub const GOP_LIMITATION: &str = "音素级 GOP 精度有限（so762 标定：FP=10% 时精确率 0.15–0.24），只能作为句内排序与趋势参考，不能单独判定某个音素读错";
 
 use anyhow::Result;
 use serde::Serialize;
@@ -106,7 +116,9 @@ pub struct PhoneScore {
 /// 高影响音素的混淆对：只有 TH 系列在当前数据上达到可用精度（so762 未见说话人：
 /// 命中精确率 0.50、召回 0.67，n=28）；其余（V/W/L/S/DH）命中精确率为 0，故不启用。
 pub fn confusion_hint(phone: &str, heard: &str) -> Option<String> {
-    let p = phone.trim_end_matches(|c: char| c.is_ascii_digit()).to_uppercase();
+    let p = phone
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .to_uppercase();
     let h = crate::gop::phones::norm_symbol(heard);
     let hit = match p.as_str() {
         "TH" => matches!(h.as_str(), "s" | "f" | "t"),
@@ -193,7 +205,11 @@ pub fn group_words(
             worst_z: crate::round_to(worst_z, 2),
         });
     }
-    out.sort_by(|a, b| a.gop_mean.partial_cmp(&b.gop_mean).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        a.gop_mean
+            .partial_cmp(&b.gop_mean)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out
 }
 
@@ -218,7 +234,10 @@ pub fn score_text(
                 }
                 continue;
             }
-            refs.push(PhoneRef { label: p.clone(), cands });
+            refs.push(PhoneRef {
+                label: p.clone(),
+                cands,
+            });
             word_of.push(wi);
         }
     }
@@ -267,7 +286,7 @@ pub fn score_text(
         }
     }
 }
-pub use phones::{espeak_candidates, norm_symbol, PhoneSet};
+pub use phones::{PhoneSet, espeak_candidates, norm_symbol};
 
 /// 评分器版本：写进 metrics，算法升级后可回溯/重算
 pub const GOP_VERSION: &str = "gop-sf-0.1";
@@ -310,15 +329,45 @@ mod tests {
     #[test]
     fn groups_phones_by_word_and_keeps_worst() {
         let words = vec![
-            g2p::WordPhones { word: "think".into(), phones: vec!["TH".into(), "IH".into()] },
-            g2p::WordPhones { word: "so".into(), phones: vec!["S".into(), "OW".into()] },
+            g2p::WordPhones {
+                word: "think".into(),
+                phones: vec!["TH".into(), "IH".into()],
+            },
+            g2p::WordPhones {
+                word: "so".into(),
+                phones: vec!["S".into(), "OW".into()],
+            },
         ];
         let word_of = vec![0usize, 0, 1, 1];
         let aligned = vec![
-            Aligned { label: "TH".into(), t0: 10, t1: 14, gop: -2.0, best: 1 },
-            Aligned { label: "IH".into(), t0: 14, t1: 18, gop: 1.0, best: 2 },
-            Aligned { label: "S".into(), t0: 18, t1: 20, gop: 3.0, best: 3 },
-            Aligned { label: "OW".into(), t0: 20, t1: 24, gop: 3.0, best: 4 },
+            Aligned {
+                label: "TH".into(),
+                t0: 10,
+                t1: 14,
+                gop: -2.0,
+                best: 1,
+            },
+            Aligned {
+                label: "IH".into(),
+                t0: 14,
+                t1: 18,
+                gop: 1.0,
+                best: 2,
+            },
+            Aligned {
+                label: "S".into(),
+                t0: 18,
+                t1: 20,
+                gop: 3.0,
+                best: 3,
+            },
+            Aligned {
+                label: "OW".into(),
+                t0: 20,
+                t1: 24,
+                gop: 3.0,
+                best: 4,
+            },
         ];
         let z = vec![-1.5f32, 0.5, 1.0, 1.0];
         let ws = group_words(&words, &word_of, &aligned, &z, 20);

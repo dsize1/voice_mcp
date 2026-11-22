@@ -29,21 +29,22 @@ impl Vad {
         if !model.is_file() {
             bail!("缺少 Silero VAD 模型: {}", model.display());
         }
-        let mut mc = VadModelConfig::default();
-        mc.silero_vad = SileroVadModelConfig {
-            model: Some(model.to_string_lossy().to_string()),
-            threshold: 0.4,
-            min_silence_duration: 0.25,
-            min_speech_duration: 0.15,
-            window_size: 512,
-            max_speech_duration: 30.0,
+        let mc = VadModelConfig {
+            silero_vad: SileroVadModelConfig {
+                model: Some(model.to_string_lossy().to_string()),
+                threshold: 0.4,
+                min_silence_duration: 0.25,
+                min_speech_duration: 0.15,
+                window_size: 512,
+                max_speech_duration: 30.0,
+            },
+            sample_rate: sample_rate as i32,
+            num_threads: 1,
+            provider: Some(cfg.provider.clone()),
+            ..Default::default()
         };
-        mc.sample_rate = sample_rate as i32;
-        mc.num_threads = 1;
-        mc.provider = Some(cfg.provider.clone());
 
-        let vd = VoiceActivityDetector::create(&mc, 30.0)
-            .ok_or_else(|| anyhow!("VAD 创建失败"))?;
+        let vd = VoiceActivityDetector::create(&mc, 30.0).ok_or_else(|| anyhow!("VAD 创建失败"))?;
         Ok(Self { vd, sample_rate })
     }
 

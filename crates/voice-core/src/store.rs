@@ -106,7 +106,13 @@ impl Store {
                 dir,
                 kind: id
                     .file_name()
-                    .map(|f| f.to_string_lossy().split('_').skip(1).collect::<Vec<_>>().join("_"))
+                    .map(|f| {
+                        f.to_string_lossy()
+                            .split('_')
+                            .skip(1)
+                            .collect::<Vec<_>>()
+                            .join("_")
+                    })
                     .unwrap_or_default(),
                 id: id.to_string_lossy().replace('\\', "/"),
             }
@@ -195,11 +201,15 @@ impl Session {
         let takes = self.dir.join("takes");
         let mut max = 0u32;
         for f in read_files(&takes)? {
-            let name = f.file_name().unwrap_or_default().to_string_lossy().to_string();
-            if let Some(head) = name.split('_').next() {
-                if let Ok(n) = head.parse::<u32>() {
-                    max = max.max(n);
-                }
+            let name = f
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if let Some(head) = name.split('_').next()
+                && let Ok(n) = head.parse::<u32>()
+            {
+                max = max.max(n);
             }
         }
         Ok(max + 1)
@@ -232,12 +242,19 @@ impl Session {
     }
 
     pub fn write_json<T: Serialize>(&self, prefix: &str, suffix: &str, v: &T) -> Result<PathBuf> {
-        let p = self.dir.join("takes").join(format!("{prefix}.{suffix}.json"));
+        let p = self
+            .dir
+            .join("takes")
+            .join(format!("{prefix}.{suffix}.json"));
         std::fs::write(&p, serde_json::to_string_pretty(v)?)?;
         Ok(p)
     }
 
     /// 写示范音（慢速/常速）及其元信息
+    ///
+    /// 参数刻意保持扁平：这是"一条留证记录"的完整字段，拆成 struct 反而让调用点
+    /// 多一层命名负担；调用方只有 `assess` / `synthesize` 两处。
+    #[allow(clippy::too_many_arguments)]
     pub fn write_reference(
         &self,
         prefix: &str,
@@ -248,13 +265,19 @@ impl Session {
         voice: &str,
         speed: f32,
     ) -> Result<PathBuf> {
-        let p = self.dir.join("takes").join(format!("{prefix}.ref_{label}.wav"));
+        let p = self
+            .dir
+            .join("takes")
+            .join(format!("{prefix}.ref_{label}.wav"));
         wav::write_wav_i16(&p, samples, sr)?;
         let meta = serde_json::json!({
             "text": text, "voice": voice, "speed": speed,
             "sample_rate": sr, "model": "kokoro-multi-lang-v1_0",
         });
-        let mp = self.dir.join("takes").join(format!("{prefix}.ref_{label}.json"));
+        let mp = self
+            .dir
+            .join("takes")
+            .join(format!("{prefix}.ref_{label}.json"));
         std::fs::write(&mp, serde_json::to_string_pretty(&meta)?)?;
         Ok(p)
     }
@@ -263,11 +286,15 @@ impl Session {
     pub fn take_prefixes(&self) -> Result<Vec<String>> {
         let mut v = Vec::new();
         for f in read_files(self.dir.join("takes"))? {
-            let name = f.file_name().unwrap_or_default().to_string_lossy().to_string();
-            if let Some(p) = name.split('.').next() {
-                if !v.iter().any(|x| x == p) {
-                    v.push(p.to_string());
-                }
+            let name = f
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if let Some(p) = name.split('.').next()
+                && !v.iter().any(|x| x == p)
+            {
+                v.push(p.to_string());
             }
         }
         v.sort();
@@ -380,11 +407,26 @@ mod tests {
 
     #[test]
     fn prefix_from_take_file() {
-        assert_eq!(prefix_of_take_file("001_drill.raw48000.wav").as_deref(), Some("001_drill"));
-        assert_eq!(prefix_of_take_file("012_read_third.16k.wav").as_deref(), Some("012_read_third"));
-        assert_eq!(prefix_of_take_file("003_retry.metrics.json").as_deref(), Some("003_retry"));
-        assert_eq!(prefix_of_take_file("003_retry.md").as_deref(), Some("003_retry"));
-        assert_eq!(prefix_of_take_file("003_retry.ref_slow.wav").as_deref(), Some("003_retry"));
+        assert_eq!(
+            prefix_of_take_file("001_drill.raw48000.wav").as_deref(),
+            Some("001_drill")
+        );
+        assert_eq!(
+            prefix_of_take_file("012_read_third.16k.wav").as_deref(),
+            Some("012_read_third")
+        );
+        assert_eq!(
+            prefix_of_take_file("003_retry.metrics.json").as_deref(),
+            Some("003_retry")
+        );
+        assert_eq!(
+            prefix_of_take_file("003_retry.md").as_deref(),
+            Some("003_retry")
+        );
+        assert_eq!(
+            prefix_of_take_file("003_retry.ref_slow.wav").as_deref(),
+            Some("003_retry")
+        );
         // 不以数字段开头的不认（防误伤手册/脚本文件）
         assert_eq!(prefix_of_take_file("notes.md"), None);
         assert_eq!(prefix_of_take_file("session.json"), None);

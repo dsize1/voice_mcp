@@ -6,14 +6,14 @@
 //! - 所有输出留证（音频 + 文字）到 `D:/voice_data`。
 
 pub mod assess;
-pub mod bank;
 pub mod audio;
+pub mod bank;
 pub mod config;
 pub mod engine;
 pub mod gop;
 pub mod store;
 
-pub use assess::{Assessment, AssessRequest};
+pub use assess::{AssessRequest, Assessment};
 pub use config::Config;
 pub use engine::{Engines, Transcript, Word};
 pub use store::{ManifestEntry, Session, Store};

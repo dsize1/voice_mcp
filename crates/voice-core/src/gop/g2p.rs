@@ -46,7 +46,10 @@ impl G2p {
             let Some(word) = it.next() else { continue };
             let base = word.split('(').next().unwrap_or(word).to_lowercase();
             let phones: Vec<String> = it
-                .map(|p| p.trim_end_matches(|c: char| c.is_ascii_digit()).to_uppercase())
+                .map(|p| {
+                    p.trim_end_matches(|c: char| c.is_ascii_digit())
+                        .to_uppercase()
+                })
                 .filter(|p| !p.is_empty())
                 .collect();
             if phones.is_empty() {
@@ -75,7 +78,10 @@ impl G2p {
             match self.dict.get(&w).and_then(|v| v.first()) {
                 Some(phones) => {
                     out.phones.extend(phones.iter().cloned());
-                    out.words.push(WordPhones { word: w, phones: phones.clone() });
+                    out.words.push(WordPhones {
+                        word: w,
+                        phones: phones.clone(),
+                    });
                 }
                 None => {
                     if !out.oov.contains(&w) {

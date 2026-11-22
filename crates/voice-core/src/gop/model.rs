@@ -37,14 +37,13 @@ impl PhonemeCtc {
             bail!("缺少音素模型: {}", onnx.display());
         }
         // 1) 指纹
-        if let Ok(meta_text) = std::fs::read_to_string(dir.join("metadata.json")) {
-            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_text) {
-                if let Some(want) = meta["sha256"]["model.onnx"].as_str() {
-                    let got = sha256_file(&onnx)?;
-                    if got != want {
-                        bail!("音素模型指纹不符：期望 {want}，实际 {got}（拒绝启用 GOP）");
-                    }
-                }
+        if let Ok(meta_text) = std::fs::read_to_string(dir.join("metadata.json"))
+            && let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_text)
+            && let Some(want) = meta["sha256"]["model.onnx"].as_str()
+        {
+            let got = sha256_file(&onnx)?;
+            if got != want {
+                bail!("音素模型指纹不符：期望 {want}，实际 {got}（拒绝启用 GOP）");
             }
         }
         // 2) 词表
@@ -77,7 +76,12 @@ impl PhonemeCtc {
             .commit_from_file(&onnx)
             .with_context(|| format!("创建推理会话失败: {}", onnx.display()))?;
 
-        Ok(Self { _env: env, session, phones, hop_ms: EXPECTED_FRAME_HOP_MS })
+        Ok(Self {
+            _env: env,
+            session,
+            phones,
+            hop_ms: EXPECTED_FRAME_HOP_MS,
+        })
     }
 
     /// 16 kHz 单声道 → 逐帧 log-softmax（frames × vocab）。
@@ -86,14 +90,13 @@ impl PhonemeCtc {
             bail!("空音频");
         }
         let mean = samples.iter().sum::<f32>() / samples.len() as f32;
-        let var = samples.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>()
-            / samples.len() as f32;
+        let var =
+            samples.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / samples.len() as f32;
         let inv = 1.0 / (var + 1e-7).sqrt();
         let input: Vec<f32> = samples.iter().map(|x| (x - mean) * inv).collect();
 
         let shape = [1i64, input.len() as i64];
-        let tensor = ort::value::Tensor::from_array((shape, input))
-            .context("构造输入张量失败")?;
+        let tensor = ort::value::Tensor::from_array((shape, input)).context("构造输入张量失败")?;
         let outputs = self
             .session
             .run(ort::inputs!["input_values" => tensor])
@@ -104,7 +107,11 @@ impl PhonemeCtc {
         let dims: Vec<usize> = shape_out.iter().map(|d| *d as usize).collect();
         anyhow::ensure!(dims.len() == 3 && dims[0] == 1, "意外输出形状: {dims:?}");
         let (t_len, v_len) = (dims[1], dims[2]);
-        anyhow::ensure!(v_len == self.phones.vocab.len(), "输出维度 {v_len} 与词表 {} 不符", self.phones.vocab.len());
+        anyhow::ensure!(
+            v_len == self.phones.vocab.len(),
+            "输出维度 {v_len} 与词表 {} 不符",
+            self.phones.vocab.len()
+        );
 
         let mut out = Vec::with_capacity(t_len);
         for t in 0..t_len {

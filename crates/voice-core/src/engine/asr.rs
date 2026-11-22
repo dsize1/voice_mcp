@@ -120,9 +120,7 @@ impl AsrEngine {
         let stream = self.rec.create_stream();
         stream.accept_waveform(sr as i32, samples);
         self.rec.decode(&stream);
-        let r = stream
-            .get_result()
-            .ok_or_else(|| anyhow!("ASR 无结果"))?;
+        let r = stream.get_result().ok_or_else(|| anyhow!("ASR 无结果"))?;
         let infer_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
         let ts = r.timestamps.clone().unwrap_or_default();
@@ -133,7 +131,11 @@ impl AsrEngine {
             .map(|(i, tok)| {
                 let start = ts.get(i).copied().unwrap_or(f32::NAN);
                 let end = ts.get(i + 1).copied().unwrap_or(start + 0.2);
-                Word { w: tok.clone(), t0: start, t1: end }
+                Word {
+                    w: tok.clone(),
+                    t0: start,
+                    t1: end,
+                }
             })
             .collect();
 
@@ -220,7 +222,11 @@ impl Asr {
                 AsrKind::SenseVoice => &self.sense,
                 AsrKind::Whisper => self.whisper()?,
             };
-            e.transcribe(samples, sr, if lang_lc.is_empty() { "auto" } else { &lang_lc })
+            e.transcribe(
+                samples,
+                sr,
+                if lang_lc.is_empty() { "auto" } else { &lang_lc },
+            )
         };
 
         let mut t = match attempt(primary) {
@@ -231,9 +237,8 @@ impl Asr {
                     AsrKind::Whisper => AsrKind::SenseVoice,
                     AsrKind::SenseVoice => AsrKind::Whisper,
                 };
-                let mut t = attempt(alt).map_err(|e2| {
-                    anyhow!("两个 ASR 引擎都失败: {e} / {e2}")
-                })?;
+                let mut t =
+                    attempt(alt).map_err(|e2| anyhow!("两个 ASR 引擎都失败: {e} / {e2}"))?;
                 t.degraded = true;
                 t
             }
@@ -355,7 +360,11 @@ fn words_from_tokens(text: &str, tokens: &[Word]) -> Vec<Word> {
             last.t1.max(last.t0 + 0.1)
         });
         let _ = wi;
-        out.push(Word { w: w.clone(), t0, t1: t1.max(t0) });
+        out.push(Word {
+            w: w.clone(),
+            t0,
+            t1: t1.max(t0),
+        });
     }
     out
 }
@@ -365,7 +374,11 @@ mod tests {
     use super::*;
 
     fn tok(w: &str, t: f32) -> Word {
-        Word { w: w.into(), t0: t, t1: t + 0.2 }
+        Word {
+            w: w.into(),
+            t0: t,
+            t1: t + 0.2,
+        }
     }
 
     #[test]
@@ -420,10 +433,18 @@ mod tests {
 
     #[test]
     fn cjk_punctuation_is_not_a_word() {
-        let toks = vec![tok("我", 0.0), tok("想", 0.2), tok("，", 0.4), tok("这", 0.6)];
+        let toks = vec![
+            tok("我", 0.0),
+            tok("想", 0.2),
+            tok("，", 0.4),
+            tok("这", 0.6),
+        ];
         let ws = words_from_tokens("我想，这", &toks);
         assert_eq!(ws.len(), 3, "标点不能算作一个词");
-        assert_eq!(ws.iter().map(|w| w.w.as_str()).collect::<Vec<_>>(), vec!["我", "想", "这"]);
+        assert_eq!(
+            ws.iter().map(|w| w.w.as_str()).collect::<Vec<_>>(),
+            vec!["我", "想", "这"]
+        );
     }
 
     #[test]

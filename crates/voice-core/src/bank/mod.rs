@@ -146,62 +146,101 @@ pub fn tags_for(text: &str) -> Vec<String> {
         }
     };
     // /θ/
-    for w in ["think", "third", "three", "thank", "month", "thought", "nothing", "something", "through", "thousand", "health", "both", "math"] {
+    for w in [
+        "think",
+        "third",
+        "three",
+        "thank",
+        "month",
+        "thought",
+        "nothing",
+        "something",
+        "through",
+        "thousand",
+        "health",
+        "both",
+        "math",
+    ] {
         if has(w) {
             push("theta_to_s");
             break;
         }
     }
     // /ð/
-    for w in ["this", "that", "these", "those", "they", "them", "their", "there", "then", "brother", "mother", "father", "other", "another", "the"] {
+    for w in [
+        "this", "that", "these", "those", "they", "them", "their", "there", "then", "brother",
+        "mother", "father", "other", "another", "the",
+    ] {
         if has(w) {
             push("eth_to_z");
             break;
         }
     }
     // /v/ vs /w/
-    for w in ["very", "village", "love", "live", "lives", "leave", "have", "give", "seven", "five", "over", "never", "every"] {
+    for w in [
+        "very", "village", "love", "live", "lives", "leave", "have", "give", "seven", "five",
+        "over", "never", "every",
+    ] {
         if has(w) {
             push("v_to_w");
             break;
         }
     }
-    for w in ["would", "want", "world", "work", "word", "winter", "woman", "women", "week", "with"] {
+    for w in [
+        "would", "want", "world", "work", "word", "winter", "woman", "women", "week", "with",
+    ] {
         if has(w) {
             push("w_to_v");
             break;
         }
     }
     // /r/ /l/
-    for w in ["right", "road", "rice", "read", "really", "very", "around", "already"] {
+    for w in [
+        "right", "road", "rice", "read", "really", "very", "around", "already",
+    ] {
         if has(w) {
             push("r_to_l");
             break;
         }
     }
     // 词尾辅音：以爆破音/摩擦音结尾的实词
-    for w in ["like", "time", "work", "talked", "walked", "asked", "small", "village", "seat", "good", "week"] {
+    for w in [
+        "like", "time", "work", "talked", "walked", "asked", "small", "village", "seat", "good",
+        "week",
+    ] {
         if has(w) {
             push("final_consonant_drop");
             break;
         }
     }
     // -ed / -s
-    if text.split_whitespace().any(|w| w.to_lowercase().ends_with("ed")) {
+    if text
+        .split_whitespace()
+        .any(|w| w.to_lowercase().ends_with("ed"))
+    {
         push("ed_ending");
     }
-    if text.split_whitespace().any(|w| w.to_lowercase().ends_with('s') && w.len() > 3) {
+    if text
+        .split_whitespace()
+        .any(|w| w.to_lowercase().ends_with('s') && w.len() > 3)
+    {
         push("s_ending");
     }
     // 辅音丛
-    for w in ["street", "straight", "asked", "texts", "twelfth", "splendid", "scream", "strong"] {
+    for w in [
+        "street", "straight", "asked", "texts", "twelfth", "splendid", "scream", "strong",
+    ] {
         if has(w) {
             push("cluster_simplify");
             break;
         }
     }
     // 连读/弱读素材
-    if text.contains(" of ") || text.contains(" a ") || text.contains(" at ") || text.contains(" it ") {
+    if text.contains(" of ")
+        || text.contains(" a ")
+        || text.contains(" at ")
+        || text.contains(" it ")
+    {
         push("linking_missing");
     }
     // 一般疑问句
@@ -224,7 +263,10 @@ pub fn tags_for(text: &str) -> Vec<String> {
     // 片段：LRC 把长段落切成了半句（小写开头 / 没有句末标点）→ Skill 优先选整句
     let t = text.trim();
     let starts_ok = t.chars().next().map(|c| !c.is_lowercase()).unwrap_or(false);
-    let ends_ok = matches!(t.chars().last().unwrap_or(' '), '.' | '?' | '!' | '"' | '\'');
+    let ends_ok = matches!(
+        t.chars().last().unwrap_or(' '),
+        '.' | '?' | '!' | '"' | '\''
+    );
     if !(starts_ok && ends_ok) {
         push("fragment");
     }
@@ -244,19 +286,19 @@ pub fn tags_for(text: &str) -> Vec<String> {
 ///
 /// 第三列是样本量（音素 token 数），用于判断权重是否可信；<1000 的 tag 建议保持默认。
 pub const TAG_WEIGHTS: &[(&str, f32, u32)] = &[
-    ("theta_to_s", 0.0770, 649),            // rate 7.70% × impact 1.0（lift 2.14x）
-    ("r_to_l", 0.0411, 6087),               // rate 4.11% × impact 1.0（lift 1.14x）
-    ("ae_to_e", 0.0294, 5393),              // rate 4.90% × impact 0.6（lift 1.36x）
-    ("final_consonant_drop", 0.0259, 20426),// rate 2.59% × impact 1.0（lift 0.72x）
-    ("short_long_vowel", 0.0257, 19895),    // rate 4.28% × impact 0.6（lift 1.19x）
-    ("w_to_v", 0.0254, 3148),               // rate 2.54% × impact 1.0（lift 0.71x）
-    ("v_to_w", 0.0247, 1617),               // rate 2.47% × impact 1.0（lift 0.69x）
-    ("l_dark", 0.0216, 3642),               // rate 3.60% × impact 0.6（lift 1.00x）
-    ("s_ending", 0.0194, 6759),             // rate 3.23% × impact 0.6（lift 0.90x）
-    ("ed_ending", 0.0192, 11649),           // rate 3.19% × impact 0.6（lift 0.89x）
-    ("eth_to_z", 0.0190, 3027),             // rate 2.38% × impact 0.8（lift 0.66x）
-    ("cluster_simplify", 0.0175, 4222),     // rate 2.91% × impact 0.6（lift 0.81x）
-    ("n_to_ng", 0.0161, 7113),              // rate 3.57% × impact 0.45（lift 0.99x）
+    ("theta_to_s", 0.0770, 649), // rate 7.70% × impact 1.0（lift 2.14x）
+    ("r_to_l", 0.0411, 6087),    // rate 4.11% × impact 1.0（lift 1.14x）
+    ("ae_to_e", 0.0294, 5393),   // rate 4.90% × impact 0.6（lift 1.36x）
+    ("final_consonant_drop", 0.0259, 20426), // rate 2.59% × impact 1.0（lift 0.72x）
+    ("short_long_vowel", 0.0257, 19895), // rate 4.28% × impact 0.6（lift 1.19x）
+    ("w_to_v", 0.0254, 3148),    // rate 2.54% × impact 1.0（lift 0.71x）
+    ("v_to_w", 0.0247, 1617),    // rate 2.47% × impact 1.0（lift 0.69x）
+    ("l_dark", 0.0216, 3642),    // rate 3.60% × impact 0.6（lift 1.00x）
+    ("s_ending", 0.0194, 6759),  // rate 3.23% × impact 0.6（lift 0.90x）
+    ("ed_ending", 0.0192, 11649), // rate 3.19% × impact 0.6（lift 0.89x）
+    ("eth_to_z", 0.0190, 3027),  // rate 2.38% × impact 0.8（lift 0.66x）
+    ("cluster_simplify", 0.0175, 4222), // rate 2.91% × impact 0.6（lift 0.81x）
+    ("n_to_ng", 0.0161, 7113),   // rate 3.57% × impact 0.45（lift 0.99x）
 ];
 
 /// 查 tag 权重；没有实测证据的 tag（`linking_missing` / `question_rise` / `tone_flat` …）
@@ -288,11 +330,7 @@ pub fn slug(s: &str) -> String {
 /// `<book>/<lesson编号>/<行号>`，教材里编号是文件名前两位（如 `02.Breakfast or Lunch`）。
 pub fn lesson_no(name: &str) -> String {
     let head: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if head.is_empty() {
-        slug(name)
-    } else {
-        head
-    }
+    if head.is_empty() { slug(name) } else { head }
 }
 
 pub fn id_for(book: &str, lesson: &str, seq: u32) -> String {
@@ -309,7 +347,9 @@ pub fn merge_short_lines(lines: &[lrc::Line]) -> Vec<lrc::Line> {
                 p.t1 = l.t1;
                 p.en = format!("{} {}", p.en.trim(), l.en.trim());
                 if !l.zh.is_empty() {
-                    p.zh = format!("{} {}", p.zh.trim(), l.zh.trim()).trim().to_string();
+                    p.zh = format!("{} {}", p.zh.trim(), l.zh.trim())
+                        .trim()
+                        .to_string();
                 }
                 p
             }
@@ -350,7 +390,11 @@ pub fn linear_fit(pairs: &[(f32, f32)]) -> Option<Fit> {
     let a = (n * sxy - sx * sy) / den;
     let b = (sy - a * sx) / n;
     let consistent = (a as f32 - 1.0).abs() < FIT_SCALE_TOL && (b as f32).abs() < FIT_OFFSET_MAX;
-    Some(Fit { scale: crate::round_to(a as f32, 3), offset: crate::round_to(b as f32, 2), consistent })
+    Some(Fit {
+        scale: crate::round_to(a as f32, 3),
+        offset: crate::round_to(b as f32, 2),
+        consistent,
+    })
 }
 
 // ---------------------------------------------------------------- 索引读写
@@ -382,10 +426,18 @@ pub fn normalize_entry(e: &mut BankEntry) {
         };
     }
     if e.kind.is_empty() {
-        e.kind = if e.src.is_empty() { "prompt".into() } else { "read_aloud".into() };
+        e.kind = if e.src.is_empty() {
+            "prompt".into()
+        } else {
+            "read_aloud".into()
+        };
     }
     if e.ref_audio.is_empty() {
-        e.ref_audio = if e.src.is_empty() { "tts".into() } else { "native".into() };
+        e.ref_audio = if e.src.is_empty() {
+            "tts".into()
+        } else {
+            "native".into()
+        };
     }
     if e.words == 0 {
         e.words = crate::assess::normalize::words(&e.text).len();
@@ -397,7 +449,8 @@ pub fn read_index(home: &Path) -> Result<Vec<BankEntry>> {
     if !p.is_file() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&p).with_context(|| format!("读取索引失败: {}", p.display()))?;
+    let text =
+        std::fs::read_to_string(&p).with_context(|| format!("读取索引失败: {}", p.display()))?;
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -447,8 +500,15 @@ fn upsert_quarantine(home: &Path, rows: &[serde_json::Value]) -> Result<()> {
         }
     }
     for r in rows {
-        let id = r.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        match all.iter().position(|x| x.get("id").and_then(|v| v.as_str()) == Some(id.as_str())) {
+        let id = r
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        match all
+            .iter()
+            .position(|x| x.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+        {
             Some(i) => all[i] = r.clone(),
             None => all.push(r.clone()),
         }
@@ -506,14 +566,29 @@ pub fn ingest_file(
         if said.is_empty() {
             continue;
         }
-        let sim = diff::similarity(&ref_words.join(" "), &normalize::words(&said.join(" ")).join(" "));
+        let sim = diff::similarity(
+            &ref_words.join(" "),
+            &normalize::words(&said.join(" ")).join(" "),
+        );
         sims.push(sim);
-        if let Some(first) = transcript.words.iter().find(|w| w.t0 >= l.t0 - 0.25 && w.t0 < l.t1) {
+        if let Some(first) = transcript
+            .words
+            .iter()
+            .find(|w| w.t0 >= l.t0 - 0.25 && w.t0 < l.t1)
+        {
             pairs.push((l.t0, first.t0));
         }
     }
-    let fit = linear_fit(&pairs).unwrap_or(Fit { scale: 1.0, offset: 0.0, consistent: false });
-    let mean_sim = if sims.is_empty() { 0.0 } else { sims.iter().sum::<f32>() / sims.len() as f32 };
+    let fit = linear_fit(&pairs).unwrap_or(Fit {
+        scale: 1.0,
+        offset: 0.0,
+        consistent: false,
+    });
+    let mean_sim = if sims.is_empty() {
+        0.0
+    } else {
+        sims.iter().sum::<f32>() / sims.len() as f32
+    };
     let mean_sim = crate::round_to(mean_sim, 3);
 
     let mut meta = LessonMeta {
@@ -584,18 +659,30 @@ pub fn ingest_file(
         let (slice, offset) = if let (Some(a), Some(b)) = (segs.first(), segs.last()) {
             let s0 = ((a.t0 - SLICE_PAD).max(0.0) * 16_000.0) as usize;
             let s1 = (((b.t1 + SLICE_PAD) * 16_000.0) as usize).min(raw.len());
-            if s0 < s1 { (&raw[s0..s1], a.t0 - s0 as f32 / 16_000.0) } else { (raw, 0.0) }
+            if s0 < s1 {
+                (&raw[s0..s1], a.t0 - s0 as f32 / 16_000.0)
+            } else {
+                (raw, 0.0)
+            }
         } else {
             (raw, 0.0)
         };
         let dur = slice.len() as f32 / 16_000.0;
         let words = normalize::words(&l.en).len();
-        let wpm = if dur > 0.0 { words as f32 / dur * 60.0 } else { 0.0 };
+        let wpm = if dur > 0.0 {
+            words as f32 / dur * 60.0
+        } else {
+            0.0
+        };
         let _ = offset;
 
         // 收紧后的切片内 VAD 语音占比（用于质量门槛）
         let speech: f32 = segs.iter().map(|s| s.dur()).sum();
-        let speech_ratio = if dur > 0.0 { (speech / dur).min(1.0) } else { 0.0 };
+        let speech_ratio = if dur > 0.0 {
+            (speech / dur).min(1.0)
+        } else {
+            0.0
+        };
 
         let line_sim = {
             let ref_words = normalize::words(&l.en);
@@ -608,34 +695,54 @@ pub fn ingest_file(
             if said.is_empty() {
                 0.0
             } else {
-                diff::similarity(&ref_words.join(" "), &normalize::words(&said.join(" ")).join(" "))
+                diff::similarity(
+                    &ref_words.join(" "),
+                    &normalize::words(&said.join(" ")).join(" "),
+                )
             }
         };
 
         let mut reasons: Vec<String> = Vec::new();
         if line_sim < LINE_SIM_MIN {
-            reasons.push(format!("line_sim {:.2} < {LINE_SIM_MIN}（字幕与音频不符或缺句）", line_sim));
+            reasons.push(format!(
+                "line_sim {:.2} < {LINE_SIM_MIN}（字幕与音频不符或缺句）",
+                line_sim
+            ));
         }
         if !(DUR_MIN..=DUR_MAX).contains(&dur) {
             reasons.push(format!("dur {dur:.2}s 不在 [{DUR_MIN}, {DUR_MAX}]"));
         }
         if decoded.info.band_limited {
-            reasons.push(format!("band_limited（源采样率 {} Hz < 24 kHz）", decoded.info.source_sr));
+            reasons.push(format!(
+                "band_limited（源采样率 {} Hz < 24 kHz）",
+                decoded.info.source_sr
+            ));
         }
         if speech_ratio < SPEECH_RATIO_MIN {
-            reasons.push(format!("speech_ratio {:.2} < {SPEECH_RATIO_MIN}（切到静音或行边界错位）", speech_ratio));
+            reasons.push(format!(
+                "speech_ratio {:.2} < {SPEECH_RATIO_MIN}（切到静音或行边界错位）",
+                speech_ratio
+            ));
         }
         if words < WORDS_MIN {
             reasons.push(format!("words {words} < {WORDS_MIN}"));
         }
         if !reasons.is_empty() {
-            meta.rejected.push(Rejection { seq, text: l.en.clone(), reasons });
+            meta.rejected.push(Rejection {
+                seq,
+                text: l.en.clone(),
+                reasons,
+            });
             continue;
         }
 
         let entry = BankEntry {
             id: id.clone(),
-            corpus: if book.to_lowercase().starts_with("nce") { "nce".into() } else { slug(&book) },
+            corpus: if book.to_lowercase().starts_with("nce") {
+                "nce".into()
+            } else {
+                slug(&book)
+            },
             kind: "read_aloud".into(),
             ref_audio: "native".into(),
             exam: None,
@@ -666,7 +773,7 @@ pub fn ingest_file(
         if !opts.dry_run {
             let dir = bank_dir(home).join(&slug_dir);
             std::fs::create_dir_all(&dir)?;
-            audio::wav::write_wav_i16(&dir.join(format!("{seq:03}.ref.wav")), slice, 16_000)?;
+            audio::wav::write_wav_i16(dir.join(format!("{seq:03}.ref.wav")), slice, 16_000)?;
         }
     }
 
@@ -705,7 +812,13 @@ pub fn ingest_file(
             })
             .collect();
         upsert_quarantine(home, &rows)?;
-        append_attribution(home, &book, &lesson_name, &audio_path.to_string_lossy(), mean_sim)?;
+        append_attribution(
+            home,
+            &book,
+            &lesson_name,
+            &audio_path.to_string_lossy(),
+            mean_sim,
+        )?;
     }
 
     eprintln!(
@@ -735,11 +848,20 @@ fn write_lesson_meta(home: &Path, slug_dir: &str, meta: &LessonMeta) -> Result<(
     Ok(())
 }
 
-fn append_attribution(home: &Path, book: &str, lesson: &str, src: &str, mean_sim: f32) -> Result<()> {
+fn append_attribution(
+    home: &Path,
+    book: &str,
+    lesson: &str,
+    src: &str,
+    mean_sim: f32,
+) -> Result<()> {
     use std::io::Write;
     let p = bank_dir(home).join("ATTRIBUTION.md");
     if !p.is_file() {
-        std::fs::write(&p, "# 素材来源\n\n音频与字幕来自公开教材站点，仅本地个人学习使用；不入 git。\n\n| 日期 | 书 | 课 | 来源 | 行相似度 |\n|---|---|---|---|---|\n")?;
+        std::fs::write(
+            &p,
+            "# 素材来源\n\n音频与字幕来自公开教材站点，仅本地个人学习使用；不入 git。\n\n| 日期 | 书 | 课 | 来源 | 行相似度 |\n|---|---|---|---|---|\n",
+        )?;
     }
     let mut f = std::fs::OpenOptions::new().append(true).open(&p)?;
     writeln!(
@@ -795,10 +917,10 @@ pub fn ingest_dir(
     files.sort();
     let mut out = Vec::new();
     for mp3 in files {
-        if let Some(n) = limit {
-            if out.len() >= n {
-                break;
-            }
+        if let Some(n) = limit
+            && out.len() >= n
+        {
+            break;
         }
         let lrc = mp3.with_extension("lrc");
         if !lrc.is_file() {
@@ -836,7 +958,12 @@ pub fn import_prompts(home: &Path, docs: &[serde_json::Value]) -> Result<(usize,
     let mut added = 0;
     let mut skipped = 0;
     for d in docs {
-        let text = d.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let text = d
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if text.is_empty() {
             bail!("素材缺 text 字段: {d}");
         }
@@ -850,33 +977,64 @@ pub fn import_prompts(home: &Path, docs: &[serde_json::Value]) -> Result<(usize,
             continue;
         }
         let part = d.get("part").and_then(|v| v.as_u64()).map(|p| p as u8);
-        if let Some(p) = part {
-            if !(1..=3).contains(&p) {
-                bail!("{id}: part={p} 不在 1..=3");
-            }
+        if let Some(p) = part
+            && !(1..=3).contains(&p)
+        {
+            bail!("{id}: part={p} 不在 1..=3");
         }
         let topics: Vec<String> = d
             .get("topics")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
         let words = crate::assess::normalize::words(&text).len();
         idx.push(BankEntry {
             id: id.clone(),
-            corpus: d.get("corpus").and_then(|v| v.as_str()).unwrap_or("ielts").to_string(),
-            kind: d.get("kind").and_then(|v| v.as_str()).unwrap_or("prompt").to_string(),
-            ref_audio: d.get("ref_audio").and_then(|v| v.as_str()).unwrap_or("tts").to_string(),
+            corpus: d
+                .get("corpus")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ielts")
+                .to_string(),
+            kind: d
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("prompt")
+                .to_string(),
+            ref_audio: d
+                .get("ref_audio")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tts")
+                .to_string(),
             exam: Some(ExamAlignment {
                 framework: "IELTS".into(),
                 part,
                 topics,
-                task: d.get("task").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                task: d
+                    .get("task")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             }),
-            book: d.get("book").and_then(|v| v.as_str()).unwrap_or("IELTS prompts").to_string(),
-            lesson: d.get("lesson").and_then(|v| v.as_str()).unwrap_or("custom").to_string(),
+            book: d
+                .get("book")
+                .and_then(|v| v.as_str())
+                .unwrap_or("IELTS prompts")
+                .to_string(),
+            lesson: d
+                .get("lesson")
+                .and_then(|v| v.as_str())
+                .unwrap_or("custom")
+                .to_string(),
             seq: idx.len() as u32 + 1,
             text: text.clone(),
-            zh: d.get("zh").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            zh: d
+                .get("zh")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             t0: 0.0,
             t1: 0.0,
             dur: 0.0,
@@ -987,25 +1145,25 @@ pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
     let idx = read_index(home)?;
     let mut scored: Vec<(f32, usize, &BankEntry, u64)> = Vec::new();
     for e in &idx {
-        if let Some(lv) = q.level {
-            if e.level != lv {
-                continue;
-            }
+        if let Some(lv) = q.level
+            && e.level != lv
+        {
+            continue;
         }
-        if let Some(b) = &q.book {
-            if !e.book.eq_ignore_ascii_case(b) {
-                continue;
-            }
+        if let Some(b) = &q.book
+            && !e.book.eq_ignore_ascii_case(b)
+        {
+            continue;
         }
-        if let Some(c) = &q.corpus {
-            if !e.corpus.eq_ignore_ascii_case(c) {
-                continue;
-            }
+        if let Some(c) = &q.corpus
+            && !e.corpus.eq_ignore_ascii_case(c)
+        {
+            continue;
         }
-        if let Some(k) = &q.kind {
-            if !e.kind.eq_ignore_ascii_case(k) {
-                continue;
-            }
+        if let Some(k) = &q.kind
+            && !e.kind.eq_ignore_ascii_case(k)
+        {
+            continue;
         }
         if let Some(pt) = q.part {
             match e.exam.as_ref().and_then(|x| x.part) {
@@ -1099,7 +1257,11 @@ pub fn stats(home: &Path) -> Result<BankStats> {
         entries: idx.len(),
         quarantine,
         total_dur: crate::round_to(total_dur, 1),
-        mean_wpm: if idx.is_empty() { 0.0 } else { crate::round_to(wpm_sum / idx.len() as f32, 1) },
+        mean_wpm: if idx.is_empty() {
+            0.0
+        } else {
+            crate::round_to(wpm_sum / idx.len() as f32, 1)
+        },
         by_level,
         by_book,
         top_tags,
@@ -1142,11 +1304,15 @@ mod tests {
         assert!(tags_for("Would you like a cup of tea?").contains(&"question_rise".to_string()));
         // 课头/导语要能识别出来
         assert!(tags_for("Lesson 33").contains(&"lesson_header".to_string()));
-        assert!(tags_for("Listen to the tape then answer this question.")
-            .contains(&"instruction".to_string()));
+        assert!(
+            tags_for("Listen to the tape then answer this question.")
+                .contains(&"instruction".to_string())
+        );
         // 标题与导语被合并成一行时也要能识别
-        assert!(tags_for("Our village Listen to the tape then answer this question.")
-            .contains(&"instruction".to_string()));
+        assert!(
+            tags_for("Our village Listen to the tape then answer this question.")
+                .contains(&"instruction".to_string())
+        );
     }
 
     fn mk_entry(id: &str, level: u8, tags: &[&str]) -> BankEntry {
@@ -1221,11 +1387,13 @@ mod tests {
 
         // 空 text / 非法 part 必须报错，而不是静默入库
         assert!(import_prompts(&tmp, &[serde_json::json!({"text":"   "})]).is_err());
-        assert!(import_prompts(
-            &tmp,
-            &[serde_json::json!({"id":"ielts/custom/y","part":9,"text":"bad part"})]
-        )
-        .is_err());
+        assert!(
+            import_prompts(
+                &tmp,
+                &[serde_json::json!({"id":"ielts/custom/y","part":9,"text":"bad part"})]
+            )
+            .is_err()
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1262,17 +1430,29 @@ mod tests {
         assert_eq!(got[0].id, "nce2/01/002", "命中两个 tag 的应排第一");
 
         // 难度过滤
-        let q1 = PickQuery { level: Some(1), ..Default::default() };
+        let q1 = PickQuery {
+            level: Some(1),
+            ..Default::default()
+        };
         assert_eq!(pick(&tmp, &q1).unwrap().len(), 2);
 
         // 语料过滤：全是 NCE2，没有 ielts
-        let qc = PickQuery { corpus: Some("ielts".into()), ..Default::default() };
+        let qc = PickQuery {
+            corpus: Some("ielts".into()),
+            ..Default::default()
+        };
         assert_eq!(pick(&tmp, &qc).unwrap().len(), 0);
-        let qc2 = PickQuery { corpus: Some("nce".into()), ..Default::default() };
+        let qc2 = PickQuery {
+            corpus: Some("nce".into()),
+            ..Default::default()
+        };
         assert_eq!(pick(&tmp, &qc2).unwrap().len(), 3);
 
         // seed 可复现
-        let qs = PickQuery { seed: Some(42), ..Default::default() };
+        let qs = PickQuery {
+            seed: Some(42),
+            ..Default::default()
+        };
         let a: Vec<String> = pick(&tmp, &qs).unwrap().into_iter().map(|e| e.id).collect();
         let b: Vec<String> = pick(&tmp, &qs).unwrap().into_iter().map(|e| e.id).collect();
         assert_eq!(a, b);
@@ -1293,19 +1473,22 @@ mod tests {
             weighted: true,
             ..Default::default()
         };
-        assert!(tag_weight("theta_to_s") > tag_weight("s_ending") + tag_weight("ed_ending") + tag_weight("n_to_ng"));
+        assert!(
+            tag_weight("theta_to_s")
+                > tag_weight("s_ending") + tag_weight("ed_ending") + tag_weight("n_to_ng")
+        );
         // 没证据的 tag 权重必须是 0（否则等于编造依据）
         assert_eq!(tag_weight("question_rise"), 0.0);
         assert_eq!(tag_weight("linking_missing"), 0.0);
-        assert_eq!(q.weighted, true);
+        assert!(q.weighted);
     }
 
     #[test]
     fn tag_weights_match_derived_artifact() {
         // docs/tag-weights.json 由 tools/derive_tag_weights.py 从 so762 生成；
         // 这里有漂移就说明"代码里的权重"和"数据推导出的权重"不一致。
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/tag-weights.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/tag-weights.json");
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("读不到 {}: {e}", path.display()));
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1325,10 +1508,30 @@ mod tests {
     #[test]
     fn short_lines_get_merged() {
         let lines = vec![
-            lrc::Line { t0: 0.0, t1: 1.0, en: "Yes.".into(), zh: "是的。".into() },
-            lrc::Line { t0: 1.0, t1: 2.0, en: "No.".into(), zh: "不。".into() },
-            lrc::Line { t0: 2.0, t1: 4.0, en: "I never get up early.".into(), zh: "我从不早起。".into() },
-            lrc::Line { t0: 4.0, t1: 6.0, en: "It was Sunday.".into(), zh: "".into() },
+            lrc::Line {
+                t0: 0.0,
+                t1: 1.0,
+                en: "Yes.".into(),
+                zh: "是的。".into(),
+            },
+            lrc::Line {
+                t0: 1.0,
+                t1: 2.0,
+                en: "No.".into(),
+                zh: "不。".into(),
+            },
+            lrc::Line {
+                t0: 2.0,
+                t1: 4.0,
+                en: "I never get up early.".into(),
+                zh: "我从不早起。".into(),
+            },
+            lrc::Line {
+                t0: 4.0,
+                t1: 6.0,
+                en: "It was Sunday.".into(),
+                zh: "".into(),
+            },
         ];
         let m = merge_short_lines(&lines);
         // "Yes." + "No." 只有 2 词 → 继续吞并到 "I never get up early."；"It was Sunday." 自身够 3 词
@@ -1341,7 +1544,9 @@ mod tests {
     #[test]
     fn fit_detects_mismatch() {
         // 一致
-        let good: Vec<(f32, f32)> = (0..8).map(|i| (i as f32 * 10.0, i as f32 * 10.0 + 0.1)).collect();
+        let good: Vec<(f32, f32)> = (0..8)
+            .map(|i| (i as f32 * 10.0, i as f32 * 10.0 + 0.1))
+            .collect();
         let f = linear_fit(&good).unwrap();
         assert!(f.consistent);
         // 整条音轨时间轴差 28%

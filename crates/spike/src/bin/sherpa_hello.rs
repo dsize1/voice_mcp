@@ -3,5 +3,8 @@
 fn main() {
     println!("sherpa-onnx version: {}", sherpa_onnx::version());
     let cfg = sherpa_onnx::VadModelConfig::default();
-    println!("VadModelConfig::default() ok, threshold={}", cfg.silero_vad.threshold);
+    println!(
+        "VadModelConfig::default() ok, threshold={}",
+        cfg.silero_vad.threshold
+    );
 }

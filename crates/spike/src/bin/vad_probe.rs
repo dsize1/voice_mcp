@@ -3,7 +3,9 @@ use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
 use voice_core::audio::decode_to_mono;
 
 fn main() -> Result<()> {
-    let path = std::env::args().nth(1).unwrap_or_else(|| r"C:\Users\jiayan\Documents\录音\test.m4a".into());
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| r"C:\Users\jiayan\Documents\录音\test.m4a".into());
     let a = decode_to_mono(&path, 16_000)?;
     println!("samples={} dur={:.2}s", a.samples.len(), a.info.duration);
 
@@ -24,12 +26,20 @@ fn main() -> Result<()> {
     // 方式 A：一次性喂
     vd.accept_waveform(&a.samples);
     vd.flush();
-    println!("-- 一次性喂入: empty={} detected={}", vd.is_empty(), vd.detected());
+    println!(
+        "-- 一次性喂入: empty={} detected={}",
+        vd.is_empty(),
+        vd.detected()
+    );
     while !vd.is_empty() {
         if let Some(s) = vd.front() {
-            println!("   seg start={} n={} (t0={:.2}s dur={:.2}s)",
-                s.start(), s.samples().len(),
-                s.start() as f32 / 16000.0, s.samples().len() as f32 / 16000.0);
+            println!(
+                "   seg start={} n={} (t0={:.2}s dur={:.2}s)",
+                s.start(),
+                s.samples().len(),
+                s.start() as f32 / 16000.0,
+                s.samples().len() as f32 / 16000.0
+            );
         }
         vd.pop();
     }
@@ -39,14 +49,20 @@ fn main() -> Result<()> {
         let mut c2 = mc.clone();
         c2.silero_vad.threshold = th;
         let v2 = VoiceActivityDetector::create(&c2, 30.0).expect("vad");
-        for chunk in a.samples.chunks(512) { v2.accept_waveform(chunk); }
+        for chunk in a.samples.chunks(512) {
+            v2.accept_waveform(chunk);
+        }
         v2.flush();
         let mut segs = Vec::new();
         let mut total = 0.0f32;
         while !v2.is_empty() {
             if let Some(s) = v2.front() {
-                segs.push(format!("{:.2}-{:.2}", s.start() as f32/16000.0, (s.start()+s.samples().len() as i64) as f32/16000.0));
-                total += s.samples().len() as f32/16000.0;
+                segs.push(format!(
+                    "{:.2}-{:.2}",
+                    s.start() as f32 / 16000.0,
+                    (s.start() + s.samples().len() as i64) as f32 / 16000.0
+                ));
+                total += s.samples().len() as f32 / 16000.0;
             }
             v2.pop();
         }
@@ -62,9 +78,13 @@ fn main() -> Result<()> {
     println!("-- 分块喂入(512): empty={}", vd.is_empty());
     while !vd.is_empty() {
         if let Some(s) = vd.front() {
-            println!("   seg start={} n={} (t0={:.2}s dur={:.2}s)",
-                s.start(), s.samples().len(),
-                s.start() as f32 / 16000.0, s.samples().len() as f32 / 16000.0);
+            println!(
+                "   seg start={} n={} (t0={:.2}s dur={:.2}s)",
+                s.start(),
+                s.samples().len(),
+                s.start() as f32 / 16000.0,
+                s.samples().len() as f32 / 16000.0
+            );
         }
         vd.pop();
     }
@@ -72,12 +92,18 @@ fn main() -> Result<()> {
     println!("-- 复用同一 detector 连续两次 --");
     for round in 1..=2 {
         vd.clear();
-        for chunk in a.samples.chunks(512) { vd.accept_waveform(chunk); }
+        for chunk in a.samples.chunks(512) {
+            vd.accept_waveform(chunk);
+        }
         vd.flush();
         let mut segs = Vec::new();
         while !vd.is_empty() {
             if let Some(s) = vd.front() {
-                segs.push(format!("{:.2}-{:.2}", s.start() as f32/16000.0, (s.start()+s.samples().len() as i64) as f32/16000.0));
+                segs.push(format!(
+                    "{:.2}-{:.2}",
+                    s.start() as f32 / 16000.0,
+                    (s.start() + s.samples().len() as i64) as f32 / 16000.0
+                ));
             }
             vd.pop();
         }
@@ -86,12 +112,18 @@ fn main() -> Result<()> {
     println!("-- 改用 reset() --");
     for round in 1..=2 {
         vd.reset();
-        for chunk in a.samples.chunks(512) { vd.accept_waveform(chunk); }
+        for chunk in a.samples.chunks(512) {
+            vd.accept_waveform(chunk);
+        }
         vd.flush();
         let mut segs = Vec::new();
         while !vd.is_empty() {
             if let Some(s) = vd.front() {
-                segs.push(format!("{:.2}-{:.2}", s.start() as f32/16000.0, (s.start()+s.samples().len() as i64) as f32/16000.0));
+                segs.push(format!(
+                    "{:.2}-{:.2}",
+                    s.start() as f32 / 16000.0,
+                    (s.start() + s.samples().len() as i64) as f32 / 16000.0
+                ));
             }
             vd.pop();
         }

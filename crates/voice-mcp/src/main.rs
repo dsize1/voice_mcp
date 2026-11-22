@@ -8,8 +8,8 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::handler::server::tool::ToolRouter;
+use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{ServiceExt, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -150,7 +150,6 @@ struct PathParams {
     path: String,
 }
 
-
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 struct PrepareParams {
     /// 音频文件绝对路径，或 "last"
@@ -176,12 +175,20 @@ struct OkResult {
 
 impl OkResult {
     fn ok(v: serde_json::Value) -> Self {
-        Self { ok: true, detail: Some(v), error: None }
+        Self {
+            ok: true,
+            detail: Some(v),
+            error: None,
+        }
     }
 }
 
 fn err_ok(e: impl std::fmt::Display) -> OkResult {
-    OkResult { ok: false, detail: None, error: Some(e.to_string()) }
+    OkResult {
+        ok: false,
+        detail: None,
+        error: Some(e.to_string()),
+    }
 }
 
 // ------------------------------------------------------------------ 服务
@@ -217,7 +224,12 @@ impl VoiceServer {
 
             let lang = p.lang.clone().unwrap_or_else(|| "auto".into());
             let tr = app.with_engines(|e| {
-                e.transcribe_long(&decoded.samples, decoded.sample_rate, &lang, p.engine.as_deref())
+                e.transcribe_long(
+                    &decoded.samples,
+                    decoded.sample_rate,
+                    &lang,
+                    p.engine.as_deref(),
+                )
             })?;
 
             session.write_json(&prefix, "asr", &tr)?;
@@ -290,11 +302,7 @@ impl VoiceServer {
             let seq = session.next_seq()?;
             let scene = p.scene.clone().unwrap_or_else(|| "tts".into());
             let prefix = session.take_prefix(seq, &scene);
-            let speeds = voice_core::engine::demo_speeds(
-                p.slow_too,
-                p.speed,
-                app.cfg.synth_speed,
-            );
+            let speeds = voice_core::engine::demo_speeds(p.slow_too, p.speed, app.cfg.synth_speed);
             let voice = p.voice.clone().unwrap_or_else(|| "af_heart".into());
 
             let files = app.with_engines(|e| {
@@ -303,7 +311,13 @@ impl VoiceServer {
                 for (label, sp) in &speeds {
                     let s = e.tts.synthesize(&p.text, sid, *sp)?;
                     let path = session.write_reference(
-                        &prefix, label, &s.samples, s.sample_rate, &p.text, &s.voice, *sp,
+                        &prefix,
+                        label,
+                        &s.samples,
+                        s.sample_rate,
+                        &p.text,
+                        &s.voice,
+                        *sp,
                     )?;
                     out.push(serde_json::json!({
                         "label": label, "speed": sp, "path": path,
@@ -315,12 +329,11 @@ impl VoiceServer {
                 Ok((sid, out))
             })?;
 
-            if p.play {
-                if let Some(first) = files.1.first() {
-                    if let Some(path) = first["path"].as_str() {
-                        play::play_wav(path)?;
-                    }
-                }
+            if p.play
+                && let Some(first) = files.1.first()
+                && let Some(path) = first["path"].as_str()
+            {
+                play::play_wav(path)?;
             }
 
             Ok(serde_json::json!({
@@ -362,7 +375,8 @@ impl VoiceServer {
             let scene = p.scene.clone().unwrap_or_else(|| "drill".into());
             let prefix = session.take_prefix(seq, &scene);
 
-            let (trimmed, offset) = app.with_engines(|e| Ok(e.vad.trim_silence(&cap.samples, 0.15)))?;
+            let (trimmed, offset) =
+                app.with_engines(|e| Ok(e.vad.trim_silence(&cap.samples, 0.15)))?;
             // 原始证据：设备采样率原样落盘
             let raw_path = session
                 .dir
@@ -442,7 +456,10 @@ impl VoiceServer {
     }
 
     /// 播放音频文件（服务端出声）。
-    #[tool(name = "play", description = "在服务端播放指定 wav 文件（Pi 的终端无法播放音频）。")]
+    #[tool(
+        name = "play",
+        description = "在服务端播放指定 wav 文件（Pi 的终端无法播放音频）。"
+    )]
     async fn play(&self, Parameters(p): Parameters<PathParams>) -> Json<OkResult> {
         let app = self.app.clone();
         let r = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
@@ -495,7 +512,10 @@ impl VoiceServer {
     }
 
     /// 列出可用音色
-    #[tool(name = "voices", description = "列出 54 个可用音色（名称/语言/性别）及当前默认音色。")]
+    #[tool(
+        name = "voices",
+        description = "列出 54 个可用音色（名称/语言/性别）及当前默认音色。"
+    )]
     async fn voices(&self) -> Json<OkResult> {
         let app = self.app.clone();
         let r = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
@@ -796,7 +816,7 @@ impl VoiceServer {
 fn level_warning(peak_dbfs: f32, snr_db: f32) -> Option<String> {
     if peak_dbfs > -1.0 {
         return Some(format!(
-            "峰值 {peak_dbfs:.1f} dBFS 接近满刻度（可能削波）：请把系统输入音量调低一档再录"
+            "峰值 {peak_dbfs:.1} dBFS 接近满刻度（可能削波）：请把系统输入音量调低一档再录"
         ));
     }
     if snr_db < voice_core::assess::SNR_MIN_DB {
@@ -806,7 +826,9 @@ fn level_warning(peak_dbfs: f32, snr_db: f32) -> Option<String> {
         ));
     }
     if peak_dbfs < -30.0 {
-        return Some(format!("峰值仅 {peak_dbfs:.0} dBFS，电平偏低，建议把输入音量调高或靠近麦克风"));
+        return Some(format!(
+            "峰值仅 {peak_dbfs:.0} dBFS，电平偏低，建议把输入音量调高或靠近麦克风"
+        ));
     }
     None
 }

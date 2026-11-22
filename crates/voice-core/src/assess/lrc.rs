@@ -34,9 +34,13 @@ pub fn parse(text: &str, duration: f32) -> Vec<Line> {
             continue;
         }
         // [mm:ss.xx] 或 [mm:ss.xxx]
-        let Some(close) = line.find(']') else { continue };
+        let Some(close) = line.find(']') else {
+            continue;
+        };
         let tag = &line[1..close];
-        let Some((mm, rest)) = tag.split_once(':') else { continue };
+        let Some((mm, rest)) = tag.split_once(':') else {
+            continue;
+        };
         let (Ok(min), Ok(sec)) = (mm.parse::<f32>(), rest.parse::<f32>()) else {
             continue; // [al:...] / [ar:...] 之类的元信息
         };

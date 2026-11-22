@@ -50,7 +50,11 @@ pub fn snr_db(samples: &[f32], sr: u32) -> f32 {
         .map(|c| {
             let sq: f32 = c.iter().map(|v| v * v).sum();
             let rms = (sq / c.len() as f32).sqrt();
-            if rms <= 1e-9 { -120.0 } else { 20.0 * rms.log10() }
+            if rms <= 1e-9 {
+                -120.0
+            } else {
+                20.0 * rms.log10()
+            }
         })
         .collect();
     dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -74,7 +78,9 @@ mod snr_tests {
     fn quiet_noise_gives_low_snr() {
         // 全程同幅噪声 → p95 与 p10 接近，SNR 应很小
         let sr = 16_000;
-        let noise: Vec<f32> = (0..sr).map(|i| if i % 2 == 0 { 0.001 } else { -0.001 }).collect();
+        let noise: Vec<f32> = (0..sr)
+            .map(|i| if i % 2 == 0 { 0.001 } else { -0.001 })
+            .collect();
         assert!(snr_db(&noise, sr) < 6.0, "纯噪声不该被判成高 SNR");
     }
 
@@ -97,9 +103,7 @@ mod snr_tests {
         let sr = 16_000;
         let n = sr as usize;
         let cut = n * 3 / 10;
-        let v: Vec<f32> = (0..n)
-            .map(|i| if i < cut { 0.3 } else { 0.0005 })
-            .collect();
+        let v: Vec<f32> = (0..n).map(|i| if i < cut { 0.3 } else { 0.0005 }).collect();
         let s = snr_db(&v, sr);
         assert!(s > 40.0, "语音段/静音段分明的音频 SNR 应很高，实际 {s}");
     }

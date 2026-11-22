@@ -7,10 +7,10 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 
 pub fn write_wav_i16(path: impl AsRef<Path>, samples: &[f32], sample_rate: u32) -> Result<()> {
     let path = path.as_ref();
-    if let Some(dir) = path.parent() {
-        if !dir.as_os_str().is_empty() {
-            std::fs::create_dir_all(dir)?;
-        }
+    if let Some(dir) = path.parent()
+        && !dir.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(dir)?;
     }
     let spec = WavSpec {
         channels: 1,
@@ -29,10 +29,10 @@ pub fn write_wav_i16(path: impl AsRef<Path>, samples: &[f32], sample_rate: u32) 
 
 pub fn write_wav_f32(path: impl AsRef<Path>, samples: &[f32], sample_rate: u32) -> Result<()> {
     let path = path.as_ref();
-    if let Some(dir) = path.parent() {
-        if !dir.as_os_str().is_empty() {
-            std::fs::create_dir_all(dir)?;
-        }
+    if let Some(dir) = path.parent()
+        && !dir.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(dir)?;
     }
     let spec = WavSpec {
         channels: 1,

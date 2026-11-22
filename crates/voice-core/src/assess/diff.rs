@@ -191,7 +191,11 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                     .copied()
                     .unwrap_or((last_t1, last_t1 + 0.2));
                 hyp_cursor += 1;
-                if t.0.is_finite() { t } else { (last_t1, last_t1 + 0.2) }
+                if t.0.is_finite() {
+                    t
+                } else {
+                    (last_t1, last_t1 + 0.2)
+                }
             }
             (Some(_), None) => {
                 let prev = hyp_cursor
@@ -211,14 +215,14 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                 let ref_idx = ref_cursor;
                 ref_cursor += 1;
                 Pair {
-                op: Op::Equal,
-                ref_index: Some(ref_idx),
-                reference: Some(r.clone()),
-                said: Some(h.clone()),
-                similarity: 1.0,
-                t0,
-                t1,
-            }
+                    op: Op::Equal,
+                    ref_index: Some(ref_idx),
+                    reference: Some(r.clone()),
+                    said: Some(h.clone()),
+                    similarity: 1.0,
+                    t0,
+                    t1,
+                }
             }
             (Some(r), Some(h)) => {
                 s += 1;
@@ -251,9 +255,9 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                             sim * 100.0
                         ),
                         // LikelyAsrMiss 只用于 omitted 分支；这里理论上不会出现
-                        Hint::LikelyAsrMiss => format!(
-                            "参考词 \"{shown}\" → 识别为 \"{h}\"：疑似 ASR 误听，请复核"
-                        ),
+                        Hint::LikelyAsrMiss => {
+                            format!("参考词 \"{shown}\" → 识别为 \"{h}\"：疑似 ASR 误听，请复核")
+                        }
                     };
                     issues.push(Issue {
                         kind: IssueKind::Substitution,
@@ -363,7 +367,11 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
 
     let n = ref_words.len().max(1);
     let errors = s + d + i;
-    let accuracy = if errors >= n { 0.0 } else { 1.0 - errors as f32 / n as f32 };
+    let accuracy = if errors >= n {
+        0.0
+    } else {
+        1.0 - errors as f32 / n as f32
+    };
 
     TextDiff {
         reference: reference.to_string(),
@@ -419,10 +427,10 @@ fn merge_split_compounds(
 /// 同一音频 whisper 输出 "I think it is the third time"（听到了 `is`）。
 pub fn is_short_function_word(w: &str) -> bool {
     const WORDS: [&str; 40] = [
-        "a", "an", "the", "is", "are", "was", "were", "am", "be", "been", "of", "to", "in",
-        "on", "at", "it", "its", "this", "that", "and", "or", "but", "as", "so", "do", "does",
-        "did", "have", "has", "had", "will", "would", "can", "could", "shall", "should", "may",
-        "i", "you", "we",
+        "a", "an", "the", "is", "are", "was", "were", "am", "be", "been", "of", "to", "in", "on",
+        "at", "it", "its", "this", "that", "and", "or", "but", "as", "so", "do", "does", "did",
+        "have", "has", "had", "will", "would", "can", "could", "shall", "should", "may", "i",
+        "you", "we",
     ];
     let lc = w.trim().to_lowercase();
     lc.chars().count() <= 4 && WORDS.contains(&lc.as_str())
@@ -472,7 +480,11 @@ fn times_for(
             let step = ((t1 - t0) / k).max(0.0);
             for (n, idx) in (i..j).enumerate() {
                 let a = t0 + step * n as f32;
-                let b = if n + 1 == j - i { t1 } else { t0 + step * (n + 1) as f32 };
+                let b = if n + 1 == j - i {
+                    t1
+                } else {
+                    t0 + step * (n + 1) as f32
+                };
                 out[idx] = (a, b.max(a));
             }
             i = j;
@@ -510,8 +522,8 @@ fn align(a: &[String], b: &[String]) -> Vec<Step> {
     for (i, row) in dp.iter_mut().enumerate() {
         row[0] = i as u32;
     }
-    for j in 0..=m {
-        dp[0][j] = j as u32;
+    for (j, cell) in dp[0].iter_mut().enumerate() {
+        *cell = j as u32;
     }
     for i in 1..=n {
         for j in 1..=m {
@@ -538,12 +550,18 @@ fn align(a: &[String], b: &[String]) -> Vec<Step> {
             }
         }
         if i > 0 && dp[i][j] == dp[i - 1][j] + 1 {
-            steps.push(Step { reference: Some(a[i - 1].clone()), said: None });
+            steps.push(Step {
+                reference: Some(a[i - 1].clone()),
+                said: None,
+            });
             i -= 1;
             continue;
         }
         if j > 0 {
-            steps.push(Step { reference: None, said: Some(b[j - 1].clone()) });
+            steps.push(Step {
+                reference: None,
+                said: Some(b[j - 1].clone()),
+            });
             j -= 1;
             continue;
         }
@@ -592,7 +610,11 @@ mod tests {
             duration: 6.0,
             words: words
                 .iter()
-                .map(|(w, t0, t1)| Word { w: w.to_string(), t0: *t0, t1: *t1 })
+                .map(|(w, t0, t1)| Word {
+                    w: w.to_string(),
+                    t0: *t0,
+                    t1: *t1,
+                })
                 .collect(),
             tokens: Vec::new(),
             degraded: false,
@@ -705,7 +727,12 @@ mod tests {
         // 参考里真的有 into 时才合并
         let t2 = tr("go in to the room", &[]);
         let d2 = compare("go into the room", &t2);
-        assert_eq!(d2.issues.len(), 0, "参考 into / 识别 in to 应视为同一词: {:?}", d2.issues);
+        assert_eq!(
+            d2.issues.len(),
+            0,
+            "参考 into / 识别 in to 应视为同一词: {:?}",
+            d2.issues
+        );
     }
 
     #[test]
@@ -713,14 +740,25 @@ mod tests {
         let t = tr("Hello world", &[("Hello", 0.0, 0.4), ("world", 0.4, 0.9)]);
         let d = compare("Hello brave new world", &t);
         assert_eq!(d.deletions, 2);
-        assert_eq!(d.issues.iter().filter(|i| i.kind == IssueKind::Omitted).count(), 2);
+        assert_eq!(
+            d.issues
+                .iter()
+                .filter(|i| i.kind == IssueKind::Omitted)
+                .count(),
+            2
+        );
     }
 
     #[test]
     fn detects_insertion() {
         let t = tr(
             "I really think so",
-            &[("I", 0.0, 0.2), ("really", 0.2, 0.5), ("think", 0.5, 0.8), ("so", 0.8, 1.0)],
+            &[
+                ("I", 0.0, 0.2),
+                ("really", 0.2, 0.5),
+                ("think", 0.5, 0.8),
+                ("so", 0.8, 1.0),
+            ],
         );
         let d = compare("I think so", &t);
         assert_eq!(d.insertions, 1);
@@ -729,7 +767,10 @@ mod tests {
 
     #[test]
     fn contraction_is_not_an_error() {
-        let t = tr("I am fine", &[("I", 0.0, 0.1), ("am", 0.1, 0.3), ("fine", 0.3, 0.6)]);
+        let t = tr(
+            "I am fine",
+            &[("I", 0.0, 0.1), ("am", 0.1, 0.3), ("fine", 0.3, 0.6)],
+        );
         let d = compare("I'm fine", &t);
         assert_eq!(d.issues.len(), 0, "缩写展开后不应判定为错误");
     }
@@ -758,8 +799,16 @@ mod tests {
             .map(|p| (p.t0, p.t1))
             .collect();
         assert_eq!(times.len(), 3);
-        assert!((times[1].0 - 0.30).abs() < 1e-6, "am 的起点被拉偏: {}", times[1].0);
-        assert!((times[2].0 - 0.62).abs() < 1e-6, "fine 的起点被拉偏: {}", times[2].0);
+        assert!(
+            (times[1].0 - 0.30).abs() < 1e-6,
+            "am 的起点被拉偏: {}",
+            times[1].0
+        );
+        assert!(
+            (times[2].0 - 0.62).abs() < 1e-6,
+            "fine 的起点被拉偏: {}",
+            times[2].0
+        );
     }
 
     #[test]
@@ -767,10 +816,18 @@ mod tests {
         // 用户漏了 "I'm"，只说了 "fine"
         let t = tr("fine", &[("fine", 0.5, 0.9)]);
         let d = compare("I'm fine.", &t);
-        let omitted: Vec<&Issue> =
-            d.issues.iter().filter(|i| i.kind == IssueKind::Omitted).collect();
+        let omitted: Vec<&Issue> = d
+            .issues
+            .iter()
+            .filter(|i| i.kind == IssueKind::Omitted)
+            .collect();
         // i / am 来自同一个 token → 只报 1 条，且显示原始写法 "I'm"
-        assert_eq!(omitted.len(), 1, "同一 token 展开的词不应重复上报: {:?}", d.issues);
+        assert_eq!(
+            omitted.len(),
+            1,
+            "同一 token 展开的词不应重复上报: {:?}",
+            d.issues
+        );
         assert_eq!(omitted[0].reference_surface.as_deref(), Some("I'm"));
         assert!(omitted[0].note.contains("I'm"));
     }
@@ -787,11 +844,10 @@ mod tests {
     #[test]
     fn number_expansion_uses_single_word_window() {
         // 参考 "3"，识别 "three" → 不应算错；且不重启时间窗
-        let t = tr("have three cats", &[
-            ("have", 0.0, 0.2),
-            ("three", 0.2, 0.5),
-            ("cats", 0.5, 0.8),
-        ]);
+        let t = tr(
+            "have three cats",
+            &[("have", 0.0, 0.2), ("three", 0.2, 0.5), ("cats", 0.5, 0.8)],
+        );
         let d = compare("have 3 cats", &t);
         assert_eq!(d.issues.len(), 0);
         assert_eq!(d.timestamp_alignment, TimestampAlignment::Exact);
@@ -824,7 +880,11 @@ mod tests {
         let t = tr("我觉得很好", &[]);
         let d = compare("我觉得非常好", &t);
         assert_eq!(d.substitutions + d.deletions + d.insertions, 2);
-        assert!(d.issues.iter().any(|i| i.reference.as_deref() == Some("非")));
+        assert!(
+            d.issues
+                .iter()
+                .any(|i| i.reference.as_deref() == Some("非"))
+        );
         assert!(d.accuracy < 1.0);
     }
 }

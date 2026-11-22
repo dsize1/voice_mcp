@@ -12,8 +12,8 @@
 
 use serde::Serialize;
 
-use crate::engine::vad::Segment;
 use crate::engine::Transcript;
+use crate::engine::vad::Segment;
 
 use super::normalize;
 
@@ -71,7 +71,9 @@ pub struct FlowMetrics {
 
 const PAUSE_MIN: f32 = 0.25;
 const WORD_GAP_MIN: f32 = 0.20;
-const FILLERS_EN: [&str; 10] = ["um", "uh", "er", "ah", "erm", "hmm", "eh", "mm", "uhh", "umm"];
+const FILLERS_EN: [&str; 10] = [
+    "um", "uh", "er", "ah", "erm", "hmm", "eh", "mm", "uhh", "umm",
+];
 const FILLERS_ZH: [&str; 4] = ["嗯", "呃", "啊", "哦"];
 
 pub fn analyze(
@@ -118,12 +120,20 @@ pub fn analyze(
     for w in segments.windows(2) {
         let gap = w[1].t0 - w[0].t1;
         if gap >= PAUSE_MIN {
-            pauses.push(Span { t0: w[0].t1, t1: w[1].t0, dur: gap });
+            pauses.push(Span {
+                t0: w[0].t1,
+                t1: w[1].t0,
+                dur: gap,
+            });
         }
     }
     let pause_total: f32 = pauses.iter().map(|p| p.dur).sum();
     let pause_longest = pauses.iter().map(|p| p.dur).fold(0.0f32, f32::max);
-    let pause_mean = if pauses.is_empty() { 0.0 } else { pause_total / pauses.len() as f32 };
+    let pause_mean = if pauses.is_empty() {
+        0.0
+    } else {
+        pause_total / pauses.len() as f32
+    };
 
     // 词界停顿
     let mut word_gaps = Vec::new();
@@ -136,7 +146,11 @@ pub fn analyze(
             let prev = &transcript.words[i - 1];
             let gap = w.t0 - prev.t1;
             if gap > WORD_GAP_MIN {
-                word_gaps.push(WordGap { before: Some((i - 1) as u32), gap, at: prev.t1 });
+                word_gaps.push(WordGap {
+                    before: Some((i - 1) as u32),
+                    gap,
+                    at: prev.t1,
+                });
                 longest_run = longest_run.max(run);
                 run = 1;
             } else {
@@ -152,7 +166,11 @@ pub fn analyze(
         let lw = w.w.to_lowercase();
         let lw = lw.trim_matches(|c: char| !c.is_alphanumeric() && !is_cjk(c));
         if FILLERS_EN.contains(&lw) || FILLERS_ZH.contains(&lw) {
-            fillers.push(Span { t0: w.t0, t1: w.t1, dur: (w.t1 - w.t0).max(0.0) });
+            fillers.push(Span {
+                t0: w.t0,
+                t1: w.t1,
+                dur: (w.t1 - w.t0).max(0.0),
+            });
         }
     }
 
@@ -199,13 +217,31 @@ pub fn analyze(
         pause_total: round2(pause_total),
         pause_mean: round2(pause_mean),
         pause_longest: round2(pause_longest),
-        pauses: pauses.iter().map(|p| Span { t0: round2(p.t0), t1: round2(p.t1), dur: round2(p.dur) }).collect(),
+        pauses: pauses
+            .iter()
+            .map(|p| Span {
+                t0: round2(p.t0),
+                t1: round2(p.t1),
+                dur: round2(p.dur),
+            })
+            .collect(),
         word_boundary_breaks: word_gaps.len(),
         word_gaps: word_gaps
             .iter()
-            .map(|g| WordGap { before: g.before, gap: round2(g.gap), at: round2(g.at) })
+            .map(|g| WordGap {
+                before: g.before,
+                gap: round2(g.gap),
+                at: round2(g.at),
+            })
             .collect(),
-        fillers: fillers.iter().map(|f| Span { t0: round2(f.t0), t1: round2(f.t1), dur: round2(f.dur) }).collect(),
+        fillers: fillers
+            .iter()
+            .map(|f| Span {
+                t0: round2(f.t0),
+                t1: round2(f.t1),
+                dur: round2(f.dur),
+            })
+            .collect(),
         filler_rate: round1(filler_rate),
         repetitions,
         longest_run_words: longest_run,
@@ -234,7 +270,14 @@ mod tests {
             lang: lang.into(),
             engine: "test".into(),
             duration: 10.0,
-            words: words.iter().map(|(w, a, b)| Word { w: w.to_string(), t0: *a, t1: *b }).collect(),
+            words: words
+                .iter()
+                .map(|(w, a, b)| Word {
+                    w: w.to_string(),
+                    t0: *a,
+                    t1: *b,
+                })
+                .collect(),
             tokens: Vec::new(),
             degraded: false,
             infer_ms: 0.0,
@@ -278,7 +321,12 @@ mod tests {
         let t = tr(
             "en",
             "I think ... this is",
-            &[("I", 0.2, 0.4), ("think", 0.4, 0.8), ("this", 1.6, 1.8), ("is", 1.8, 2.0)],
+            &[
+                ("I", 0.2, 0.4),
+                ("think", 0.4, 0.8),
+                ("this", 1.6, 1.8),
+                ("is", 1.8, 2.0),
+            ],
         );
         let segs = vec![Segment { t0: 0.2, t1: 0.8 }, Segment { t0: 1.6, t1: 2.0 }];
         let f = analyze(&vec![0.0; 32_000], 16_000, &t, &segs);
@@ -332,16 +380,33 @@ mod tests {
         assert!((f.duration - 5.74).abs() < 0.02, "duration 仍是文件时长");
         assert!((f.analysis_window - 2.74).abs() < 0.02, "窗口 = 2.74 s");
         // 7 词 / 2.74 s ≈ 153 wpm（而不是按 5.74 s 算出的 73 wpm）
-        assert!(f.speech_rate > 140.0 && f.speech_rate < 165.0, "speech_rate={}", f.speech_rate);
+        assert!(
+            f.speech_rate > 140.0 && f.speech_rate < 165.0,
+            "speech_rate={}",
+            f.speech_rate
+        );
         assert!(f.speech_ratio > 0.95, "窗口内几乎全是语音");
     }
 
     #[test]
     fn chinese_uses_cpm() {
-        let t = tr("zh", "我 觉得 很 好", &[("我", 0.0, 0.2), ("觉得", 0.2, 0.5), ("很", 0.5, 0.7), ("好", 0.7, 1.0)]);
+        let t = tr(
+            "zh",
+            "我 觉得 很 好",
+            &[
+                ("我", 0.0, 0.2),
+                ("觉得", 0.2, 0.5),
+                ("很", 0.5, 0.7),
+                ("好", 0.7, 1.0),
+            ],
+        );
         let segs = vec![Segment { t0: 0.0, t1: 1.0 }];
         let f = analyze(&vec![0.0; 16_000], 16_000, &t, &segs);
         assert_eq!(f.rate_unit, "cpm");
-        assert!((f.speech_rate - 240.0).abs() < 1.0, "4 字/秒 = 240 cpm, got {}", f.speech_rate);
+        assert!(
+            (f.speech_rate - 240.0).abs() < 1.0,
+            "4 字/秒 = 240 cpm, got {}",
+            f.speech_rate
+        );
     }
 }

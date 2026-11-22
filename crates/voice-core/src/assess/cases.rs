@@ -122,10 +122,10 @@ pub fn load_dir(dir: impl AsRef<Path>) -> Result<Vec<Case>> {
         .collect();
     files.sort();
     for f in files {
-        let raw = std::fs::read_to_string(&f)
-            .with_context(|| format!("读用例失败: {}", f.display()))?;
-        let c: Case = serde_json::from_str(&raw)
-            .with_context(|| format!("解析用例失败: {}", f.display()))?;
+        let raw =
+            std::fs::read_to_string(&f).with_context(|| format!("读用例失败: {}", f.display()))?;
+        let c: Case =
+            serde_json::from_str(&raw).with_context(|| format!("解析用例失败: {}", f.display()))?;
         cases.push(c);
     }
     Ok(cases)
@@ -163,7 +163,10 @@ pub fn check(case: &Case, a: &Assessment) -> CaseResult {
     if let Some(r) = &e.articulation_rate {
         let v = a.flow.articulation_rate as f64;
         if !r.check(v) {
-            failures.push(format!("articulation_rate: 期望 {} 实际 {v:.1}", r.describe()));
+            failures.push(format!(
+                "articulation_rate: 期望 {} 实际 {v:.1}",
+                r.describe()
+            ));
         }
     }
     if let Some(r) = &e.issue_count {
@@ -180,18 +183,18 @@ pub fn check(case: &Case, a: &Assessment) -> CaseResult {
             failures.push(format!("timestamp_alignment: 期望 {want} 实际 {got}"));
         }
     }
-    if let Some(want) = e.band_limited {
-        if a.audio.band_limited != want {
-            failures.push(format!(
-                "band_limited: 期望 {want} 实际 {}（源采样率 {} Hz）",
-                a.audio.band_limited, a.audio.source_sr
-            ));
-        }
+    if let Some(want) = e.band_limited
+        && a.audio.band_limited != want
+    {
+        failures.push(format!(
+            "band_limited: 期望 {want} 实际 {}（源采样率 {} Hz）",
+            a.audio.band_limited, a.audio.source_sr
+        ));
     }
-    if let Some(want) = e.degraded {
-        if a.degraded != want {
-            failures.push(format!("degraded: 期望 {want} 实际 {}", a.degraded));
-        }
+    if let Some(want) = e.degraded
+        && a.degraded != want
+    {
+        failures.push(format!("degraded: 期望 {want} 实际 {}", a.degraded));
     }
 
     let issues = td.map(|d| d.issues.clone()).unwrap_or_default();
@@ -214,7 +217,8 @@ pub fn check(case: &Case, a: &Assessment) -> CaseResult {
     let summary = format!(
         "{} | accurs={} | issues={} | rate={} | align={}",
         a.transcript.text.chars().take(48).collect::<String>(),
-        td.map(|d| format!("{:.2}", d.accuracy)).unwrap_or_else(|| "-".into()),
+        td.map(|d| format!("{:.2}", d.accuracy))
+            .unwrap_or_else(|| "-".into()),
         issues.len(),
         a.flow.speech_rate,
         td.map(|d| snake(&format!("{:?}", d.timestamp_alignment)))
@@ -249,28 +253,30 @@ fn matches_issue(want: &ExpectIssue, got: &crate::assess::Issue) -> bool {
     if snake(&format!("{:?}", got.kind)) != want.kind.to_lowercase() {
         return false;
     }
-    if let Some(r) = &want.reference {
-        if got.reference.as_deref() != Some(r.as_str())
-            && got.reference_surface.as_deref() != Some(r.as_str())
-        {
-            return false;
-        }
+    if let Some(r) = &want.reference
+        && got.reference.as_deref() != Some(r.as_str())
+        && got.reference_surface.as_deref() != Some(r.as_str())
+    {
+        return false;
     }
-    if let Some(s) = &want.said {
-        if got.said.as_deref() != Some(s.as_str()) {
-            return false;
-        }
+    if let Some(s) = &want.said
+        && got.said.as_deref() != Some(s.as_str())
+    {
+        return false;
     }
     if let Some(h) = &want.hint {
-        let got_h = got.hint.map(|x| snake(&format!("{x:?}"))).unwrap_or_default();
+        let got_h = got
+            .hint
+            .map(|x| snake(&format!("{x:?}")))
+            .unwrap_or_default();
         if got_h != h.to_lowercase() {
             return false;
         }
     }
-    if let Some(sv) = &want.severity {
-        if snake(&format!("{:?}", got.severity)) != sv.to_lowercase() {
-            return false;
-        }
+    if let Some(sv) = &want.severity
+        && snake(&format!("{:?}", got.severity)) != sv.to_lowercase()
+    {
+        return false;
     }
     true
 }

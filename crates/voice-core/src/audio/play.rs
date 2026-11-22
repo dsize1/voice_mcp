@@ -11,7 +11,7 @@ pub fn play_wav(path: impl AsRef<Path>) -> Result<()> {
     let mut reader = hound::WavReader::open(path)
         .with_context(|| format!("打开音频失败: {}", path.display()))?;
     let spec = reader.spec();
-    let ch = spec.channels as u16;
+    let ch = spec.channels;
     let sr = spec.sample_rate;
 
     let samples: Vec<f32> = match spec.sample_format {
@@ -32,9 +32,10 @@ pub fn play_samples(samples: &[f32], sample_rate: u32, channels: u16) -> Result<
     if samples.is_empty() {
         return Ok(());
     }
-    let mut handle = rodio::DeviceSinkBuilder::open_default_sink().context("打开音频输出设备失败")?;
+    let mut handle =
+        rodio::DeviceSinkBuilder::open_default_sink().context("打开音频输出设备失败")?;
     handle.log_on_drop(false);
-    let player = rodio::Player::connect_new(&handle.mixer());
+    let player = rodio::Player::connect_new(handle.mixer());
     let ch = std::num::NonZeroU16::new(channels.max(1)).unwrap();
     let sr = std::num::NonZeroU32::new(sample_rate.max(1)).unwrap();
     let buf = rodio::buffer::SamplesBuffer::new(ch, sr, samples.to_vec());

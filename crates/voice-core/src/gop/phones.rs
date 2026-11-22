@@ -17,11 +17,11 @@ pub fn norm_symbol(s: &str) -> String {
     for c in s.chars() {
         match c {
             'ˈ' | 'ˌ' | 'ː' | 'ˑ' | '\u{0303}' | 'ʰ' | '̩' => continue, // 重音/长音/鼻化/送气/成音节
-            'ɡ' => out.push('g'),  // IPA ɡ → ASCII g
-            'ɹ' => out.push('r'),  // ɹ → r
-            'ɫ' => out.push('l'),  // 暗 l
+            'ɡ' => out.push('g'),                                      // IPA ɡ → ASCII g
+            'ɹ' => out.push('r'),                                      // ɹ → r
+            'ɫ' => out.push('l'),                                      // 暗 l
             'ɾ' | 'ʔ' => out.push('t'), // 闪音/喉塞：当作 /t/ 的弱化实现
-            'ɐ' => out.push('ə'),  // 近开元音，并入 schwa 类
+            'ɐ' => out.push('ə'),       // 近开元音，并入 schwa 类
             'ɚ' | 'ɝ' => out.push('ə'), // r 化元音
             _ => out.push(c),
         }
@@ -95,23 +95,24 @@ impl PhoneSet {
     /// 词表里某符号的 id（按规范化后比较）
     pub fn id_of(&self, sym: &str) -> Option<usize> {
         let want = norm_symbol(sym);
-        self.vocab
-            .iter()
-            .position(|v| norm_symbol(v) == want)
+        self.vocab.iter().position(|v| norm_symbol(v) == want)
     }
 
     /// ARPAbet 音素 → 词表候选 id（去重、去掉 blank 与特殊符号）
     pub fn candidates(&self, arpabet: &str) -> Vec<usize> {
-        let key = arpabet.trim_end_matches(|c: char| c.is_ascii_digit()).to_uppercase();
+        let key = arpabet
+            .trim_end_matches(|c: char| c.is_ascii_digit())
+            .to_uppercase();
         let mut out: Vec<usize> = Vec::new();
         for sym in espeak_candidates(&key) {
             if sym.is_empty() {
                 continue;
             }
-            if let Some(id) = self.id_of(sym) {
-                if id != self.blank && !out.contains(&id) {
-                    out.push(id);
-                }
+            if let Some(id) = self.id_of(sym)
+                && id != self.blank
+                && !out.contains(&id)
+            {
+                out.push(id);
             }
         }
         out
@@ -120,7 +121,9 @@ impl PhoneSet {
 
 /// 查 ARPAbet 音素的可接受符号（已规范化）。
 pub fn espeak_candidates(arpabet: &str) -> Vec<&'static str> {
-    let key = arpabet.trim_end_matches(|c: char| c.is_ascii_digit()).to_uppercase();
+    let key = arpabet
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .to_uppercase();
     ARPABET_TO_ESPEAK
         .iter()
         .find(|(a, _)| *a == key)

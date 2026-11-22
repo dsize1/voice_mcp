@@ -38,7 +38,11 @@ impl Captured {
     /// 峰值（dBFS）
     pub fn peak_dbfs(&self) -> f32 {
         let peak = self.raw.iter().fold(0.0f32, |a, v| a.max(v.abs()));
-        if peak <= 1e-9 { -120.0 } else { 20.0 * peak.log10() }
+        if peak <= 1e-9 {
+            -120.0
+        } else {
+            20.0 * peak.log10()
+        }
     }
 }
 
@@ -163,7 +167,9 @@ fn preferred_config(device: &cpal::Device, prefer_sr: u32) -> Result<cpal::Suppo
             return Ok(b.with_sample_rate(prefer_sr));
         }
     }
-    device.default_input_config().context("获取麦克风默认格式失败")
+    device
+        .default_input_config()
+        .context("获取麦克风默认格式失败")
 }
 
 /// 自动停止的"静音"阈值。
@@ -203,7 +209,9 @@ pub fn is_effectively_silent(samples: &[f32]) -> bool {
     // 碎片式零值：蓝牙 A2DP 端点实测"2.4% 非零、其余全是 0、峰值 −40 dBFS"，
     // 靠峰值抓不住，但"超过一半的 10 ms 帧全为 0"是决定性特征——
     // 真实麦克风的底噪不会让整帧变成数字零。
-    let hop = (crate::INTERNAL_SR as usize / 100).max(1).min(samples.len().max(1));
+    let hop = (crate::INTERNAL_SR as usize / 100)
+        .max(1)
+        .min(samples.len().max(1));
     // 注意：这里按传入采样率近似用 10ms 窗口，足够判定零帧比例
     let frames: Vec<&[f32]> = samples.chunks(hop).collect();
     if frames.len() < 5 {
@@ -245,7 +253,7 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
     let device_sr = config.sample_rate();
     let channels = config.channels() as usize;
     let sample_format = config.sample_format();
-    let stream_config: cpal::StreamConfig = config.clone().into();
+    let stream_config: cpal::StreamConfig = config.into();
 
     let buf: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(
         (device_sr as usize) * channels * opts.max_sec as usize,
@@ -313,7 +321,11 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
                 .map(|c| {
                     let sq: f32 = c.iter().map(|v| v * v).sum();
                     let rms = (sq / c.len() as f32).sqrt();
-                    if rms <= 0.0 { -120.0 } else { 20.0 * rms.log10() }
+                    if rms <= 0.0 {
+                        -120.0
+                    } else {
+                        20.0 * rms.log10()
+                    }
                 })
                 .collect();
             drop(b);
@@ -327,8 +339,14 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
             }
         }
     };
-    eprintln!("[voice] 自动停止阈值 {threshold:.1} dBFS（{}）",
-        if opts.silence_dbfs.is_some() { "固定值" } else { "开场自适应校准" });
+    eprintln!(
+        "[voice] 自动停止阈值 {threshold:.1} dBFS（{}）",
+        if opts.silence_dbfs.is_some() {
+            "固定值"
+        } else {
+            "开场自适应校准"
+        }
+    );
 
     // ---- 轮询：起始超时 / 自动停止 / 上限 ----
     let started = Instant::now();
@@ -417,7 +435,11 @@ pub fn record_with(device: Option<&str>, opts: &RecordOptions) -> Result<Capture
     // 蓝牙 A2DP 端点常见：回调在跑但数据全 0
     if is_effectively_silent(&raw) {
         let peak = raw.iter().fold(0f32, |a, b| a.max(b.abs()));
-        let dbfs = if peak <= 0.0 { -120.0 } else { 20.0 * peak.log10() };
+        let dbfs = if peak <= 0.0 {
+            -120.0
+        } else {
+            20.0 * peak.log10()
+        };
         return Err(anyhow!(capture_guidance(&device_name, dbfs)));
     }
 
@@ -448,7 +470,9 @@ pub fn input_devices() -> Vec<String> {
 
 /// 默认输入设备名
 pub fn default_input_device() -> Option<String> {
-    cpal::default_host().default_input_device().map(|d| d.to_string())
+    cpal::default_host()
+        .default_input_device()
+        .map(|d| d.to_string())
 }
 
 /// 能量包络：每 `hop_ms` 毫秒一帧的 RMS（dBFS）。
@@ -463,7 +487,11 @@ pub fn envelope(samples: &[f32], hop_ms: u32) -> Vec<f32> {
         .map(|c| {
             let sq: f32 = c.iter().map(|v| v * v).sum();
             let rms = (sq / c.len() as f32).sqrt();
-            if rms <= 0.0 { -120.0 } else { 20.0 * rms.log10() }
+            if rms <= 0.0 {
+                -120.0
+            } else {
+                20.0 * rms.log10()
+            }
         })
         .collect()
 }
@@ -534,7 +562,9 @@ pub fn measure_noise(secs: f32) -> Result<NoiseReport> {
 pub fn measure_noise_with(name: Option<&str>, secs: f32) -> Result<NoiseReport> {
     let device = pick_device(name)?;
     let device_name = device.to_string();
-    let cfg = device.default_input_config().context("获取默认输入格式失败")?;
+    let cfg = device
+        .default_input_config()
+        .context("获取默认输入格式失败")?;
     let device_sr = cfg.sample_rate();
     let channels = cfg.channels();
     let sample_format = format!("{:?}", cfg.sample_format());
@@ -563,7 +593,11 @@ pub fn measure_noise_with(name: Option<&str>, secs: f32) -> Result<NoiseReport> 
     }
     if is_effectively_silent(&x) {
         let peak = x.iter().fold(0f32, |a, b| a.max(b.abs()));
-        let dbfs = if peak <= 0.0 { -120.0 } else { 20.0 * peak.log10() };
+        let dbfs = if peak <= 0.0 {
+            -120.0
+        } else {
+            20.0 * peak.log10()
+        };
         return Err(anyhow!(capture_guidance(&device_name, dbfs)));
     }
     let db = |v: f32| if v <= 0.0 { -120.0 } else { 20.0 * v.log10() };
@@ -604,7 +638,10 @@ mod tests {
     fn detects_digital_silence() {
         assert!(is_digital_silence(&[0.0, 0.0, -0.0]));
         assert!(!is_digital_silence(&[0.0, 1e-5]));
-        assert!(!is_digital_silence(&[]), "空切片不算数字静音（另由 empty 判定）");
+        assert!(
+            !is_digital_silence(&[]),
+            "空切片不算数字静音（另由 empty 判定）"
+        );
     }
 
     #[test]
@@ -641,10 +678,15 @@ mod tests {
         assert!(!is_effectively_silent(&sparse[..4]), "样本太少不做零帧判定");
         let mut sparse2 = sparse.clone();
         sparse2[400] = 0.5; // 抬高峰值
-        assert!(is_effectively_silent(&sparse2), "峰值高但零帧占多数 → 判无效");
+        assert!(
+            is_effectively_silent(&sparse2),
+            "峰值高但零帧占多数 → 判无效"
+        );
 
         // 真实麦克风底噪：帧不全零
-        let noise: Vec<f32> = (0..16_000).map(|i| 0.003 * ((i as f32 * 0.7).sin())).collect();
+        let noise: Vec<f32> = (0..16_000)
+            .map(|i| 0.003 * ((i as f32 * 0.7).sin()))
+            .collect();
         assert!(!is_effectively_silent(&noise));
     }
 
@@ -658,6 +700,9 @@ mod tests {
         let env = envelope(&x, 10);
         assert!(!env.is_empty());
         let max = env.iter().cloned().fold(f32::MIN, f32::max);
-        assert!(max > -12.0 && max < -6.0, "峰值帧能量 {max} dBFS 不在预期范围");
+        assert!(
+            max > -12.0 && max < -6.0,
+            "峰值帧能量 {max} dBFS 不在预期范围"
+        );
     }
 }

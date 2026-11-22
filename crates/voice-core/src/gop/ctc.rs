@@ -87,7 +87,7 @@ pub fn align(log_probs: &[Vec<f32>], refs: &[PhoneRef], blank: usize) -> Option<
     let s_len = 2 * l_len + 1;
     let neg = f32::NEG_INFINITY;
     let state_score = |s: usize, t: usize| -> f32 {
-        if s % 2 == 0 {
+        if s.is_multiple_of(2) {
             log_probs[t].get(blank).copied().unwrap_or(neg)
         } else {
             score(&log_probs[t], &refs[s / 2].cands)
@@ -235,7 +235,10 @@ mod tests {
     fn refs(labels: &[(&str, usize)]) -> Vec<PhoneRef> {
         labels
             .iter()
-            .map(|(l, id)| PhoneRef { label: (*l).into(), cands: vec![*id] })
+            .map(|(l, id)| PhoneRef {
+                label: (*l).into(),
+                cands: vec![*id],
+            })
             .collect()
     }
 
@@ -254,7 +257,11 @@ mod tests {
         }
         assert_eq!(a[2].t1, 5);
         for x in &a {
-            assert!(x.gop > 10.0, "完美匹配时 num-den 应为大正数，实际 {}", x.gop);
+            assert!(
+                x.gop > 10.0,
+                "完美匹配时 num-den 应为大正数，实际 {}",
+                x.gop
+            );
         }
     }
 
@@ -273,8 +280,14 @@ mod tests {
         // AH 的候选含 ʌ 与 ə；音频发的是 ə —— 不能判成错
         let lp = onehot(&[1, 4, 4], 5);
         let r = vec![
-            PhoneRef { label: "T".into(), cands: vec![1] },
-            PhoneRef { label: "AH".into(), cands: vec![3, 4] },
+            PhoneRef {
+                label: "T".into(),
+                cands: vec![1],
+            },
+            PhoneRef {
+                label: "AH".into(),
+                cands: vec![3, 4],
+            },
         ];
         let a = align(&lp, &r, 0).unwrap();
         assert!(a[1].gop > 10.0, "等价类内的音素不应被判错: {}", a[1].gop);

@@ -49,11 +49,17 @@ pub fn units(text: &str) -> Vec<Unit> {
         if raw.chars().all(is_cjk_char) {
             // CJK 已在 tokens() 里逐字切分，这里直接透传
             for ch in raw.chars() {
-                out.push(Unit { text: ch.to_string(), token: idx });
+                out.push(Unit {
+                    text: ch.to_string(),
+                    token: idx,
+                });
             }
         } else {
             for w in expand_contraction(raw) {
-                out.push(Unit { text: w, token: idx });
+                out.push(Unit {
+                    text: w,
+                    token: idx,
+                });
             }
         }
     }
@@ -179,9 +185,26 @@ static US_UK_VARIANTS: &[(&str, &str)] = &[
 
 fn number_words(digits: &str) -> Vec<String> {
     const SMALL: [&str; 20] = [
-        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
-        "eighteen", "nineteen",
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
     ];
     const TENS: [&str; 8] = [
         "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
@@ -202,7 +225,7 @@ fn number_words(digits: &str) -> Vec<String> {
             out.push(SMALL[r as usize].to_string());
         } else {
             out.push(TENS[(r / 10 - 2) as usize].to_string());
-            if r % 10 > 0 {
+            if !r.is_multiple_of(10) {
                 out.push(SMALL[(r % 10) as usize].to_string());
             }
         }
@@ -269,14 +292,20 @@ mod tests {
 
     #[test]
     fn expands_contractions() {
-        assert_eq!(words("I'm gonna do it"), vec!["i", "am", "going", "to", "do", "it"]);
+        assert_eq!(
+            words("I'm gonna do it"),
+            vec!["i", "am", "going", "to", "do", "it"]
+        );
         assert_eq!(words("Don't stop"), vec!["do", "not", "stop"]);
     }
 
     #[test]
     fn repairs_pseudo_contractions() {
         // ASR 把 `did not` 糊成不存在的 `did't`，不能变成两条错误
-        assert_eq!(words("I did't enjoy it"), vec!["i", "did", "not", "enjoy", "it"]);
+        assert_eq!(
+            words("I did't enjoy it"),
+            vec!["i", "did", "not", "enjoy", "it"]
+        );
         assert_eq!(words("I could't hear"), vec!["i", "could", "not", "hear"]);
         // 合法缩写仍然走表
         assert_eq!(words("I didn't go"), vec!["i", "did", "not", "go"]);
@@ -291,11 +320,18 @@ mod tests {
         assert_eq!(words("realise"), words("realize"));
         assert_eq!(words("programme"), words("program"));
         // 两边写法相同的词不能被误伤
-        assert_eq!(words("more before nature"), vec!["more", "before", "nature"]);
+        assert_eq!(
+            words("more before nature"),
+            vec!["more", "before", "nature"]
+        );
     }
 
     #[test]
-    fn strips_punctuation_and_case() {        assert_eq!(words("Hello, world!  Really?"), vec!["hello", "world", "really"]);
+    fn strips_punctuation_and_case() {
+        assert_eq!(
+            words("Hello, world!  Really?"),
+            vec!["hello", "world", "really"]
+        );
     }
 
     #[test]
@@ -306,7 +342,10 @@ mod tests {
 
     #[test]
     fn splits_chinese_by_char() {
-        assert_eq!(words("我觉得 third 很好"), vec!["我", "觉", "得", "third", "很", "好"]);
+        assert_eq!(
+            words("我觉得 third 很好"),
+            vec!["我", "觉", "得", "third", "很", "好"]
+        );
     }
 
     #[test]

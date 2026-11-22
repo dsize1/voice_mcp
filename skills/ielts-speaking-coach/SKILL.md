@@ -89,6 +89,7 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 ⑤ 反馈（核心）  → 按第 4 节优先级挑 1–2 条；给"具体位置 + 为什么 + 怎么改 + 再示范一次"
 ⑥ 重读对比      → 用户重读 → assess(..., scene="retry") → 对比 accuracy / issues 数量 / pause
 ⑦ 收尾          → 达标：换下一句；不达标：同一句再练一次（最多 3 次，然后换更简单的句子）
+                  降级路径：整句 → 短词组 → 单词/连读（例：`Thank you very much.` → `Thank you.` → `thank, thank, thank`）
 ```
 
 ### 1.5 素材库怎么用（P4.5）
@@ -135,6 +136,12 @@ voice-cli bank drill <id>       # 播原声 + 打印句子/中文/level/tags
 | NCE 逐句（native） | ✅ | ✅ | 有限（教材句不是真实表达） |
 | IELTS Part 1/3 题面（tts） | ✅（TTS 参考） | ✅ | ✅ 重点 |
 | IELTS Part 2 cue card（长独白） | ❌ 不做音素结论 | ✅ | ✅ 重点 |
+
+### 铁律：参考文本必须与"你要求用户读的内容"逐字一致
+
+drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须是 `thank, thank, thank`。
+否则词级 diff 会把"参考里有、录音里没有"的词全算成漏读（实测：读 `thank×3`、参考写整句 →
+`accuracy 0.25` + 3 条纯伪影 issue）。**词级 diff 只会忠实地比较你给的那串字。**
 
 **反馈模板**（严格按这个结构，L1/L2 用中文，L3/L4 逐步换英文）：
 

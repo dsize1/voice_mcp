@@ -21,6 +21,9 @@ pub use diff::{Hint, Issue, IssueKind, Op, Severity, TextDiff};
 /// 评测算法版本：写入 metrics，便于算法升级后回溯与 A/B
 pub const SCORER_VERSION: &str = "p2.0-wordlevel";
 
+/// 削波采样占比上限：超过即判"输入过载"，ASR/GOP 都会失真。
+pub const CLIP_RATIO_MAX: f32 = 0.001; // 0.1%
+
 /// 可信诊断所需的最低信噪比（dB，口径 = 20 ms 帧 RMS 的 p90−p10）。
 ///
 /// 13 dB 来自实测分界：可用录音 14.3–19.5 dB，ASR 开始出碎片的录音 11.0–11.5 dB。
@@ -93,7 +96,14 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     let snr_db = crate::round_to(crate::audio::snr_db(req.samples, req.sample_rate), 1);
     let mut limitations: Vec<String> = Vec::new();
     let mut gop = None;
-    if crate::gop::should_run(req.with_gop, req.reference.is_some(), band_limited) && snr_db >= SNR_MIN_DB {
+    let clipped_too_much = audio.clipped > 0
+        && audio.source_sr > 0
+        && audio.duration > 0.0
+        && (audio.clipped as f32 / (audio.duration * audio.source_sr as f32)) > CLIP_RATIO_MAX;
+    if crate::gop::should_run(req.with_gop, req.reference.is_some(), band_limited)
+        && snr_db >= SNR_MIN_DB
+        && !clipped_too_much
+    {
         let text = req.reference.unwrap_or_default();
         match crate::gop::with_engine(|e| crate::gop::score_text(&mut e.model, req.samples, text, &e.g2p)) {
             Ok(g) => gop = Some(g),
@@ -107,6 +117,21 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         limitations.push(format!("信噪比过低（{snr_db} dB < {SNR_MIN_DB} dB），跳过音素级 GOP"));
     }
     let mut degraded = transcript.degraded || transcript.words.is_empty();
+    // 削波：AGC 把增益顶到满刻度时谐波失真严重，音素后验与 ASR 都不可信
+    let clip_ratio = if audio.source_sr > 0 && audio.duration > 0.0 {
+        audio.clipped as f32 / (audio.duration * audio.source_sr as f32)
+    } else {
+        0.0
+    };
+    if clip_ratio > CLIP_RATIO_MAX {
+        degraded = true;
+        limitations.push(format!(
+            "输入过载（削波）：{:.2}% 的采样被削平（阈值 {:.1}%）。             语音会失真，音素与漏读指标不可信；请把系统输入音量调低后用正常音量重读",
+            clip_ratio * 100.0,
+            CLIP_RATIO_MAX * 100.0
+        ));
+    }
+
     if snr_db < SNR_MIN_DB {
         degraded = true;
         limitations.push(format!(

@@ -777,6 +777,11 @@ impl VoiceServer {
 
 /// 电平/信噪比的即时提示：录音当下就告诉用户"这条不能用"，别等到评测完才发现。
 fn level_warning(peak_dbfs: f32, snr_db: f32) -> Option<String> {
+    if peak_dbfs > -1.0 {
+        return Some(format!(
+            "峰值 {peak_dbfs:.1f} dBFS 接近满刻度（可能削波）：请把系统输入音量调低一档再录"
+        ));
+    }
     if snr_db < voice_core::assess::SNR_MIN_DB {
         return Some(format!(
             "信噪比仅 {snr_db:.0} dB（要求 ≥ {:.0} dB）：麦克风太远或环境太吵，这条录音不足以做诊断",

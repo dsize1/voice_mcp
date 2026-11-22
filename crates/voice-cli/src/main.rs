@@ -914,6 +914,22 @@ fn rec(
         ..Default::default()
     };
     let cap = capture::record_with(cfg.mic.as_deref(), &opts)?;
+    // 录音当下就给电平结论：等评测完再发现"信噪比不足"太晚了
+    let snr = cap.snr();
+    let peak = cap.peak_dbfs();
+    eprintln!(
+        "[voice] 电平：peak {:.1} dBFS，snr {:.1} dB（目标 peak −20~−12 dBFS，snr ≥ {:.0}）",
+        peak,
+        snr,
+        voice_core::assess::SNR_MIN_DB
+    );
+    if snr < voice_core::assess::SNR_MIN_DB {
+        eprintln!("[voice] ⚠ 信噪比不足：靠近麦克风或调高输入音量后重录");
+    } else if peak < -26.0 {
+        eprintln!("[voice] ⚠ 电平偏低（{peak:.0} dBFS）：建议调高输入音量，否则 ASR/GOP 精度会掉");
+    } else if peak > -1.0 {
+        eprintln!("[voice] ⚠ 电平过高（{peak:.0} dBFS）：可能削波，建议调低输入音量");
+    }
     eprintln!(
         "[voice] 采集完成 {:.2}s @{} Hz（设备 {} Hz{}）",
         cap.duration,

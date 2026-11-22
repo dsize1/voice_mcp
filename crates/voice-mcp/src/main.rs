@@ -421,6 +421,9 @@ impl VoiceServer {
                 "auto_stopped": cap.auto_stopped,
                 "device": cap.device_name,
                 "device_sr": cap.device_sr,
+                "snr_db": round3(cap.snr()),
+                "peak_dbfs": round3(cap.peak_dbfs()),
+                "level_warning": level_warning(cap.peak_dbfs(), cap.snr()),
                 "transcript": tr_json,
                 "session": session.id,
                 "prefix": prefix,
@@ -748,6 +751,7 @@ impl VoiceServer {
                     "band_limited": assessment.audio.band_limited,
                     "peak_dbfs": round3(assessment.audio.peak_dbfs),
                     "silent_ratio": round3(assessment.audio.silent_ratio),
+                    "snr_db": assessment.snr_db,
                 },
                 "gop": gop_json,
                 "limitations": assessment.limitations,
@@ -769,6 +773,20 @@ impl VoiceServer {
             Err(e) => Json(err_ok(format!("任务失败: {e}"))),
         }
     }
+}
+
+/// 电平/信噪比的即时提示：录音当下就告诉用户"这条不能用"，别等到评测完才发现。
+fn level_warning(peak_dbfs: f32, snr_db: f32) -> Option<String> {
+    if snr_db < voice_core::assess::SNR_MIN_DB {
+        return Some(format!(
+            "信噪比仅 {snr_db:.0} dB（要求 ≥ {:.0} dB）：麦克风太远或环境太吵，这条录音不足以做诊断",
+            voice_core::assess::SNR_MIN_DB
+        ));
+    }
+    if peak_dbfs < -30.0 {
+        return Some(format!("峰值仅 {peak_dbfs:.0} dBFS，电平偏低，建议把输入音量调高或靠近麦克风"));
+    }
+    None
 }
 
 fn round3(v: f32) -> f32 {

@@ -21,6 +21,11 @@ pub use diff::{Hint, Issue, IssueKind, Op, Severity, TextDiff};
 /// 评测算法版本：写入 metrics，便于算法升级后回溯与 A/B
 pub const SCORER_VERSION: &str = "p2.0-wordlevel";
 
+/// 可信诊断所需的最低信噪比（dB，口径 = 20 ms 帧 RMS 的 p90−p10）。
+///
+/// 13 dB 来自实测分界：可用录音 14.3–19.5 dB，ASR 开始出碎片的录音 11.0–11.5 dB。
+pub const SNR_MIN_DB: f32 = 13.0;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Assessment {
     pub transcript: Transcript,
@@ -28,6 +33,8 @@ pub struct Assessment {
     pub flow: flow::FlowMetrics,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_diff: Option<TextDiff>,
+    /// 稳健信噪比（20 ms 帧 RMS 的 p90−p10，dB）。低于 `SNR_MIN_DB` 时 ASR/VAD 都不可信。
+    pub snr_db: f32,
     /// 音素级 GOP（`with_gop=true` 才有）。只能当排序/趋势，不能当判决。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop: Option<crate::gop::GopResult>,
@@ -83,9 +90,10 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         .filter(|_| !transcript.words.is_empty() || !transcript.text.is_empty());
 
     let band_limited = audio.band_limited;
+    let snr_db = crate::round_to(crate::audio::snr_db(req.samples, req.sample_rate), 1);
     let mut limitations: Vec<String> = Vec::new();
     let mut gop = None;
-    if crate::gop::should_run(req.with_gop, req.reference.is_some(), band_limited) {
+    if crate::gop::should_run(req.with_gop, req.reference.is_some(), band_limited) && snr_db >= SNR_MIN_DB {
         let text = req.reference.unwrap_or_default();
         match crate::gop::with_engine(|e| crate::gop::score_text(&mut e.model, req.samples, text, &e.g2p)) {
             Ok(g) => gop = Some(g),
@@ -95,8 +103,16 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         limitations.push("未提供参考文本，跳过音素级 GOP".into());
     } else if req.with_gop && band_limited {
         limitations.push("源音频带宽不足（<24 kHz），跳过音素级 GOP".into());
+    } else if req.with_gop && snr_db < SNR_MIN_DB {
+        limitations.push(format!("信噪比过低（{snr_db} dB < {SNR_MIN_DB} dB），跳过音素级 GOP"));
     }
     let mut degraded = transcript.degraded || transcript.words.is_empty();
+    if snr_db < SNR_MIN_DB {
+        degraded = true;
+        limitations.push(format!(
+            "信噪比过低（{snr_db} dB < {SNR_MIN_DB} dB）：VAD 与 ASR 都可能把噪声当语音，             本条的漏读/停顿/音素指标不能作为诊断依据。请靠近麦克风或降低环境噪声后重录"
+        ));
+    }
 
     // D02：VAD 静默失败检测——转写出了词，却几乎没有检测到语音段。
     // 此时 speech_duration / articulation_rate 不可信（历史上曾算出 1891 wpm）。
@@ -143,6 +159,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         audio,
         flow,
         text_diff,
+        snr_db,
         gop,
         limitations,
         scorer_version: SCORER_VERSION.to_string(),

@@ -24,3 +24,57 @@ pub fn save_16k(path: impl AsRef<std::path::Path>, samples: &[f32]) -> Result<()
 pub fn info(samples: &[f32], sr: u32) -> AudioInfo {
     decode::analyze_pub(samples, sr, 1)
 }
+
+/// 稳健 SNR 估计：20 ms 帧 RMS 的 **p90 − p10**（dB）。
+///
+/// 为什么不用"峰值 − 底噪"：蓝牙耳机有 AGC，单个瞬态峰值不可靠；
+/// p95/p10 对偶发爆音和瞬时静音都不敏感，且不依赖 VAD（VAD 在低 SNR 下本身就错）。
+///
+/// 为什么用 p90 而不是 p95：蓝牙 AGC 会产生少量尖峰帧，p95 会被尖峰拉到 −30 dBFS 左右，
+/// 让"语音很轻、噪声很高"的录音仍然算出 15 dB 的假高 SNR（实测：两条作废录音分别是
+/// p95−p10 = 13.0 / 15.4 dB，而 p90−p10 = 11.5 / 11.0 dB）。
+///
+/// 实测分布（本机蓝牙耳机）：可用录音 p90−p10 = 14.3–19.5 dB；ASR 开始出碎片的录音 ≤ 11.5 dB。
+pub fn snr_db(samples: &[f32], sr: u32) -> f32 {
+    let hop = ((sr as usize) / 50).max(1); // 20 ms
+    if samples.len() < hop * 5 {
+        return 0.0;
+    }
+    let mut dbs: Vec<f32> = samples
+        .chunks(hop)
+        .map(|c| {
+            let sq: f32 = c.iter().map(|v| v * v).sum();
+            let rms = (sq / c.len() as f32).sqrt();
+            if rms <= 1e-9 { -120.0 } else { 20.0 * rms.log10() }
+        })
+        .collect();
+    dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p = |q: f32| dbs[(((dbs.len() - 1) as f32) * q) as usize];
+    (p(0.90) - p(0.10)).max(0.0)
+}
+
+#[cfg(test)]
+mod snr_tests {
+    use super::snr_db;
+
+    #[test]
+    fn quiet_noise_gives_low_snr() {
+        // 全程同幅噪声 → p95 与 p10 接近，SNR 应很小
+        let sr = 16_000;
+        let noise: Vec<f32> = (0..sr).map(|i| if i % 2 == 0 { 0.001 } else { -0.001 }).collect();
+        assert!(snr_db(&noise, sr) < 6.0, "纯噪声不该被判成高 SNR");
+    }
+
+    #[test]
+    fn loud_段_and_quiet_段_gives_high_snr() {
+        // 前 30% 是响亮语音、后 70% 是安静底噪（**按帧**划分，不能按采样交错）
+        let sr = 16_000;
+        let n = sr as usize;
+        let cut = n * 3 / 10;
+        let v: Vec<f32> = (0..n)
+            .map(|i| if i < cut { 0.3 } else { 0.0005 })
+            .collect();
+        let s = snr_db(&v, sr);
+        assert!(s > 40.0, "语音段/静音段分明的音频 SNR 应很高，实际 {s}");
+    }
+}

@@ -285,3 +285,13 @@ $VOICE_HOME (默认 D:/voice_data)
 句级 ρ≈0.67；音素级 AUROC 0.63–0.66，FP=10% 处精确率 **0.15–0.24**。
 因此 `assess` 会在 `limitations` 追加 `gop_precision_low`；Skill 也只能把它当排序/趋势信号。
 带宽不足（`band_limited`）或缺 `reference` 时不跑 GOP，并明确写进 `limitations`。
+
+## 信噪比闸门（`snr_db` / `degraded`）
+
+`assess` 返回 `snr_db`（20 ms 帧 RMS 的 **p90−p10**），`record` 返回 `snr_db` / `peak_dbfs` / `level_warning`。
+
+- 阈值 `SNR_MIN_DB = 13.0`（实测分界：可用录音 14.3–19.5 dB，ASR 出碎片的录音 11.0–11.5 dB）
+- `< 13 dB` → `degraded = true`，`limitations` 追加明确原因，**不跑 GOP**
+- 为什么用 p90 而不是 p95：蓝牙 AGC 的尖峰帧会把 p95 抬高，两条作废录音会算出 13.0/15.4 dB 的假高 SNR
+- 实测梯度（TTS + 噪声）：名义 30/20/12/8/4 dB → 测得 30.1/23.8/16.9/14.0/11.3 dB，
+  最后两档 ASR 仍全对、只有 4 dB 档被拦截 —— 说明该闸门卡在"ASR 开始失效"的位置

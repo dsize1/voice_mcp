@@ -29,6 +29,19 @@ pub struct Captured {
     pub device_name: String,
 }
 
+impl Captured {
+    /// 稳健信噪比（dB），见 `audio::snr_db`
+    pub fn snr(&self) -> f32 {
+        crate::audio::snr_db(&self.samples, self.sample_rate)
+    }
+
+    /// 峰值（dBFS）
+    pub fn peak_dbfs(&self) -> f32 {
+        let peak = self.raw.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        if peak <= 1e-9 { -120.0 } else { 20.0 * peak.log10() }
+    }
+}
+
 pub struct RecordOptions {
     pub max_sec: f32,
     pub silence_sec: f32,

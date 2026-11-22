@@ -87,6 +87,25 @@ pub struct PhoneScore {
     pub z: f32,
 }
 
+/// 词级聚合：**用原始 GOP 的均值**，不要用 z 分。
+///
+/// 标定结果（so762，未见过的说话人，分层 150 句）：
+/// 词级 mean-GOP 的 AUROC **0.887**，FP=10% 时精确率 **0.457**、召回 0.577；
+/// 阈值收到 `gop_mean < −0.7` 时精确率 **0.596**、召回 0.262（FP 2.6%）。
+/// 而音素级 z 分只有 0.17 —— 因为 z 分会把"整词都偏低"这个信号归一化掉，
+/// 而音素级还要受基率限制（错读率 7.5% ⇒ FP=10% 时精确率上限 0.45）。
+#[derive(Debug, Clone, Serialize)]
+pub struct WordScore {
+    pub word: String,
+    /// 该词所有音素 GOP 的均值（越负越可疑）
+    pub gop_mean: f32,
+    pub t0_ms: u32,
+    pub t1_ms: u32,
+    /// 该词内最可疑的音素（解释用）
+    pub worst_phone: String,
+    pub worst_z: f32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GopResult {
     pub version: String,
@@ -97,6 +116,45 @@ pub struct GopResult {
     pub oov: Vec<String>,
     /// 有音素但没有可用候选（映射缺失）：同样不能当结论
     pub unmapped: Vec<String>,
+    /// 词级聚合（**推荐对外使用这一层**，见 `WordScore` 的标定数字）
+    pub words: Vec<WordScore>,
+}
+
+/// 把音素级结果按词分组（纯函数，便于单测）。
+///
+/// 只统计**有音素且成功对齐**的词；`word_of` 与 `aligned` 等长。
+pub fn group_words(
+    words: &[g2p::WordPhones],
+    word_of: &[usize],
+    aligned: &[Aligned],
+    z: &[f32],
+    hop_ms: u32,
+) -> Vec<WordScore> {
+    use std::collections::BTreeMap;
+    let mut acc: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (k, w) in word_of.iter().enumerate() {
+        acc.entry(*w).or_default().push(k);
+    }
+    let mut out = Vec::new();
+    for (wi, idxs) in acc {
+        let Some(w) = words.get(wi) else { continue };
+        let gop_mean = idxs.iter().map(|k| aligned[*k].gop).sum::<f32>() / idxs.len() as f32;
+        let (worst_k, worst_z) = idxs
+            .iter()
+            .map(|k| (*k, z[*k]))
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or((idxs[0], 0.0));
+        out.push(WordScore {
+            word: w.word.clone(),
+            gop_mean: crate::round_to(gop_mean, 2),
+            t0_ms: aligned[idxs[0]].t0 as u32 * hop_ms,
+            t1_ms: aligned[*idxs.last().unwrap()].t1 as u32 * hop_ms,
+            worst_phone: aligned[worst_k].label.clone(),
+            worst_z: crate::round_to(worst_z, 2),
+        });
+    }
+    out.sort_by(|a, b| a.gop_mean.partial_cmp(&b.gop_mean).unwrap_or(std::cmp::Ordering::Equal));
+    out
 }
 
 /// 端到端：16 kHz 音频 + 参考文本 → 每个音素的 GOP。
@@ -109,16 +167,20 @@ pub fn score_text(
     let logp = model.log_probs(samples)?;
     let tp = g2p.text_to_phones(text);
     let mut refs = Vec::with_capacity(tp.phones.len());
+    let mut word_of: Vec<usize> = Vec::with_capacity(tp.phones.len());
     let mut unmapped = Vec::new();
-    for p in &tp.phones {
-        let cands = model.phones.candidates(p);
-        if cands.is_empty() {
-            if !unmapped.contains(p) {
-                unmapped.push(p.clone());
+    for (wi, w) in tp.words.iter().enumerate() {
+        for p in &w.phones {
+            let cands = model.phones.candidates(p);
+            if cands.is_empty() {
+                if !unmapped.contains(p) {
+                    unmapped.push(p.clone());
+                }
+                continue;
             }
-            continue;
+            refs.push(PhoneRef { label: p.clone(), cands });
+            word_of.push(wi);
         }
-        refs.push(PhoneRef { label: p.clone(), cands });
     }
     let aligned = align(&logp, &refs, model.phones.blank);
     let hop = model.hop_ms;
@@ -130,6 +192,7 @@ pub fn score_text(
             phones: Vec::new(),
             oov: tp.oov,
             unmapped,
+            words: Vec::new(),
         }),
         Some(a) => {
             let gops: Vec<f32> = a.iter().map(|x| x.gop).collect();
@@ -146,6 +209,7 @@ pub fn score_text(
                     z: crate::round_to(*zs, 2),
                 })
                 .collect();
+            let words = group_words(&tp.words, &word_of, &a, &z, hop);
             Ok(GopResult {
                 version: GOP_VERSION.to_string(),
                 frames: logp.len(),
@@ -153,6 +217,7 @@ pub fn score_text(
                 phones,
                 oov: tp.oov,
                 unmapped,
+                words,
             })
         }
     }
@@ -195,6 +260,29 @@ mod tests {
             assert!(v.abs() < 2.0, "正常音素的 z 分不应很大: {v}");
         }
         assert!(z[4] < -2.0, "离群音素应显著为负: {}", z[4]);
+    }
+
+    #[test]
+    fn groups_phones_by_word_and_keeps_worst() {
+        let words = vec![
+            g2p::WordPhones { word: "think".into(), phones: vec!["TH".into(), "IH".into()] },
+            g2p::WordPhones { word: "so".into(), phones: vec!["S".into(), "OW".into()] },
+        ];
+        let word_of = vec![0usize, 0, 1, 1];
+        let aligned = vec![
+            Aligned { label: "TH".into(), t0: 10, t1: 14, gop: -2.0, best: 1 },
+            Aligned { label: "IH".into(), t0: 14, t1: 18, gop: 1.0, best: 2 },
+            Aligned { label: "S".into(), t0: 18, t1: 20, gop: 3.0, best: 3 },
+            Aligned { label: "OW".into(), t0: 20, t1: 24, gop: 3.0, best: 4 },
+        ];
+        let z = vec![-1.5f32, 0.5, 1.0, 1.0];
+        let ws = group_words(&words, &word_of, &aligned, &z, 20);
+        assert_eq!(ws.len(), 2);
+        assert_eq!(ws[0].word, "think", "gop 更低的词排前面");
+        assert!((ws[0].gop_mean + 0.5).abs() < 1e-6, "think 均值 = (−2+1)/2");
+        assert_eq!(ws[0].worst_phone, "TH");
+        assert_eq!(ws[0].t0_ms, 200);
+        assert_eq!(ws[1].word, "so");
     }
 
     #[test]

@@ -715,6 +715,11 @@ impl VoiceServer {
                     "phones_total": g.phones.len(),
                     "oov": g.oov,
                     "unmapped": g.unmapped,
+                    "words_worst": g.words.iter().take(3).map(|w| serde_json::json!({
+                        "word": w.word, "gop_mean": round3(w.gop_mean),
+                        "t0_ms": w.t0_ms, "t1_ms": w.t1_ms,
+                        "worst_phone": w.worst_phone, "worst_z": w.worst_z,
+                    })).collect::<Vec<_>>(),
                     "worst": v.iter().take(5).map(|p| serde_json::json!({
                         "phone": p.phone, "heard": p.best_symbol,
                         "t0_ms": p.t0_ms, "t1_ms": p.t1_ms,

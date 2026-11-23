@@ -51,7 +51,9 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe assess <audio|last> --reference "原句" --with-gop   # 词级+音素级 GOP + TTS 基线
 ./target/release/voice-cli.exe assess <audio|last> --with-prosody --reference-audio <示范.wav>  # 韵律 + DTW
 ./target/release/voice-cli.exe gop <audio> --text "原句"                          # 只跑 GOP（看 heard/confusion）
-./target/release/voice-cli.exe bank plan --minutes 15 --limit 8                   # 按 learner.json 生成定向训练计划
+./target/release/voice-cli.exe bank plan --minutes 15 --limit 8                   # 定向训练计划（含 60 s 自由说槽位）
+./target/release/voice-cli.exe bank plan --minutes 15 --limit 8 --no-free-speech # 强制省略自由说槽位
+./target/release/voice-cli.exe bank plan --minutes 15 --limit 8 --free-speech    # 强制包含（试一次）
 ./target/release/voice-cli.exe bank pick --tag theta_to_s --level 2 --limit 3     # 按 tag 权重取材
 ./target/release/voice-cli.exe bank drill nce1/019/003                            # 播原生音频
 ./target/release/voice-cli.exe lesson <mp3> --lrc <lrc> --verbose
@@ -77,8 +79,10 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 - [x] 5. Skill 铁律在实测中全部生效：`unclear` 不下结论、whisper（`timestamp_alignment=missing`）不报秒数、单轮只报 1 条
 - [x] 6. 实跑暴露的问题已修（共 5 个）：`slow_too` 语速对、assess 证据分裂、中文 panic、16 kHz 派生污染 `band_limited`、英美拼写变体与 ASR 伪缩略误报
 
-**仍缺**：雅思题型的自由说（现有 3 条都是工作汇报）。2026-11-23 已补单段 51.8 s（语音 32.3 s），
-`band_estimate` 6.0（区间 5.5–6.5），confidence **low → medium**；要再抬档需 IELTS Part 1/2 题型的 45 s+ 独白。
+**无稿自由说改为 readiness gate（2026-11-24）**：当前 `readiness.stage = L2+`，槽位关闭；
+`band_estimate` 6.0（5.5–6.5），confidence medium，只作**跟读/朗读下界**。
+达标 L3（连续 3 条 acc≥0.90 等）后再做 30–45 s 提纲独白，L4 才开启 60 s 无稿自由说。
+详见 [docs/levels.md](levels.md)。`bank plan` 默认按 `readiness.free_speech_enabled` 自动决定槽位。
 （`record` 的 8 s 起始等待已可通过 `start_timeout_sec` 调整，D39 已还。）
 
 ## 已知债务（详见 ADR-0008）
@@ -94,7 +98,7 @@ D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D4
 
 1. ~~**P3 真机训练闭环**~~（2026-11-21 完成）
 2. ~~**P4 跟读素材库**~~（2026-11-22 全量完成）：`bank ingest/list/show/drill/stats/retag`，NCE1–4 共 276 课 → 4 997 条（另加 10 条 IELTS prompt，当前 5 007）
-3. ~~补一次自由说 30–60 s~~（**完成** 2026-11-23：单段 51.8 s 主样本 + 两条短样本，confidence low→medium；仍缺 IELTS 题型的独白）
+3. ~~补一次自由说 30–60 s~~（2026-11-23 完成；**2026-11-24 改为 readiness gate**：L2+ 关闭，L3/L4 达标后开启）
 4. ~~韵律分析（F0 / 句末升降 / 平调 / 重音候选 / DTW）~~（**完成** 2026-11-23，见下节）
 5. **Route A（无参考自由说伪 GOP）**：已立 [ADR-0010](adr/0010-free-speech-pseudo-gop.md)，
    **Proposed / Deferred**，不在当前迭代；触发条件见 ADR。
@@ -139,8 +143,9 @@ SKILL 4.2 已固化措辞规则（先看句型再解读升降、`stress_top` 只
 可行性实测（51.8 s 样本：一致词覆盖率 **84.1%**、共识词 CMUdict 覆盖 100%、端到端 ≈22 s/60 s、
 共识里存在 `i mistake` 这类双引擎同错）、设计、R1–R9 风险、V1–V10 验收线都已固化。
 
-**决策：先不开工。** 当前迭代继续原定路线；A 的触发条件是 D04 whisper 回归已还、
-有 ≥10 条英文自由说样本且用户要求自由说纠音、或跟读路径进入平台期。
+**决策：先不开工。** 当前迭代继续原定路线；A 的触发条件是 D04 whisper 回归已还，
+且用户要求自由说纠音——**自由说已于 2026-11-24 改为 readiness gate（L2+ 关闭，L4 才开启）**，
+L4 之前该触发条件不会成立；A 仅保留为未来选项。
 
 为了以后能接上，当前代码保持：`Transcript.words/tokens` 双保留、`normalize`/`phonetic`
 公开且确定性、`assess` 单入口 + feature flag、伪参考结果只新增字段不合并进 `gop`。

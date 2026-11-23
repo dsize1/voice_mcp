@@ -512,6 +512,7 @@ D:/voice_data/
 ├── docs/
 │   ├── CONTRACT.md             # MCP 工具契约（含给 Agent 的解读规则）
 │   ├── STATE.md                # 交接页：现状 / 实测数字 / 待办 / 债务
+│   ├── levels.md               # 水平与就绪等级 L0–L4 + 自由说 gate
 │   ├── phoneme-gop.md          # 音素级 GOP：选型、标定、混淆对、边界
 │   ├── mdd.md                  # MDD 微调实验：协议、结果、环境
 │   ├── datasets.md             # 评测数据集：校验方法、数据画像、tag 权重

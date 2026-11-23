@@ -27,12 +27,25 @@ pub struct Learner {
     pub drill_queue: Vec<DrillItem>,
     #[serde(default)]
     pub history: Vec<HistoryItem>,
+    #[serde(default)]
+    pub readiness: Readiness,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Level {
     pub band_estimate: Option<f32>,
     pub confidence: Option<String>,
+}
+
+/// 自由说就绪门槛（见 docs/levels.md）。`free_speech_enabled` 由 Skill/用户确认后写入。
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Readiness {
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub free_speech_enabled: bool,
+    #[serde(default)]
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -58,6 +71,9 @@ pub struct PlanRequest {
     pub seed: Option<u64>,
     pub corpus: Option<String>,
     pub part: Option<u8>,
+    /// 是否保留 60 s 无稿自由说槽位（默认 true；用户要求不做时置 false）
+    /// None → 按 learner.readiness.free_speech_enabled 自动决定
+    pub include_free_speech: Option<bool>,
 }
 
 impl Default for PlanRequest {
@@ -69,6 +85,7 @@ impl Default for PlanRequest {
             seed: None,
             corpus: None,
             part: None,
+            include_free_speech: None,
         }
     }
 }
@@ -117,7 +134,8 @@ pub struct TrainingPlan {
     pub minutes_budget: f32,
     pub minutes_planned: f32,
     pub items: Vec<PlanItem>,
-    pub free_speech: FreeSpeechSlot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_speech: Option<FreeSpeechSlot>,
     pub notes: Vec<String>,
 }
 
@@ -139,7 +157,11 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
     let mut items: Vec<PlanItem> = Vec::new();
     let mut planned = 0.0f32;
     // 预留 3 min 给自由说槽位（60 s + 反馈），避免素材把预算吃光
-    let drill_budget = (req.minutes - 3.0).max(1.0);
+    let include_free_speech = req
+        .include_free_speech
+        .unwrap_or(learner.readiness.free_speech_enabled);
+    let reserve = if include_free_speech { 3.0 } else { 0.0 };
+    let drill_budget = (req.minutes - reserve).max(1.0);
 
     // 1) drill_queue 优先
     for d in &learner.drill_queue {
@@ -280,10 +302,26 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
             "word_substitution 没有对应素材 tag：靠词级 diff/定向重录复核，不参与选材".into(),
         );
     }
-    let free_speech = free_speech_slot(entries, req, &mut notes);
-    // 自由说槽位（60 s + 反馈）也计入预算
-    planned += 3.0;
-    notes.push("自由说发音筛查（伪参考 GOP）未启用，见 ADR-0010；当前只测语流 + 韵律".into());
+    let free_speech = if include_free_speech {
+        let slot = free_speech_slot(entries, req, &mut notes);
+        // 自由说槽位（60 s + 反馈）也计入预算
+        planned += 3.0;
+        notes.push("自由说发音筛查（伪参考 GOP）未启用，见 ADR-0010；当前只测语流 + 韵律".into());
+        Some(slot)
+    } else {
+        let stage = learner.readiness.stage.as_deref().unwrap_or("L2+");
+        if learner.readiness.missing.is_empty() {
+            notes.push(format!(
+                "无稿自由说未开启（readiness {stage}），用 --free-speech 可强制试一次"
+            ));
+        } else {
+            notes.push(format!(
+                "无稿自由说未开启（readiness {stage}）；未达标：{}",
+                learner.readiness.missing.join("；")
+            ));
+        }
+        None
+    };
 
     TrainingPlan {
         version: PLAN_VERSION,
@@ -342,14 +380,25 @@ impl TrainingPlan {
             }
             out.push_str(&format!("- 预算：{:.1} min\n\n", it.est_min));
         }
-        out.push_str("## 自由说\n\n");
-        out.push_str(&format!(
-            "- 题目：{}\n- 时长：{} s\n- 指标：{}\n- 伪参考 GOP：{}\n\n",
-            self.free_speech.prompt,
-            self.free_speech.dur_sec,
-            self.free_speech.metrics.join(" / "),
-            self.free_speech.pseudo_gop
-        ));
+        if let Some(fs) = &self.free_speech {
+            out.push_str(
+                "## 自由说
+
+",
+            );
+            out.push_str(&format!(
+                "- 题目：{}
+- 时长：{} s
+- 指标：{}
+- 伪参考 GOP：{}
+
+",
+                fs.prompt,
+                fs.dur_sec,
+                fs.metrics.join(" / "),
+                fs.pseudo_gop
+            ));
+        }
         if !self.notes.is_empty() {
             out.push_str("## 备注\n\n");
             for n in &self.notes {
@@ -568,6 +617,11 @@ mod tests {
                 bank_id: Some("nce2/01/002".into()),
                 mastered: true,
             }],
+            readiness: Readiness {
+                stage: Some("L2+".into()),
+                free_speech_enabled: true,
+                missing: Vec::new(),
+            },
         }
     }
 
@@ -654,9 +708,10 @@ mod tests {
     #[test]
     fn free_speech_uses_ielts_prompt_and_marks_route_a_disabled() {
         let p = build(&entries(), &learner(), &PlanRequest::default());
-        assert_eq!(p.free_speech.prompt, "Where is your hometown?");
-        assert_eq!(p.free_speech.pseudo_gop, "disabled (ADR-0010)");
-        assert!(p.free_speech.reference.is_none());
+        let fs = p.free_speech.as_ref().expect("默认包含自由说槽位");
+        assert_eq!(fs.prompt, "Where is your hometown?");
+        assert_eq!(fs.pseudo_gop, "disabled (ADR-0010)");
+        assert!(fs.reference.is_none());
     }
 
     #[test]
@@ -681,10 +736,40 @@ mod tests {
     }
 
     #[test]
+    fn no_free_speech_omits_slot() {
+        let p = build(
+            &entries(),
+            &learner(),
+            &PlanRequest {
+                include_free_speech: Some(false),
+                minutes: 10.0,
+                ..Default::default()
+            },
+        );
+        assert!(p.free_speech.is_none());
+        assert!(p.notes.iter().any(|n| n.contains("无稿自由说未开启")));
+        assert!(p.minutes_planned <= 10.0 + 0.01);
+    }
+
+    #[test]
+    fn readiness_gate_controls_free_speech_by_default() {
+        let mut l = learner();
+        l.readiness.free_speech_enabled = false;
+        l.readiness.missing = vec!["连续 3 条 acc≥0.90".into()];
+        let p = build(&entries(), &l, &PlanRequest::default());
+        assert!(p.free_speech.is_none());
+        assert!(p.notes.iter().any(|n| n.contains("连续 3 条 acc≥0.90")));
+
+        l.readiness.free_speech_enabled = true;
+        let p = build(&entries(), &l, &PlanRequest::default());
+        assert!(p.free_speech.is_some());
+    }
+
+    #[test]
     fn empty_bank_is_safe() {
         let p = build(&[], &learner(), &PlanRequest::default());
         assert!(p.items.is_empty());
         assert!(!p.notes.is_empty());
-        assert!(!p.free_speech.prompt.is_empty());
+        assert!(!p.free_speech.as_ref().unwrap().prompt.is_empty());
     }
 }

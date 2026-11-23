@@ -67,6 +67,10 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
    每条：播示范 → 用户读 → `assess(path=..., reference=句, lang="en", scene="baseline")`。
 4. 让用户**自由说 30–60 秒**（"Describe your hometown briefly."），`assess(path=..., reference 不传, scene="free")`
    只看语流（语速/停顿/填充词）。
+   **自由说受 `learner.readiness.free_speech_enabled` 控制**（见 docs/levels.md）：
+   - `false`：不要主动要求无稿自由说，改用跟读/脚本朗读；`band_estimate` 注明“跟读下界”。
+   - `true`：才做 60 s 自由说；仍要区分 `scene=free` 与朗读数据。
+   用户拒绝时不要反复追问；达标判据见 docs/levels.md（L3 连续 3 条 acc≥0.90）。
 5. 汇总成档案（见第 6 节）。定级：
 
    | 基线特征 | 起始档 |
@@ -102,6 +106,9 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 
 ```bash
 voice-cli bank plan --minutes 15 --limit 8      # drill_queue → error_stats/focus → 同难度补足
+voice-cli bank plan --minutes 15                  # 默认按 readiness 自动决定是否放自由说槽位
+voice-cli bank plan --minutes 15 --free-speech    # 用户明确要试一次时强制包含
+voice-cli bank plan --minutes 15 --no-free-speech # 强制省略
 ```
 
 计划 `items[]` 按顺序练；`free_speech` 槽位固定 60 s，`pseudo_gop: "disabled (ADR-0010)"`
@@ -334,8 +341,10 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 
 ## 7. 每 5 次训练做一次复评
 
-跑一次雅思 Part 2 长独白（见 `references/ielts-topics.md`）：
-`assess(path=..., reference 不传, scene="mock")` → 看 `speech_rate` / `pause_*` / `filler_rate` / `repetitions` 趋势，
+**若 `readiness.free_speech_enabled=false`**：跳过 Part 2 长独白，改用脚本朗读（有 reference）做复评；
+只报朗读的发音/语流，不推断“无稿流利度”。
+
+用户同意做长独白时：`assess(path=..., reference 不传, scene="mock")` → 看 `speech_rate` / `pause_*` / `filler_rate` / `repetitions` 趋势，
 再挑 2 句做 `reference` 跟读评测。更新 `band_estimate`（给区间 + `confidence`），并调整 `focus`。
 长独白**不要**用 `record`（阻塞 2 分钟不友好），让用户用系统录音机录完再由 `assess(path="last")` 处理。
 

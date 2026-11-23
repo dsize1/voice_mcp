@@ -252,6 +252,8 @@ voice-cli bank show <id> / bank drill <id>
 
 ```bash
 voice-cli bank plan --minutes 15 --limit 8            # 默认写 sessions/<date>/<HHMMSS>_plan/
+voice-cli bank plan --minutes 15 --no-free-speech    # 强制省略 60 s 无稿自由说槽位
+voice-cli bank plan --minutes 15 --free-speech       # 强制包含（默认按 learner.readiness 自动）
 voice-cli bank plan --minutes 15 --dry-run --json     # 只看不写
 ```
 

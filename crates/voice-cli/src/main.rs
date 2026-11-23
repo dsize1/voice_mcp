@@ -239,6 +239,12 @@ enum BankCmd {
         /// 输出 JSON（默认 Markdown）
         #[arg(long)]
         json: bool,
+        /// 强制包含 60 s 自由说槽位（默认按 learner.readiness 决定）
+        #[arg(long, conflicts_with = "no_free_speech")]
+        free_speech: bool,
+        /// 强制省略自由说槽位
+        #[arg(long, conflicts_with = "free_speech")]
+        no_free_speech: bool,
     },
     /// 统计：条数/时长/难度分布/标签排行/quarantine 数
     Stats,
@@ -386,6 +392,8 @@ fn main() -> Result<()> {
                 part,
                 dry_run,
                 json,
+                free_speech,
+                no_free_speech,
             } => bank_plan(
                 &cfg,
                 learner.as_deref(),
@@ -397,6 +405,13 @@ fn main() -> Result<()> {
                 part,
                 dry_run,
                 json,
+                if free_speech {
+                    Some(true)
+                } else if no_free_speech {
+                    Some(false)
+                } else {
+                    None
+                },
             ),
             BankCmd::Pick {
                 tags,
@@ -1728,6 +1743,7 @@ fn bank_plan(
     part: Option<u8>,
     dry_run: bool,
     json: bool,
+    include_free_speech: Option<bool>,
 ) -> Result<()> {
     let learner_path = learner
         .map(PathBuf::from)
@@ -1744,6 +1760,7 @@ fn bank_plan(
         seed,
         corpus,
         part,
+        include_free_speech,
     };
     let plan = voice_core::plan::build(&entries, &learner, &req);
 

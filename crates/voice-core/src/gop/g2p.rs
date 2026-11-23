@@ -98,9 +98,14 @@ impl G2p {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// 每个测试用独立文件：多个测试并行时共用一个路径会互相截断（曾导致 flaky）。
+    static DICT_SEQ: AtomicUsize = AtomicUsize::new(0);
 
     fn tmp_dict() -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("cmudict_test_{}.dict", std::process::id()));
+        let n = DICT_SEQ.fetch_add(1, Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!("cmudict_test_{}_{n}.dict", std::process::id()));
         let mut f = std::fs::File::create(&p).unwrap();
         writeln!(f, "mark M AA1 R K").unwrap();
         writeln!(f, "is IH0 Z").unwrap();

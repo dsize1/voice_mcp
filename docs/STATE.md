@@ -86,7 +86,7 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 S1 级已全部偿还。剩余主要项：
 D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D12 韵律与 GOP（ADR-0007，**触发条件已满足**：history 14 条）
 D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（**D20 已有 CI，待首跑**；仍无合成 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
-D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）
+D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）· D46 G2P 同形异音词只取首变体（live/read）
 
 已还：D19 rust-toolchain/MSRV · D39 `record.start_timeout_sec` · D45 构建门禁。（D18 只缓解：`check.ps1` 把 DLL 目录加进 PATH。）
 

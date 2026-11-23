@@ -1,6 +1,6 @@
 # ADR-0008: 技术欠债登记（Debt Register）
 
-- 状态：Accepted（活文档，每还一条就更新；最后更新 2026-11-24：D19/D39/D45 已还，D20 部分偿还；新增 D46（G2P 同形异音））
+- 状态：Accepted（活文档，每还一条就更新；最后更新 2026-11-24：D12/D19/D39/D45 已还，D20 部分偿还；新增 D46–D50（G2P 同形异音 / 短语音 SNR 误杀 / readiness 未自动评估 / 双引擎不可用无闸门 / 韵律标注验收））
 - 日期：2026-11-19
 - 相关：ADR-0001（运行时路线）、ADR-0006（评测边界）、ADR-0007（韵律与 GOP）
 
@@ -45,11 +45,15 @@
 | D09 | 词级时间戳是 CTC token 级（±0.5 s）→ 词界停顿、连读判断可信度低 | S2 | ADR-0007 的 D12 上线时自然解决；或先换带 cross-attention 的 whisper 导出 | 见 ADR-0007 |
 | D10 | 音形编码不区分**元音长短**（bit/beat、bad/bed 同 key） | S2 | 同上（需音素级） | 见 ADR-0007 |
 | D11 | 停顿 250 ms / 词界 200 ms / 语速区间 80–190 wpm 全是**经验值**，未用真实数据校准 | S2 | ≥10 次真实训练后（ADR-0007 的同一触发条件） | 0.5d：用 manifest 分布反推分位数 |
-| D12 | 无 F0/重音/升降调（韵律完全空缺），`tone_flat` 这类问题只能靠人耳定性 | S2 | ADR-0007 触发条件满足 | 3–4d |
+| D12 | 无 F0/重音/升降调（韵律完全空缺），`tone_flat` 这类问题只能靠人耳定性 | **已还**：2026-11-23 韵律上线（YIN + 半音域 + 句末升降/平调/音域/重音候选/DTW），见 ADR-0007；12 条人工标注验收仍未做 | ~~S2~~ ✅已还 | – | – |
 | D13 | 中文只做**字级** diff，无拼音层 | S2 | 有中文发音诊断需求时 | 2d（引入拼音对齐） |
 | D14 | `accuracy = 1-(S+D+I)/N_ref` 对长句不公平（分母大），且不区分错误类型权重 | S3 | 用户开始练长句/Part 2 时 | 0.5d：改用 WER + 关键错误加权 |
 | D41 | 英美拼写/发音变体表 `US_UK_VARIANTS` 需人工维护，只覆盖 50 对高频词；遇到表外变体仍会误报 | 训练中 `theatre/theater` 类误报 | S3 | 出现新的表外变体误报 | 0.5d/次：按真实误报补表，并加回归用例 |
 | D46 | **G2P 同形异音词只取 CMUdict 第一个变体**：`live` 首变体是 `L AY V`（形容词），`I live in…` 的动词 `/lɪv/` 会被判低；`read` 同样（首变体 `R EH D`） | 2026-11-24 自然句：`live` 词级 Δ−4.61，但 GOP 的 V 实为 /v/（5.79/6.42）；TTS 基线用同一错误变体，无法自救 | S2 | 下一次 GOP 标定 / Route A 实现前 | 0.5d：按变体逐一取 max-GOP，或按词性/上下文选变体；补 live/read/use 回归用例 |
+| D47 | **短语音（<2 s）SNR 估计误杀单词 drill**：1.7 s `he'll` 录到 peak −19 dBFS 却报 SNR 7.3；2.0 s `days` 报 6.7；≥3.2 s 同设备可过 13+ | 2026-11-24 训练：单词/最小对立对 drill 连续被 SNR 闸门拒，被迫改回整句 | S2 | 单词/最小对立对成为常规训练项（已发生） | 0.5d：长度感知阈值，或 <3 s 改用 peak+周期性/浊音帧判定，不单看 SNR |
+| D48 | **readiness/free-speech gate 只读 JSON 标志，未自动从 history 计算**：`readiness.stage`/`missing` 目前手动写，升/降级没有代码判定 | 2026-11-24 gate 上线；`plan` 只消费 `free_speech_enabled` | S2 | 下一次升/降级或第二个学习者 | 1d：`voice-core::readiness` 评估器 + CLI `learner readiness`，写回 history 证据 |
+| D49 | **声学闸门通过 ≠ 文本可用**：`录音 (7).m4a` SNR 15.6 / peak −19 仍 accuracy 0.67；`record2.m4a` SNR 14.9，SenseVoice 与 whisper 都听不清 | 2026-11-24 外部录音两次；当前只有 SNR/peak/削波闸门 | S2 | 自由说 / 外部录音 / Route A 实现前 | 0.5d：双引擎一致率/coverage 闸门，低于阈值只出 flow/prosody，不出词级/发音结论 |
+| D50 | 韵律的 12 条人工标注验收未做（升降/平/重音一致率 ≥80%）；短句窗口与 `unreliable` 已加，但无真值标定 | ADR-0007 验收项；目前只有 10 单测 + 少量真机 | S2 | 下一次语调专项训练 | 0.5d + 标注 2h |
 
 ## 三、工程韧性
 
@@ -142,6 +146,7 @@
 | 没有构建门禁，HEAD 编译失败无人发现（D45） | `tools/check.ps1`（fmt → clippy -D warnings → test）+ `.github/workflows/ci.yml`；同时清掉 36 条 clippy、全仓 fmt |
 | `record` 起始等待硬编码（D39） | `start_timeout_sec` 贯通 core/CLI/MCP（默认 8，自由说建议 20） |
 | 无 toolchain/MSRV 声明（D19） | `rust-toolchain.toml`（stable + rustfmt/clippy）+ `rust-version = "1.99"`（实测） |
+| 无韵律（D12） | 2026-11-23 纯 Rust 韵律上线：YIN + 半音域 + 句末升降/平调/音域/重音候选/DTW；`prosody.unreliable` 闸门 |
 
 ## 八、维护约定
 
@@ -156,7 +161,7 @@
 |---|---|
 | D09 词级时间戳 ±0.5 s | **部分偿还**：音素级 GOP 已可用（`gop.phones[].t0/t1`），但 CTC spike 使每个音素只有 1–2 帧，仍不能用于"元音时长" |
 | D10 音形编码不区分元音长短 | **部分偿还**：`gop.phones[].heard` 能直接看出 /ɪ/ vs /iː/（本机实测 seat/sit 区分成功），但 GOP 分数本身仍不区分 |
-| D12 无韵律（F0/重音/升降调） | 未偿还；ADR-0007 第一项仍开放 |
+| D12 无韵律（F0/重音/升降调） | **已还**（2026-11-23）：`assess(with_prosody=true)` 上线；12 条人工标注验收仍未做，另记 D50 |
 | D21 回归用例 | **已还**：9 条（含 r08 英美变体 / r09 用户确认真值）；仍缺合成 fixture 供 CI 无音频跑 |
 | D27 learner.json 无 schema | 未偿还（字段已增至 history/error_stats/drill_queue/gop_words） |
 | D38 分块边界切词 | 未偿还；实测 30.8 s TTS 仍丢 `hometown`/`universities`（`docs/phoneme-gop.md`） |

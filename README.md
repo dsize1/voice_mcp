@@ -446,7 +446,7 @@ D:/voice_data/
 | [0007](docs/adr/0007-prosody-and-gop.md) | 韵律分析与音素级 GOP（**两者都已上线**，纯 Rust；见 [docs/phoneme-gop.md](docs/phoneme-gop.md) / [docs/mdd.md](docs/mdd.md)） |
 | [0009](docs/adr/0009-drill-library.md) | 跟读素材库：NCE1–4 逐句切片、质量门槛、难度分级（**Accepted，5 007 条已入库**） |
 | [0010](docs/adr/0010-free-speech-pseudo-gop.md) | **Route A：无参考自由说的伪参考 GOP**（立项，Deferred；含可行性实测与 Go/No-Go） |
-| [0008](docs/adr/0008-technical-debt.md) | **技术欠债登记**：46 条债、严重度、触发偿付条件、偿付顺序 |
+| [0008](docs/adr/0008-technical-debt.md) | **技术欠债登记**：50 条债、严重度、触发偿付条件、偿付顺序 |
 
 ---
 

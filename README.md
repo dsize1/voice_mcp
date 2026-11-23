@@ -78,7 +78,7 @@ Pi 里的 LLM **听不到音频**，它只能看到文本和数字。所以：
 | **混淆对信号**（θ→s 等） | ✅ | 仅 TH 系列达到可用精度（P 0.50 / R 0.67），其余只作内部标记 |
 | **跟读素材库** | ✅ | NCE1–4 共 4 997 条逐句切片 + 10 条 IELTS prompt（共 5 007 条，7.1 h），tag 权重来自真实错读率统计 |
 | **音频质量闸门** | ✅ | SNR<13 dB / peak<−30 dBFS / 削波>0.1% → `degraded`，不出诊断结论 |
-| 韵律分析（F0 轮廓/句末升降/重音落点） | ⏳ 已设计 | [ADR-0007](docs/adr/0007-prosody-and-gop.md)（GOP 部分已完成） |
+| **韵律分析**（F0 轮廓/句末升降/平调/音域/重音候选/DTW） | ✅ | 纯 Rust（YIN）；`assess(with_prosody=true)` 或 `reference_audio`，只给数值不下结论 |
 | 流式 / HTTP 模式 / 热键听写 | ⏳ P4 | – |
 
 ---
@@ -442,7 +442,7 @@ D:/voice_data/
 | [0004](docs/adr/0004-audio-io-and-evidence.md) | 文件优先的 I/O 契约与留证机制 |
 | [0005](docs/adr/0005-deps-and-model-acquisition.md) | 依赖与模型获取策略（GitHub 不可用时的替代通路） |
 | [0006](docs/adr/0006-assessment-scope.md) | 评测层能力边界（三态推断、为什么不能硬猜） |
-| [0007](docs/adr/0007-prosody-and-gop.md) | 韵律分析与音素级 GOP（**GOP 已上线**，见 [docs/phoneme-gop.md](docs/phoneme-gop.md) / [docs/mdd.md](docs/mdd.md)；韵律仍待做） |
+| [0007](docs/adr/0007-prosody-and-gop.md) | 韵律分析与音素级 GOP（**两者都已上线**，纯 Rust；见 [docs/phoneme-gop.md](docs/phoneme-gop.md) / [docs/mdd.md](docs/mdd.md)） |
 | [0009](docs/adr/0009-drill-library.md) | 跟读素材库：NCE1–4 逐句切片、质量门槛、难度分级（**Accepted，5 007 条已入库**） |
 | [0008](docs/adr/0008-technical-debt.md) | **技术欠债登记**：45 条债、严重度、触发偿付条件、偿付顺序 |
 
@@ -483,9 +483,9 @@ D:/voice_data/
 |---|---|---|
 | P0 | 环境验证（解码 / 原生库 / ASR / TTS / 供应链校验） | ✅ |
 | P1 | 音频层 + 8 个 MCP 工具 + CLI + 目录监听 | ✅ |
-| P2 | 评测层：词级 diff + flow | ✅ |
+| P2 | 评测层：词级 diff + flow + 韵律 | ✅ |
 | P2.5 | 音素级 GOP（纯 Rust：ONNX + CTC-Viterbi + 词级聚合 + TTS 基线） | ✅ 2026-11-22 |
-| P2.5 | 韵律分析（F0 轮廓 / 重音 / 升降调） | ⏳ 触发条件：≥10 次真实训练 |
+| P2.5 | 韵律分析（F0 轮廓 / 句末升降 / 平调 / 重音候选 / DTW） | ✅ 2026-11-23 |
 | P3.5 | MDD 微调（speechocean762 微调音素 CTC） | ✅ 音素级 AUROC 0.690→0.769 |
 | P3 | `ielts-speaking-coach` / `voice-dictation` Skill | ✅ |
 | P4 | **跟读素材库**（NCE 276 课 → 4 997 条 + 10 条 IELTS prompt，见 [ADR-0009](docs/adr/0009-drill-library.md)） | ✅ |

@@ -4,7 +4,7 @@
 
 ## 一句话现状
 
-**P3 闭环 + P4 素材库（NCE 4 997 + IELTS prompt 10 = 5 007 条）+ 音素级 GOP（词级口径）均已上线并在真机验证。**
+**P3 闭环 + P4 素材库（NCE 4 997 + IELTS prompt 10 = 5 007 条）+ 音素级 GOP（词级口径）+ 韵律分析均已上线并在真机验证。**
 `crates` 10 400+ 行 Rust，**97 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
 已由 `tools/check.ps1` 与 GitHub Actions 守住（ADR-0008 D45）。
 下一步：雅思素材入库 + 按 `error_stats` 做定向训练。
@@ -24,6 +24,7 @@
 | **GOP 判别力（so762 未见说话人）** | 句级 ρ 0.67；**词级 mean-GOP：AUROC 0.887、P@FP10 0.457**；音素级 0.769/0.170（基率上限 0.45） |
 | **MDD 微调（6ep/8L）** | 词级 AUROC 0.883→0.887、音素级 0.690→0.769；训练 65 s/epoch（RTX 5070 Ti cu128） |
 | **混淆对信号（TH→s）** | 命中精确率 0.50、召回 0.67（仅 TH 系列可对用户说） |
+| **韵律（YIN，纯 Rust）** | 51.8 s 真人：F0 中位 116.3 Hz、起伏 3.31 st、音域 12.61 st、句末 −0.38 st→flat；TTS 同文本 DTW 0.11 st |
 | 素材库 | **5 007 条 / 7.1 h**（NCE 4 997 + IELTS prompt 10），quarantine 1 221，可直接练 3 378 |
 | 素材库 ingest | 276 课 ≈ 10.5 min；`bank stats` 是唯一权威计数 |
 
@@ -48,6 +49,7 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe mic --secs 3      # 麦克风能力 + 底噪 + 阈值建议
 ./target/release/voice-cli.exe rec --max-sec 20 --stt --lang en
 ./target/release/voice-cli.exe assess <audio|last> --reference "原句" --with-gop   # 词级+音素级 GOP + TTS 基线
+./target/release/voice-cli.exe assess <audio|last> --with-prosody --reference-audio <示范.wav>  # 韵律 + DTW
 ./target/release/voice-cli.exe gop <audio> --text "原句"                          # 只跑 GOP（看 heard/confusion）
 ./target/release/voice-cli.exe bank pick --tag theta_to_s --level 2 --limit 3     # 按 tag 权重取材
 ./target/release/voice-cli.exe bank drill nce1/019/003                            # 播原生音频
@@ -74,13 +76,14 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 - [x] 5. Skill 铁律在实测中全部生效：`unclear` 不下结论、whisper（`timestamp_alignment=missing`）不报秒数、单轮只报 1 条
 - [x] 6. 实跑暴露的问题已修（共 5 个）：`slow_too` 语速对、assess 证据分裂、中文 panic、16 kHz 派生污染 `band_limited`、英美拼写变体与 ASR 伪缩略误报
 
-**仍缺**：自由说 30–60 s（用户跳过）→ `band_estimate` 置信度仍是 low。
+**仍缺**：雅思题型的自由说（现有 3 条都是工作汇报）。2026-11-23 已补单段 51.8 s（语音 32.3 s），
+`band_estimate` 6.0（区间 5.5–6.5），confidence **low → medium**；要再抬档需 IELTS Part 1/2 题型的 45 s+ 独白。
 （`record` 的 8 s 起始等待已可通过 `start_timeout_sec` 调整，D39 已还。）
 
 ## 已知债务（详见 ADR-0008）
 
 S1 级已全部偿还。剩余主要项：
-D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D12 韵律与 GOP（ADR-0007，**触发条件已满足**：history 12 条）
+D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D12 韵律与 GOP（ADR-0007，**触发条件已满足**：history 14 条）
 D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（**D20 已有 CI，待首跑**；仍无合成 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
 D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）
 
@@ -90,8 +93,8 @@ D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D4
 
 1. ~~**P3 真机训练闭环**~~（2026-11-21 完成）
 2. ~~**P4 跟读素材库**~~（2026-11-22 全量完成）：`bank ingest/list/show/drill/stats/retag`，NCE1–4 共 276 课 → 4 997 条（另加 10 条 IELTS prompt，当前 5 007）
-3. 补一次自由说 30–60 s（把 `learner.json` 的 band 置信度从 low 拉起来）
-4. 韵律分析（F0 / 句末升降 / 平调）：ADR-0007 的触发条件（≥10 次训练）已满足
+3. ~~补一次自由说 30–60 s~~（**完成** 2026-11-23：单段 51.8 s 主样本 + 两条短样本，confidence low→medium；仍缺 IELTS 题型的独白）
+4. ~~韵律分析（F0 / 句末升降 / 平调 / 重音候选 / DTW）~~（**完成** 2026-11-23，见下节）
 
 ## GOP / 诊断层现状（2026-11-22）
 
@@ -109,9 +112,26 @@ D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D4
 **不能用时长判断元音长短**；MDD 进一步提升空间 ≈0（词级已贴天花板），下一步方向是"降基率"
 （可疑词定向重录复核）。
 
+## 韵律分析现状（2026-11-23）
+
+`assess(with_prosody=true)` 或 `reference_audio=<示范音>` 返回 `prosody`：
+F0 中位/标准差/音域、句末斜率与升降方向、平调判定、重音候选 top5、节奏、与示范音的 F0 形状 DTW。
+
+算法与验证见 [ADR-0007](adr/0007-prosody-and-gop.md)；**只给数值+位置，不下"语调不好"的结论**。
+SKILL 4.2 已固化措辞规则（先看句型再解读升降、`stress_top` 只是候选、`energy_z` 不可用于重音）。
+
+已知边界：
+- **未做 12 条人工标注验收**（ADR 验收项：升降/平/重音一致率 ≥80%），当前只有 8 条单测 + 1 条真机 + DTW 端到端；
+- 重音候选的时长来自 ASR 词时间戳（±0.5 s），只能说"第几个词"；
+- 蓝牙 AGC 让 `energy_z` 失真（D36），只作第 3 特征；
+- `voiced_ratio` 含静音帧，不要与 `flow.speech_ratio` 混用。
+
+**注意**：本次改的是 `voice-mcp` 源码，正在运行的 MCP 进程仍是旧二进制；重启 Pi / MCP 后
+`assess` 才会接受 `with_prosody` 参数（CLI 已可直接用 `--with-prosody`）。
+
 ## 真机训练记录（2026-11-22 夜）
 
-`D:/voice_data/sessions/2026-11-22/`，`learner.json` history 12 条。已修：
+`D:/voice_data/sessions/2026-11-22/`，`learner.json` history 14 条（含 2026-11-23 三条自由说）。已修：
 `why→when`（Δ −4.27→−0.39）、`thank` 的 /θ/（TH→s → heard θ，Δ −0.05）、`valley`（acc 0.83→1.00）。
 待练：`short_long_vowel`（/ɪ/ vs /iː/，seat 第 1 次仍读成 sɪt）、`ae_to_e`（sit→set）、`village` 的 /ɪlɪ/。
 
@@ -141,6 +161,23 @@ D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D4
 | CONTRACT | `record.silence_sec` 默认 1.0；无 `start_timeout_sec` | 默认 2.0；已加 `start_timeout_sec`（默认 8） |
 | CONTRACT | GOP “句级 ρ 0.67；音素级 AUROC 0.63–0.66 / P 0.15–0.24” | 补词级 AUROC 0.887 / P@FP10 0.457；音素级 0.769 / 0.170；补 `gop.words_worst` / `gop.worst` / `confusion` / `gop_baseline` 字段 |
 | STATE | 素材 4 997 / ready 3 368 / 3 384（两个数） | 5 007 / ready 3 378（`bank stats` + 索引实测） |
-| STATE | history 11 条 | 12 条 |
+| STATE | history 11 条 | 14 条（后补三条自由说） |
 | STATE | D39 仍列为未还 | 已还（`record.start_timeout_sec`） |
 | README / docs/README | 债务“33 条” | 45 条（D01–D45） |
+
+## 自由说定档（2026-11-23）
+
+录音条件：样本 A/B 为 EDIFIER W820NB（Hands-Free，48 kHz，`record` 自动停止）；样本 C 为系统「录音机」m4a。三种都走 `assess(reference=不传)`。
+
+| 样本 | 语音/窗口 | speech_rate | articulation | pauses（最长） | speech_ratio | run | peak/SNR |
+|---|---|---|---|---|---|---|---|
+| C `2026-11-23/205337_assess` **主样本** | 32.3 / 48.8 s | 100.9 | 152.2 | 17（1.85 s） | 0.663 | 9 词 | −18.7 dBFS / 24.2 dB |
+| A `2026-11-23/204916_drill` | 13.5 / 19.0 s | 100.9 | 142.2 | 9（0.89 s） | 0.709 | 10 词 | −12.4 dBFS / 24.4 dB |
+| B `2026-11-23/204215_dictate` | 13.9 / 28.1 s | 76.9 | 155.5 | 8（**3.64 s**） | 0.494 | 9 词 | −19.1 dBFS / 27.1 dB |
+
+结论：单段 51.8 s（语音 32.3 s）**已达标**。`band_estimate` 维持 **6.0**（区间 5.5–6.5），`confidence` **low → medium**。
+三条都是工作汇报，**不是雅思题**；转写有 ASR 误听（frontend→front 等），无 reference 不据此判发音。
+
+短板不在发音而在**独白连续性**：停顿 ~10.5 次/30 s、最长一口气 9 词、`word_boundary_breaks` 15/76 词。
+`focus` 已改为“60 s 少停顿 + 意群连读”。下次同题自测目标：pause ≤ 8 次/45 s、longest_run ≥ 12 词。
+教训：`record` 会被 3.5–5 s 的思考停顿切断（三次尝试 4.4 / 19.5 / 18.6 s）→ 长独白一律用系统录音机，见 SKILL 第 7 节。

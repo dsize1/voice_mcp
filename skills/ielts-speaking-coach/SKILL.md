@@ -26,7 +26,7 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 |---|---|
 | `mcp__voice__status` | 自检：`mic` 是否为 null、模型是否齐全 |
 | `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`speed` 0.75/1.0、`play=true` 服务端出声、`slow_too=true` 一次产出 slow(0.75)+norm(1.0) 两个文件 |
-| `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"`；`with_gop=true` 额外给音素级排序（见 4.1） |
+| `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"`；`with_gop=true` 额外给音素级排序（见 4.1）；`with_prosody=true` 或 `reference_audio=<示范音>` 给 F0/升降/重音候选（见 4.2） |
 | `mcp__voice__record` | 麦克风录音（静音自动停）。`mic` 为 null 时不可用 |
 | `voice-cli bank …` | **素材库（CLI，非 MCP）**：`pick/show/drill`。`pick` 按 focus tags + level 从 3 368 条里取 1–3 条 |
 
@@ -249,6 +249,32 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 
 **必须**在反馈里保留 `limitations` 里的 `gop_precision_low`（用自然语言表达一次即可）。
 `gop.oov` 非空时（词典查不到的词），**这些词的音素不在结果里**，不许说"漏读"；`gop.unmapped` 同理。
+
+### 4.2 韵律怎么用（`assess(with_prosody=true)` 或 `reference_audio`）
+
+**只报数值 + 位置，不下"语调/重音好不好"的结论。** 所有半音都相对你自己这句话的 F0 中位数。
+
+| 字段 | 含义 | 允许的说法 |
+|---|---|---|
+| `f0_median_hz` | 你的基频中位数 | 只在解释"为什么用半音比"时提，不作评价 |
+| `f0_std_st` / `flat` | 全句起伏；`<1.5` 判平 | "整句起伏 X 个半音（<1.5 算平）" |
+| `range_st` | p95−p5 音域 | `<4 st` 说"音域偏窄/起伏偏小"，不预测分数 |
+| `final_delta_st` / `final_direction` | 末段相对首段的升降 | "句末升了 X 个半音 / 降了 X 个半音"；**先确认句型**再解读 |
+| `final_slope_st_per_s` | 末 30% 的斜率 | 只在用户问"升得够不够快"时给 |
+| `stress_top[]` | 重音**候选**（词级） | 仅当 `dur_z>1` 且 `f0_peak_st>3` 才提："大概第 N 个词听起来最突出" |
+| `reference.dtw_cost_st` | 与示范的 F0 形状差异 | "<1 很接近；1–3 局部不同；>3 轮廓差别大"——只说差异，不说好坏 |
+| `rhythm.stress_ratio` / `word_duration_cv` | 词时长对比 | 只作纵向趋势，不单独下结论 |
+
+硬规则：
+
+1. 返回里**没有 `prosody`**（degraded / 低 SNR / 浊音帧不足）→ 一个字都不谈语调，把 `limitations` 的说法转述给用户。
+2. `degraded=true` 或 `snr_db<13` → 不跑韵律；不要拿旧指标的印象补话。
+3. 句末升降**先看句型**：一般疑问句应 rise、陈述句/特殊疑问句通常 fall；但只报数字，不套"你错了"。
+   例："末段降了 3.9 个半音——陈述句这样是正常的" / "一般疑问句这里只升了 0.4 个半音，可以再抬一点"。
+4. `stress_top` 是排序不是判决；词时长来自 ASR（±0.5 s），位置说"第几个词"，**不报秒数**。
+5. `energy_z` 不要用来说"重音太轻/太响"：蓝牙 AGC 会让能量维度失真（ADR-0008 D36）。
+6. 无词级时间戳时只有句级指标（`stress_top` 为空），只谈句末升降/平直/音域。
+7. 一次仍然只挑 **1 条**最高优先级的韵律问题（与第 4 节一致），且必须给"再示范一次 + 重读对比"。
 
 ## 5. 教学语言阶梯
 

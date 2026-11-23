@@ -21,7 +21,7 @@
 | [datasets.md](datasets.md) | 评测数据集（speechocean762）：四层校验、数据画像、tag 权重 | ✅ |
 | [dataset-pins.json](dataset-pins.json) | 数据集指纹（revision + sha256），供复验 | ✅ |
 | [STATE.md](STATE.md) | 交接页：现状 / 实测数字 / 待办 / 硬件障碍 | Living |
-| [adr/0007-prosody-and-gop.md](adr/0007-prosody-and-gop.md) | 韵律与 GOP（**GOP 已实现**，韵律待做） | 部分完成 |
+| [adr/0007-prosody-and-gop.md](adr/0007-prosody-and-gop.md) | 韵律与 GOP（**两者均已实现**，纯 Rust） | ✅ 完成 |
 | [adr/0008-technical-debt.md](adr/0008-technical-debt.md) | **技术欠债登记**（45 条债 + 触发条件 + 偿付顺序） | Living |
 | [adr/0009-drill-library.md](adr/0009-drill-library.md) | 跟读素材库（Drill Library）与 NCE 语料接入 | Accepted（5 007 条） |
 | [security-supply-chain.md](security-supply-chain.md) | 模型与原生库供应链校验（工具+结论） | ✅ |
@@ -47,6 +47,7 @@
 | **词级** | AUROC 0.887、P@FP10 0.457（`gop_mean < −0.70` 时 P 0.596） | **对外只报这一层**，且必须与 TTS 基线比 |
 | 音素级 | AUROC 0.769、P@FP10 0.170（基率 7.5% ⇒ 上限 0.45） | 仅句内排序，**禁止断言** |
 | 混淆对 | 仅 `TH→s` 可用（P 0.50 / R 0.67） | 可说"模型听到的是 /s/ 而不是 /θ/" |
+| 韵律 | F0 中位/标准差/音域、句末升降、重音候选、DTW | 只报数值+位置；`stress_top` 是候选，不下"重音错了"的结论 |
 
 另有四道闸门：`snr_db < 13` / `peak < −30 dBFS` / 削波 > 0.1% / 缺参考文本 → 一律不出诊断结论。
 
@@ -67,7 +68,7 @@
 |---|---|---|---|
 | P0 | 环境验证：**`.m4a` 解码** ✅ / **sherpa-onnx 原生库** ✅ / **SenseVoice 真机转写** ✅ / **Kokoro 出声** ✅ / whisper 评估 / **供应链校验** ✅ | 4 个 spike 脚本跑通 | ✅ 完成 |
 | P1 | `voice-core` 7 模块 + MCP 8 工具 + `voice-cli doctor/stt/say/play/rec/watch/tts-probe` | Pi 里说话→文字→出声回环 | ✅ 完成（`record` 待麦克风） |
-| P2 | 评测层：**词级 diff** ✅ / **flow** ✅ / prosody ⏳ / **GOP（词级口径）** ✅ | 能定位到具体音素错误 | ✅ 3/4（韵律待做） |
+| P2 | 评测层：**词级 diff** ✅ / **flow** ✅ / **prosody** ✅ / **GOP（词级口径）** ✅ | 能定位到具体音素错误 + 语调数值 | ✅ 4/4 |
 | P3 | `ielts-speaking-coach` Skill + learner.json + 雅思题库 | 15 分钟完整训练闭环 | ✅ 2026-11-21 真机验收 |
 | P4 | 热键听写、`record`(cpal+VAD)、CosyVoice2、HTTP、流式 | 按需 | 未开始 |
 | P4 | **跟读素材库**（[ADR-0009](adr/0009-drill-library.md)）：NCE1–4 共 276 课 → 逐句切片 + 质量门槛 | 5 项全部通过（5 007 条） | ✅ 完成 |

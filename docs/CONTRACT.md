@@ -35,6 +35,8 @@
 | `engine` | string | | 强制 `sense-voice`/`whisper` |
 | `with_gop` | bool | | 同时跑音素级 GOP（需 `reference`；首次调用加载 1.2 GB 模型，约 1–2 s） |
 | `baseline_tts` | bool | | 用 TTS 合成参考文本再跑一遍同一套 GOP，作为**对照基线**（区分"用户读错"与"模型分辨不出"） |
+| `with_prosody` | bool | | 同时跑韵律：F0 轮廓 / 句末升降 / 平调 / 音域 / 重音候选 / 节奏 |
+| `reference_audio` | string | | 参考音路径（TTS/真人示范）。提供时**自动开启韵律**，并返回 F0 形状 DTW 对比 |
 | `scene` | string | | 场景标签（仅外部文件新建会话时生效；本机 take 沿用原前缀） |
 
 **留证位置（重要）**：`path` 指向本机 `sessions/<date>/<id>/takes/` 下的文件时，
@@ -329,3 +331,39 @@ $VOICE_HOME (默认 D:/voice_data)
 
 规则：基线 < 0.30 的词直接不报；Δ ≤ −3 且基线 ≥ 4 才算"低于示范"；其余不报。
 声音可用 `VOICE_GOP_BASELINE_VOICE` 指定（默认 `af_heart`）。
+
+## 韵律（`with_prosody=true` / `reference_audio`）
+
+纯 Rust（YIN + 自相关），不引入 sidecar。默认关闭；提供 `reference_audio` 时自动开启。
+
+```json
+{"prosody": {
+  "version": "prosody-0.1", "voiced_frames": 1364, "voiced_ratio": 0.263,
+  "f0_median_hz": 116.3,
+  "f0_std_st": 3.31, "f0_p10_st": -2.41, "f0_p90_st": 1.72, "range_st": 12.61,
+  "flat": false,
+  "final_slope_st_per_s": -0.06, "final_delta_st": -0.38, "final_direction": "flat",
+  "rhythm": {"word_duration_cv": 0.43, "stress_ratio": 3.11, "mean_word_dur": 0.366},
+  "word_count": 82,
+  "stress_top": [{"word": "management.", "t0": 20.97, "t1": 21.81, "dur": 0.84,
+                  "f0_peak_st": 6.22, "f0_mean_st": -0.54, "dur_z": 2.98,
+                  "energy_z": -0.92, "salience": 1.62}],
+  "reference": {"f0_median_hz": 205.8, "dtw_cost_st": 0.11, "points": 50}
+}}
+```
+
+口径：
+- 半音一律相对**说话人自己的** F0 中位数（`12*log2(f/f0_median)`），因此男/女、高/低音可比；
+  `f0_median_hz` 只是记录基线，不是分数。
+- `final_direction` 只按 `final_delta_st` 判：`≥ +1.0 st` rise，`≤ −1.0 st` fall，其余 flat。
+- `flat=true` ⇔ `f0_std_st < 1.5`（全句起伏过小）。
+- `stress_top` 是**重音候选排序**：`salience = 0.5*dur_z + 0.3*(f0_peak_st/6) + 0.2*energy_z`。
+  词时长来自 ASR（±0.5 s 量级），只能当"大概第几个词"；**不是"你重音放错了"的判决**。
+- `energy_z` 在蓝牙 AGC 设备上不可信（D36），只作第 3 特征；反馈中不要拿它说"重音太轻"。
+- `reference.dtw_cost_st` 是**时间归一化后**的半音形状 DTW 平均代价（越小越像）。
+  用户与参考各自减掉自己的中位数，所以音高/性别/0.75x 时长差异都被消掉。
+- `degraded=true`、`snr_db < 13`、浊音帧不足 → 不返回 `prosody`，`limitations` 说明原因。
+- 无词级时间戳 → 只给句级指标，`stress_top` 为空并追加 limitation。
+
+**给 Agent 的措辞规则**：只报数值 + 位置（"末段下降了 3.9 个半音"），
+不说"语调不好 / 重音错了"；音域窄可以说"起伏偏小"，但要先给 `range_st` 数字。

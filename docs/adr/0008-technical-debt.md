@@ -165,4 +165,4 @@
 | **新增 D45** | 无门禁 → HEAD 编译失败 3 个提交无人发现；**已还**（`check.ps1` + CI） |
 | D19 / D39 | **已还**：toolchain+MSRV；`start_timeout_sec` 可配置 |
 | D20 | **部分偿还**：CI workflow 已写，本地门禁跑绿；GitHub 上尚未首跑 |
-| D11 / ADR-0007 触发条件 | **已满足**：`learner.json` history 12 条 → 停顿/语速阈值校准与韵律分析可以开始 |
+| D11 / ADR-0007 触发条件 | **已满足**：`learner.json` history 14 条（含 2026-11-23 自由说） → 停顿/语速阈值校准与韵律分析可以开始 |

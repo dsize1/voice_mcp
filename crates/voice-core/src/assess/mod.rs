@@ -263,6 +263,12 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
                             Err(e) => limitations.push(format!("参考音解码失败：{e}")),
                         }
                     }
+                    if p.unreliable {
+                        limitations.push(format!(
+                            "F0 跟踪不稳定（起伏 {:.1} st / 音域 {:.1} st，疑似八度跳变或噪声）：升降方向只能作参考",
+                            p.f0_std_st, p.range_st
+                        ));
+                    }
                     if p.word_count == 0 {
                         limitations.push("无词级时间戳，韵律只给句级指标（无重音候选）".into());
                     }

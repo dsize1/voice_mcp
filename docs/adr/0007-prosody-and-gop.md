@@ -160,3 +160,5 @@ assess(path, reference, with_prosody: bool = false, reference_audio: Option<Stri
 3. `energy_z` 在蓝牙 AGC 设备上不可信（ADR-0008 D36），SKILL 禁止用它评价重音。
 4. 0.75x 示范音不会破坏 DTW：两边时间归一化后再比形状（本文要点 3 已落实）。
 5. `voiced_ratio` 是"浊音帧 / 全部帧"（含静音），不是 speech_ratio；不要混用。
+6. F0 可能翻八度/被噪声带偏：`f0_std_st > 6` 或 `range_st > 18` 时置 `unreliable=true`，
+   升降方向只能作参考。该闸门由 2026-11-23 训练（一条 +3.99 st 的假 rise）触发。

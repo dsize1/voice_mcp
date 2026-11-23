@@ -92,6 +92,9 @@ pub struct Prosody {
     pub range_st: f32,
     /// `f0_std_st < 1.5` → 平调
     pub flat: bool,
+    /// F0 跟踪可疑（起伏 >6 st 或音域 >18 st）：常是八度跳变/噪声，
+    /// 此时升降方向只能作参考，不能当结论。
+    pub unreliable: bool,
     /// 末 30% 发声窗内的 F0 线性斜率（半音/秒）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_slope_st_per_s: Option<f32>,
@@ -201,19 +204,23 @@ pub fn analyze(samples: &[f32], sample_rate: u32, words: &[Word]) -> Option<Pros
     let var = st_sorted.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / st_sorted.len() as f32;
     let f0_std_st = var.sqrt();
 
-    // 4) 句末升降（只在发声时间跨度上算）
-    let (t_start, t_end) = (voiced[0].t, voiced[voiced.len() - 1].t);
-    let span = (t_end - t_start).max(0.01);
-    let final_from = t_end - FINAL_FRACTION * span;
-    let initial_to = t_start + INITIAL_FRACTION * span;
-    let final_pts: Vec<(f32, f32)> = voiced
+    // 4) 句末升降（按**浊音帧序号**取窗口）
+    //
+    // 为什么不用固定时间窗：短句开头常是 /d/ /z/ 这类清辅音，前 20% 时间里可能
+    // 一个浊音帧都没有（实测 3.5 s 的疑问句 final_delta=None）。改成"按浊音帧取
+    // 前 20% / 后 30%，且各自至少 3 帧"，短句也能给出方向。
+    let n = voiced.len();
+    let final_len = ((n as f32 * FINAL_FRACTION).ceil() as usize).max(5).min(n);
+    let initial_len = ((n as f32 * INITIAL_FRACTION).ceil() as usize)
+        .max(3)
+        .min(n);
+    let fin_start = n - final_len;
+    let final_pts: Vec<(f32, f32)> = voiced[fin_start..]
         .iter()
-        .filter(|f| f.t >= final_from)
         .map(|f| (f.t, hz_to_st(f.f0.unwrap_or(f0_median_hz), f0_median_hz)))
         .collect();
-    let initial_pts: Vec<(f32, f32)> = voiced
+    let initial_pts: Vec<(f32, f32)> = voiced[..initial_len]
         .iter()
-        .filter(|f| f.t <= initial_to)
         .map(|f| (f.t, hz_to_st(f.f0.unwrap_or(f0_median_hz), f0_median_hz)))
         .collect();
 
@@ -225,6 +232,7 @@ pub fn analyze(samples: &[f32], sample_rate: u32, words: &[Word]) -> Option<Pros
     } else {
         None
     };
+    let unreliable = f0_std_st > 6.0 || range_st > 18.0;
     let final_direction = final_delta_st.map(|d| {
         if d >= DIRECTION_ST {
             "rise"
@@ -249,6 +257,7 @@ pub fn analyze(samples: &[f32], sample_rate: u32, words: &[Word]) -> Option<Pros
         f0_p90_st: crate::round_to(f0_p90_st, 2),
         range_st: crate::round_to(range_st, 2),
         flat: f0_std_st < FLAT_ST,
+        unreliable,
         final_slope_st_per_s: final_slope_st_per_s.map(|v| crate::round_to(v, 2)),
         final_delta_st: final_delta_st.map(|v| crate::round_to(v, 2)),
         final_direction,
@@ -640,6 +649,26 @@ mod tests {
             p.final_delta_st
         );
         assert!(p.final_delta_st.unwrap() < -5.0);
+    }
+
+    #[test]
+    fn octave_jump_is_flagged() {
+        // 80 Hz → 350 Hz 跳变 ≈ 25.6 st：YIN 可能跟丢/翻八度，必须标不可靠
+        let s = concat(&[tone(80.0, 0.6), tone(350.0, 0.6)]);
+        let p = analyze(&s, SR, &[]).expect("应有 F0");
+        assert!(p.unreliable, "std={} range={}", p.f0_std_st, p.range_st);
+    }
+
+    #[test]
+    fn short_question_still_gets_direction() {
+        let s = concat(&[tone(120.0, 0.8), tone(180.0, 0.5)]);
+        let p = analyze(&s, SR, &[]).expect("应有 F0");
+        assert_eq!(
+            p.final_direction,
+            Some("rise"),
+            "短句也要给方向，delta={:?}",
+            p.final_delta_st
+        );
     }
 
     #[test]

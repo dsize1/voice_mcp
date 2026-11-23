@@ -341,7 +341,7 @@ $VOICE_HOME (默认 D:/voice_data)
   "version": "prosody-0.1", "voiced_frames": 1364, "voiced_ratio": 0.263,
   "f0_median_hz": 116.3,
   "f0_std_st": 3.31, "f0_p10_st": -2.41, "f0_p90_st": 1.72, "range_st": 12.61,
-  "flat": false,
+  "flat": false, "unreliable": false,
   "final_slope_st_per_s": -0.06, "final_delta_st": -0.38, "final_direction": "flat",
   "rhythm": {"word_duration_cv": 0.43, "stress_ratio": 3.11, "mean_word_dur": 0.366},
   "word_count": 82,
@@ -357,6 +357,8 @@ $VOICE_HOME (默认 D:/voice_data)
   `f0_median_hz` 只是记录基线，不是分数。
 - `final_direction` 只按 `final_delta_st` 判：`≥ +1.0 st` rise，`≤ −1.0 st` fall，其余 flat。
 - `flat=true` ⇔ `f0_std_st < 1.5`（全句起伏过小）。
+- `unreliable=true` ⇔ `f0_std_st > 6` 或 `range_st > 18`（常见于八度跳变/噪声）：
+  此时 `final_direction` 只能作参考，**不得**当结论说给用户。
 - `stress_top` 是**重音候选排序**：`salience = 0.5*dur_z + 0.3*(f0_peak_st/6) + 0.2*energy_z`。
   词时长来自 ASR（±0.5 s 量级），只能当"大概第几个词"；**不是"你重音放错了"的判决**。
 - `energy_z` 在蓝牙 AGC 设备上不可信（D36），只作第 3 特征；反馈中不要拿它说"重音太轻"。

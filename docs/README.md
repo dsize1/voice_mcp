@@ -20,6 +20,7 @@
 | [mdd.md](mdd.md) | MDD 微调实验：协议、结果（AUROC 0.690→0.769）、GPU 环境 | ✅ |
 | [datasets.md](datasets.md) | 评测数据集（speechocean762）：四层校验、数据画像、tag 权重 | ✅ |
 | [dataset-pins.json](dataset-pins.json) | 数据集指纹（revision + sha256），供复验 | ✅ |
+| [GOALS.md](GOALS.md) | **目标与进度：近期 / 中期 / 远期，含验收标准与当前状态** | Living |
 | [STATE.md](STATE.md) | 交接页：现状 / 实测数字 / 待办 / 硬件障碍 | Living |
 | [levels.md](levels.md) | **英语水平与训练就绪等级（L0–L4）+ 自由说 gate** | Living |
 | [adr/0007-prosody-and-gop.md](adr/0007-prosody-and-gop.md) | 韵律与 GOP（**两者均已实现**，纯 Rust） | ✅ 完成 |

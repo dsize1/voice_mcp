@@ -15,6 +15,7 @@
 ## 目录
 
 - [设计原则](#设计原则)
+- [目标与进度](docs/GOALS.md)（近期 / 远期）
 - [能力现状](#能力现状)
 - [架构](#架构)
 - [快速开始](#快速开始)
@@ -511,6 +512,7 @@ D:/voice_data/
 │   └── voice-dictation/
 ├── docs/
 │   ├── CONTRACT.md             # MCP 工具契约（含给 Agent 的解读规则）
+│   ├── GOALS.md                # 目标与进度：近期 / 中期 / 远期（含验收）
 │   ├── STATE.md                # 交接页：现状 / 实测数字 / 待办 / 债务
 │   ├── levels.md               # 水平与就绪等级 L0–L4 + 自由说 gate
 │   ├── phoneme-gop.md          # 音素级 GOP：选型、标定、混淆对、边界

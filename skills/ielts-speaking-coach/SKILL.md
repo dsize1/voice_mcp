@@ -94,9 +94,20 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 
 ### 1.5 素材库怎么用（P4.5）
 
-素材库在 `$VOICE_HOME/bank/`（默认 `D:/voice_data/bank`），共 **4 997 条**逐句切片，
-其中可直接练的 **3 368 条**（已排除导语/片段）。**不要读 `index.jsonl`**（2 MB，直接读会占满上下文），
+素材库在 `$VOICE_HOME/bank/`（默认 `D:/voice_data/bank`），共 **5 007 条**
+（NCE 4 997 + IELTS prompt 10），其中可直接练的 **3 378 条**（已排除导语/片段）。**不要读 `index.jsonl`**（2 MB，直接读会占满上下文），
 一律用 CLI：
+
+**每轮训练先跑计划（推荐）**：
+
+```bash
+voice-cli bank plan --minutes 15 --limit 8      # drill_queue → error_stats/focus → 同难度补足
+```
+
+计划 `items[]` 按顺序练；`free_speech` 槽位固定 60 s，`pseudo_gop: "disabled (ADR-0010)"`
+表示自由说**没有发音诊断**，只谈语流/韵律。不要自己另编顺序，除非用户明确要求。
+
+按需取材（计划不够时）：
 
 ```bash
 # 按 focus 取材（默认排除 lesson_header / instruction / fragment）

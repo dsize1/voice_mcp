@@ -1140,11 +1140,12 @@ fn shuffle_key(id: &str, seed: u64) -> u64 {
     h
 }
 
-/// 按 focus 取材。命中 tags 越多越靠前；同分按 level 升序、再按 id（或 seed 洗牌）。
-pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
-    let idx = read_index(home)?;
+/// 按 focus 取材（索引内数据版）。
+///
+/// 供训练计划等上层复用，避免每选一条就重新读 2 MB 索引。
+pub fn pick_from(entries: &[BankEntry], q: &PickQuery) -> Vec<BankEntry> {
     let mut scored: Vec<(f32, usize, &BankEntry, u64)> = Vec::new();
-    for e in &idx {
+    for e in entries {
         if let Some(lv) = q.level
             && e.level != lv
         {
@@ -1210,12 +1211,18 @@ pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
                 }
             })
     });
-    Ok(scored
+    scored
         .into_iter()
         .skip(q.offset)
         .take(q.limit)
         .map(|(_, _, e, _)| e.clone())
-        .collect())
+        .collect()
+}
+
+/// 按 focus 取材。命中 tags 越多越靠前；同分按 level 升序、再按 id（或 seed 洗牌）。
+pub fn pick(home: &Path, q: &PickQuery) -> Result<Vec<BankEntry>> {
+    let idx = read_index(home)?;
+    Ok(pick_from(&idx, q))
 }
 
 // ---------------------------------------------------------------- 统计

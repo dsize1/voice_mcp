@@ -51,6 +51,7 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe assess <audio|last> --reference "原句" --with-gop   # 词级+音素级 GOP + TTS 基线
 ./target/release/voice-cli.exe assess <audio|last> --with-prosody --reference-audio <示范.wav>  # 韵律 + DTW
 ./target/release/voice-cli.exe gop <audio> --text "原句"                          # 只跑 GOP（看 heard/confusion）
+./target/release/voice-cli.exe bank plan --minutes 15 --limit 8                   # 按 learner.json 生成定向训练计划
 ./target/release/voice-cli.exe bank pick --tag theta_to_s --level 2 --limit 3     # 按 tag 权重取材
 ./target/release/voice-cli.exe bank drill nce1/019/003                            # 播原生音频
 ./target/release/voice-cli.exe lesson <mp3> --lrc <lrc> --verbose
@@ -95,6 +96,9 @@ D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D4
 2. ~~**P4 跟读素材库**~~（2026-11-22 全量完成）：`bank ingest/list/show/drill/stats/retag`，NCE1–4 共 276 课 → 4 997 条（另加 10 条 IELTS prompt，当前 5 007）
 3. ~~补一次自由说 30–60 s~~（**完成** 2026-11-23：单段 51.8 s 主样本 + 两条短样本，confidence low→medium；仍缺 IELTS 题型的独白）
 4. ~~韵律分析（F0 / 句末升降 / 平调 / 重音候选 / DTW）~~（**完成** 2026-11-23，见下节）
+5. **Route A（无参考自由说伪 GOP）**：已立 [ADR-0010](adr/0010-free-speech-pseudo-gop.md)，
+   **Proposed / Deferred**，不在当前迭代；触发条件见 ADR。
+6. **回到原定路线**：素材库定向训练（`bank plan`）→ 雅思素材入库（缺源音频）→ 按 `error_stats` 组卷
 
 ## GOP / 诊断层现状（2026-11-22）
 
@@ -128,6 +132,18 @@ SKILL 4.2 已固化措辞规则（先看句型再解读升降、`stress_top` 只
 
 **注意**：本次改的是 `voice-mcp` 源码，正在运行的 MCP 进程仍是旧二进制；重启 Pi / MCP 后
 `assess` 才会接受 `with_prosody` 参数（CLI 已可直接用 `--with-prosody`）。
+
+## Route A 立项（2026-11-23，暂不实现）
+
+无参考自由说的伪参考 GOP 已写入 [ADR-0010](adr/0010-free-speech-pseudo-gop.md)：
+可行性实测（51.8 s 样本：一致词覆盖率 **84.1%**、共识词 CMUdict 覆盖 100%、端到端 ≈22 s/60 s、
+共识里存在 `i mistake` 这类双引擎同错）、设计、R1–R9 风险、V1–V10 验收线都已固化。
+
+**决策：先不开工。** 当前迭代继续原定路线；A 的触发条件是 D04 whisper 回归已还、
+有 ≥10 条英文自由说样本且用户要求自由说纠音、或跟读路径进入平台期。
+
+为了以后能接上，当前代码保持：`Transcript.words/tokens` 双保留、`normalize`/`phonetic`
+公开且确定性、`assess` 单入口 + feature flag、伪参考结果只新增字段不合并进 `gop`。
 
 ## 真机训练记录（2026-11-22 夜）
 

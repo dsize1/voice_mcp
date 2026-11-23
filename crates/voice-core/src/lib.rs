@@ -11,6 +11,7 @@ pub mod bank;
 pub mod config;
 pub mod engine;
 pub mod gop;
+pub mod plan;
 pub mod store;
 
 pub use assess::{AssessRequest, Assessment};

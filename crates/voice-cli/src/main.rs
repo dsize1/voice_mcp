@@ -211,6 +211,35 @@ enum BankCmd {
         #[arg(long)]
         quiet: bool,
     },
+    /// 按 learner.json 的 drill_queue / error_stats 生成定向训练计划（原定路线 P5）
+    Plan {
+        /// learner.json 路径（默认 $VOICE_HOME/learner.json）
+        #[arg(long)]
+        learner: Option<String>,
+        /// 时间预算（分钟）
+        #[arg(long, default_value_t = 15.0)]
+        minutes: f32,
+        /// 最多几项
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+        /// 覆盖难度（默认按 band 推断）
+        #[arg(long)]
+        level: Option<u8>,
+        /// 可复现洗牌
+        #[arg(long)]
+        seed: Option<u64>,
+        #[arg(long)]
+        corpus: Option<String>,
+        /// 雅思 Part（自由说题面优先匹配）
+        #[arg(long)]
+        part: Option<u8>,
+        /// 只打印，不写会话目录
+        #[arg(long)]
+        dry_run: bool,
+        /// 输出 JSON（默认 Markdown）
+        #[arg(long)]
+        json: bool,
+    },
     /// 统计：条数/时长/难度分布/标签排行/quarantine 数
     Stats,
     /// 按 focus 取材：给 Skill 用（默认排除导语/片段）
@@ -347,6 +376,28 @@ fn main() -> Result<()> {
                 Ok(())
             }
             BankCmd::Stats => bank_stats(&cfg),
+            BankCmd::Plan {
+                learner,
+                minutes,
+                limit,
+                level,
+                seed,
+                corpus,
+                part,
+                dry_run,
+                json,
+            } => bank_plan(
+                &cfg,
+                learner.as_deref(),
+                minutes,
+                limit,
+                level,
+                seed,
+                corpus,
+                part,
+                dry_run,
+                json,
+            ),
             BankCmd::Pick {
                 tags,
                 level,
@@ -1662,6 +1713,55 @@ fn bank_pick(cfg: &Config, a: BankPickArgs) -> Result<()> {
             })).collect::<Vec<_>>(),
         }))?
     );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // CLI 子命令参数天然扁平
+fn bank_plan(
+    cfg: &Config,
+    learner: Option<&str>,
+    minutes: f32,
+    limit: usize,
+    level: Option<u8>,
+    seed: Option<u64>,
+    corpus: Option<String>,
+    part: Option<u8>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    let learner_path = learner
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(&cfg.data_dir).join("learner.json"));
+    let text = std::fs::read_to_string(&learner_path)
+        .with_context(|| format!("读取 {} 失败", learner_path.display()))?;
+    let learner: voice_core::plan::Learner = serde_json::from_str(&text)
+        .with_context(|| format!("{} 不是合法的 learner.json", learner_path.display()))?;
+    let entries = voice_core::bank::read_index(Path::new(&cfg.data_dir))?;
+    let req = voice_core::plan::PlanRequest {
+        minutes,
+        limit,
+        level,
+        seed,
+        corpus,
+        part,
+    };
+    let plan = voice_core::plan::build(&entries, &learner, &req);
+
+    if !dry_run {
+        let store = Store::open(&cfg.data_dir)?;
+        let session = store.new_session("plan")?;
+        std::fs::write(
+            session.dir.join("plan.json"),
+            serde_json::to_string_pretty(&plan)?,
+        )?;
+        std::fs::write(session.dir.join("plan.md"), plan.to_markdown())?;
+        eprintln!("[plan] 已写入 {}", session.dir.display());
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+    } else {
+        print!("{}", plan.to_markdown());
+    }
     Ok(())
 }
 

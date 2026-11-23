@@ -244,3 +244,34 @@ voice-cli bank show <id> / bank drill <id>
   校验 `text` 非空、`part ∈ 1..=3`、同 id 跳过。
 - **选材**：`bank pick --corpus ielts --part 1 --topic hometown`；`--kind` 可限定形态。
 - 默认语料优先级由 Skill 决定（雅思 → NCE），代码只提供过滤能力。
+
+
+## P5 定向训练计划（2026-11-23）
+
+`voice-cli bank plan` 把 `learner.json` 变成一次可执行的清单，不新增 MCP 工具：
+
+```bash
+voice-cli bank plan --minutes 15 --limit 8            # 默认写 sessions/<date>/<HHMMSS>_plan/
+voice-cli bank plan --minutes 15 --dry-run --json     # 只看不写
+```
+
+优先级：`drill_queue` → `error_stats`/`focus` 里的 tag（每个 tag 至多 1 条，保证多样性）→ 同难度补足；
+`history[].mastered=true` 的素材排除；预算按 `2.5×素材时长 + 1.5 min 反馈` 估，另外预留 3 min 给自由说槽位。
+
+输出（`plan.json` / `plan.md`）：
+
+```json
+{"version":"plan-0.1","band_estimate":6.0,"confidence":"medium",
+ "target_tags":["theta_to_s","ae_to_e","v_to_w"],
+ "minutes_budget":15.0,"minutes_planned":14.5,
+ "items":[{"n":1,"bank_id":"nce1/035/005","text":"Our village is in a valley.",
+           "level":2,"tags":["v_to_w"],"source":"drill_queue","ref_audio":"bank/...",
+           "est_min":1.6}],
+ "free_speech":{"prompt":"Where is your hometown…","dur_sec":60,
+                "reference":null,"pseudo_gop":"disabled (ADR-0010)",
+                "metrics":["speech_rate","pause_count/pause_longest","longest_run_words","prosody"]}}
+```
+
+与 Route A 对齐：每条素材保留 `text/tags/level/ref_audio`（词级时间在 `bank index` 里），
+自由说槽位固定存在并显式标注伪参考 GOP 未启用；以后 A 上线只需要在槽位里填 `gop_pseudo`，
+不需要改计划格式。

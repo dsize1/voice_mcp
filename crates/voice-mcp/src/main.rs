@@ -137,6 +137,12 @@ struct AssessParams {
     /// 同时用 TTS 标准发音跑一遍 GOP 作为对照基线（区分"用户读错"与"模型分辨不出"）
     #[serde(default)]
     baseline_tts: bool,
+    /// 同时跑韵律分析：F0 轮廓 / 句末升降 / 平调 / 重音候选（只给数值，不下结论）
+    #[serde(default)]
+    with_prosody: bool,
+    /// 参考音（示范音）路径；提供时自动开启韵律，并返回 F0 形状 DTW 对比
+    #[serde(default)]
+    reference_audio: Option<String>,
     /// 强制引擎 sense-voice | whisper
     #[serde(default)]
     engine: Option<String>,
@@ -648,6 +654,8 @@ impl VoiceServer {
                         source_sr: Some(decoded.info.source_sr),
                         with_gop: p.with_gop,
                         baseline_tts: p.baseline_tts,
+                        with_prosody: p.with_prosody,
+                        reference_audio: p.reference_audio.as_deref(),
                     },
                 )
             })?;
@@ -785,6 +793,7 @@ impl VoiceServer {
                     "snr_db": assessment.snr_db,
                 },
                 "gop": gop_json,
+                "prosody": assessment.prosody.as_ref(),
                 "gop_baseline": assessment.gop_baseline.as_ref().map(|g| serde_json::json!({
                     "version": g.version,
                     "words": g.words.iter().map(|w| serde_json::json!({

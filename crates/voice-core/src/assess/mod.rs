@@ -9,6 +9,7 @@ pub mod flow;
 pub mod lrc;
 pub mod normalize;
 pub mod phonetic;
+pub mod prosody;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -19,7 +20,7 @@ use crate::engine::{Engines, Transcript};
 pub use diff::{Hint, Issue, IssueKind, Op, Severity, TextDiff};
 
 /// 评测算法版本：写入 metrics，便于算法升级后回溯与 A/B
-pub const SCORER_VERSION: &str = "p2.0-wordlevel";
+pub const SCORER_VERSION: &str = "p2.1-wordlevel+prosody";
 
 /// 削波采样占比上限：超过即判"输入过载"，ASR/GOP 都会失真。
 pub const CLIP_RATIO_MAX: f32 = 0.001; // 0.1%
@@ -50,6 +51,9 @@ pub struct Assessment {
     /// 音素级 GOP（`with_gop=true` 才有）。只能当排序/趋势，不能当判决。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop: Option<crate::gop::GopResult>,
+    /// 韵律（`with_prosody=true` 才有）：只给数值与位置，不解释好坏。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prosody: Option<prosody::Prosody>,
     /// 是否为降级结果（无词级时间戳 / 无音素级对齐）
     pub degraded: bool,
     /// 还缺哪些能力（给 Agent 解释为什么结论有限）
@@ -93,6 +97,11 @@ pub struct AssessRequest<'a> {
     /// 因为该模型对 r 化元音偏保守）。只有"用户分数 − 基线分数"才能回答
     /// "是他读错了，还是模型分辨不出来"。
     pub baseline_tts: bool,
+    /// 是否跑韵律分析（F0/句末升降/平调/重音候选）
+    pub with_prosody: bool,
+    /// 参考音路径（TTS 示范/真人示范），用于 F0 形状 DTW 对比。
+    /// 提供时自动开启韵律分析（不必再传 `with_prosody`）。
+    pub reference_audio: Option<&'a str>,
 }
 
 /// 一次完成：ASR → 语流指标 → 词级差异。
@@ -236,6 +245,34 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         }
     }
 
+    // 韵律：与 GOP 相互独立（不需要参考文本），但低 SNR/削波会让 F0 不可信
+    let mut prosody = None;
+    if req.with_prosody || req.reference_audio.is_some() {
+        if degraded {
+            limitations.push("音频质量未过闸门（degraded），跳过韵律分析".into());
+        } else {
+            match prosody::analyze(req.samples, req.sample_rate, &transcript.words) {
+                Some(mut p) => {
+                    if let Some(path) = req.reference_audio {
+                        match crate::audio::load_16k(path) {
+                            Ok(d) => match prosody::analyze(&d.samples, d.sample_rate, &[]) {
+                                Some(r) => p.reference = Some(prosody::compare(&p, &r)),
+                                None => limitations
+                                    .push("参考音中找不到稳定浊音帧，无法做 F0 形状对比".into()),
+                            },
+                            Err(e) => limitations.push(format!("参考音解码失败：{e}")),
+                        }
+                    }
+                    if p.word_count == 0 {
+                        limitations.push("无词级时间戳，韵律只给句级指标（无重音候选）".into());
+                    }
+                    prosody = Some(p);
+                }
+                None => limitations.push("浊音帧不足（F0 不稳定或录音过短），跳过韵律分析".into()),
+            }
+        }
+    }
+
     Ok(Assessment {
         degraded,
         transcript,
@@ -245,6 +282,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         snr_db,
         gop_baseline,
         gop,
+        prosody,
         limitations,
         scorer_version: SCORER_VERSION.to_string(),
     })

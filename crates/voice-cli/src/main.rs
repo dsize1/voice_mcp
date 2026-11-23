@@ -71,6 +71,12 @@ enum Cmd {
         /// 同时跑音素级 GOP（需 --reference）
         #[arg(long)]
         with_gop: bool,
+        /// 同时跑韵律分析（F0 轮廓 / 句末升降 / 平调 / 重音候选）
+        #[arg(long)]
+        with_prosody: bool,
+        /// 参考音（示范音）路径；提供时自动开启韵律并做 F0 形状 DTW 对比
+        #[arg(long)]
+        reference_audio: Option<String>,
         #[arg(long, default_value = "assess")]
         scene: String,
     },
@@ -400,6 +406,8 @@ fn main() -> Result<()> {
             lang,
             engine,
             with_gop,
+            with_prosody,
+            reference_audio,
             scene,
         } => assess_cmd(
             &cfg,
@@ -408,6 +416,8 @@ fn main() -> Result<()> {
             &lang,
             engine.as_deref(),
             with_gop,
+            with_prosody,
+            reference_audio.as_deref(),
             &scene,
         ),
         Cmd::Watch { dir, lang } => watch(&cfg, dir.as_deref(), &lang),
@@ -738,6 +748,8 @@ fn lesson(
             source_sr: Some(decoded.info.source_sr),
             with_gop: false,
             baseline_tts: false,
+            with_prosody: false,
+            reference_audio: None,
         },
     )?;
     let td = a.text_diff.as_ref();
@@ -933,6 +945,8 @@ fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
                 reference: reference.as_deref(),
                 with_gop: false,
                 baseline_tts: false,
+                with_prosody: false,
+                reference_audio: None,
                 source_sr: Some(decoded.info.source_sr),
             },
         )?;
@@ -1130,6 +1144,7 @@ fn rec(
 }
 
 // ------------------------------------------------------------------ assess
+#[allow(clippy::too_many_arguments)] // CLI 子命令参数天然扁平
 fn assess_cmd(
     cfg: &Config,
     path: &str,
@@ -1137,6 +1152,8 @@ fn assess_cmd(
     lang: &str,
     engine: Option<&str>,
     with_gop: bool,
+    with_prosody: bool,
+    reference_audio: Option<&str>,
     scene: &str,
 ) -> Result<()> {
     let store = Store::open(&cfg.data_dir)?;
@@ -1180,6 +1197,8 @@ fn assess_cmd(
             source_sr: Some(decoded.info.source_sr),
             with_gop,
             baseline_tts: with_gop, // CLI assess 默认开启对照基线
+            with_prosody,
+            reference_audio,
         },
     )?;
 

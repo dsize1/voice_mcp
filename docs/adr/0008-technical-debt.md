@@ -1,6 +1,6 @@
 # ADR-0008: 技术欠债登记（Debt Register）
 
-- 状态：Accepted（活文档，每还一条就更新；最后更新 2026-11-24：D12/D19/D39/D45 已还，D20 部分偿还；新增 D46–D50（G2P 同形异音 / 短语音 SNR 误杀 / readiness 未自动评估 / 双引擎不可用无闸门 / 韵律标注验收））
+- 状态：Accepted（活文档，每还一条就更新；最后更新 2026-11-24：D12/D19/D39/D45 已还，D20 部分偿还；新增 D46–D51（G2P 同形异音 / 短语音 SNR 误杀 / readiness 未自动评估 / 双引擎不可用无闸门 / 韵律标注验收 / TTS 仅 lexicon 且未验证））
 - 日期：2026-11-19
 - 相关：ADR-0001（运行时路线）、ADR-0006（评测边界）、ADR-0007（韵律与 GOP）
 
@@ -54,6 +54,7 @@
 | D48 | **readiness/free-speech gate 只读 JSON 标志，未自动从 history 计算**：`readiness.stage`/`missing` 目前手动写，升/降级没有代码判定 | 2026-11-24 gate 上线；`plan` 只消费 `free_speech_enabled` | S2 | 下一次升/降级或第二个学习者 | 1d：`voice-core::readiness` 评估器 + CLI `learner readiness`，写回 history 证据 |
 | D49 | **声学闸门通过 ≠ 文本可用**：`录音 (7).m4a` SNR 15.6 / peak −19 仍 accuracy 0.67；`record2.m4a` SNR 14.9，SenseVoice 与 whisper 都听不清 | 2026-11-24 外部录音两次；当前只有 SNR/peak/削波闸门 | S2 | 自由说 / 外部录音 / Route A 实现前 | 0.5d：双引擎一致率/coverage 闸门，低于阈值只出 flow/prosody，不出词级/发音结论 |
 | D50 | 韵律的 12 条人工标注验收未做（升降/平/重音一致率 ≥80%）；短句窗口与 `unreliable` 已加，但无真值标定 | ADR-0007 验收项；目前只有 10 单测 + 少量真机 | S2 | 下一次语调专项训练 | 0.5d + 标注 2h |
+| D51 | **TTS 参考音未验证就当基准**：sherpa-onnx 2.0.x 已移除 espeak-ng，只认 lexicon；OOV 词无兜底（`iPhone`/`iphone` 合成后 ASR 为空，`eye phone` 正常）。同时 lexicon 内词也可能被某音色读坏（`export` 在词表里，af_* 读成 X-O，am_michael/bf_* 3/3 正常） | 2026-11-24 听力材料审计；`chunks-listening` s1/s6 缺陷；GOP `baseline_tts` 默认 af_heart 也受影响 | S1 | 任何 TTS 材料/示范/GOP 基线（已发生） | 3d：OOV 预检 + 项目 lexicon overlay/`phoneme_codepoints` + 双 ASR/音素/WPM/3 次复现验证 + `gop_baseline.invalid` |
 
 ## 三、工程韧性
 

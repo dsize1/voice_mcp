@@ -1,12 +1,12 @@
 # 当前状态与下一步（交接用）
 
-> 写于 2026-11-19，最后更新 2026-11-24。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
+> 写于 2026-11-19，最后更新 2026-11-24（TTS 语速/OOV/验证 + 资产审计）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
 > 再读这一页、README / CONTRACT / ADR。
 
 ## 一句话现状
 
 **P3 闭环 + P4 素材库（NCE 4 997 + IELTS prompt 10 = 5 007 条）+ 音素级 GOP（词级口径）+ 韵律分析均已上线并在真机验证。**
-`crates` 10 400+ 行 Rust，**97 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
+`crates` 10 400+ 行 Rust，**120 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
 已由 `tools/check.ps1` 与 GitHub Actions 守住（ADR-0008 D45）。
 下一步：雅思素材入库 + 按 `error_stats` 做定向训练。
 
@@ -204,3 +204,17 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 短板不在发音而在**独白连续性**：停顿 ~10.5 次/30 s、最长一口气 9 词、`word_boundary_breaks` 15/76 词。
 `focus` 已改为“60 s 少停顿 + 意群连读”。下次同题自测目标：pause ≤ 8 次/45 s、longest_run ≥ 12 词。
 教训：`record` 会被 3.5–5 s 的思考停顿切断（三次尝试 4.4 / 19.5 / 18.6 s）→ 长独白一律用系统录音机，见 SKILL 第 7 节。
+
+
+## TTS 资产验证（2026-11-24）
+
+- 默认语速 **140 wpm**（雅思 130–160），slow=110；`VOICE_TTS_WPM` / `config.json.tts_wpm` 可覆盖。
+- **OOV 预检 + 项目词表**：`$VOICE_HOME/tts-lexicon.txt`（`iphone`/`export`/`hometown`/`makes`/`universities`/`influenced`/`that's`/`why`）；
+  缺词直接报错，不再静默丢。
+- **`voice-cli tts-verify`**：合成 N 次 → 双 ASR + WPM + 可选音素，3/3 才 `verified`；单引擎不一致/边界语速为 `review`。
+- **`voice-cli tts-audit`**：只读审计现有 wav；首次报告见 [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md)。
+- **`gop_baseline_valid`**：TTS 基线先 ASR 回读；不一致时禁止 Δ（country/thank/tokyo 已被拦）。
+- verified 听力素材：`D:/code/up-main/up-main/.memory/private/2026-11-24/chunks-listening-verified/`
+  - s1–s7 为 `tts-verify` 3/3；s8 人耳确认 `error` 正常（SenseVoice 偏差）。
+  - s5 用 **af_heart 0.7×（159 wpm）** 避开 140 wpm 附近的前置 schwa 伪影；**不采用裁切**。
+- 仍待：批量材料生成接入 `tts-verify`、10 条 IELTS prompt 的 3/3 + phones 复测、TTS “And…” 起始问题。

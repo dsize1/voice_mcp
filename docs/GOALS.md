@@ -16,10 +16,10 @@
 | 自由说 | **关闭**（`readiness.free_speech_enabled=false`）；L3 后做 30–45 s 提纲，L4 才做 60 s 无稿 |
 | 素材库 | **5 007 条**（NCE 4 997 + IELTS prompt 10），可直接练 3 378 |
 | 诊断能力 | 词级 diff + flow + 词级 GOP（TTS 基线/混淆对）+ 韵律（F0/升降/平调/重音候选/DTW） |
-| TTS | 默认 **140 wpm**（130–160），slow=110；OOV 预检 + `tts-verify`（双 ASR/音素/WPM/3 次）+ 基线自检 |
+| TTS | 默认 **140 wpm**（130–160），slow=110；OOV 预检 + `tts-verify`（双 ASR/音素/WPM/3 次）+ 基线自检；verified 听力集见 STATE |
+| 债务 | D01–D51 已登记；2026-11-24 新增 D46–D51 |
 | 近期训练 | 计划 **7/7 项**完成；`/θ/` 词首/词尾修正；144 wpm 下 `/θ/`、`/v/` 守住 |
-| 债务 | D01–D50 已登记；2026-11-24 新增 D46–D50 |
-| 本地提交 | 9 个 commit 未推送（远端 `ad54cae`） |
+| 本地提交 | 2026-11-24 已推送 |
 
 ---
 
@@ -54,7 +54,8 @@
 |---|---|---|---|---|
 | **N9** | 雅思素材入库（先 1 本 / Part 1） | ⛔ | 至少 200 条 IELTS 可练素材 | **缺源音频 + LRC/字幕** |
 | **N10** | 外部录音（手机/系统录音机）可用性 | 🟡 | 3 条录音双引擎一致率 ≥0.8，能出词级结论 | 与 N2 联动 |
-| **N11** | TTS 参考音验证（D51）：OOV 预检 + 双 ASR/音素/WPM + 基线自检 | ✅ 工具已上线 | `tts-verify` 3/3；OOV 0；`gop_baseline_valid` 生效 | 剩余：批量材料接入 |
+| **N11** | TTS 参考音验证（D51）：OOV 预检 + 双 ASR/音素/WPM + 基线自检 | ✅ 工具已上线 | `tts-verify` 3/3；OOV 0；`gop_baseline_valid` 生效 | 剩余：批量材料接入 + prompts 3/3 |
+| **N12** | Day 9 听力改用 `chunks-listening-verified/` 并更新答案键/训练记录 | ⏳ | 记录指向 verified 目录；原文件不动 | 与 N11 联动 |
 
 ### E. 运维收尾
 
@@ -123,6 +124,7 @@
 | 2026-11-24 | TTS 默认语速校准：140 wpm（130–160），slow=110；短文本/中文不校准 | 本次提交 |
 | 2026-11-24 | TTS OOV 预检 + overlay + `tts-verify` + `gop_baseline_valid` | 本次提交 |
 | 2026-11-24 | TTS 资产审计：38 项静态 + 10 prompts + 6 baseline 抽样 | [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md) |
+| 2026-11-24 | s1–s8 verified 集；s5 af_heart 0.7×（159 wpm）；s8 error 人耳确认 | `chunks-listening-verified/README.md` |
 
 ---
 

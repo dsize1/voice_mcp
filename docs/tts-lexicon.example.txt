@@ -1,0 +1,15 @@
+# 项目级 TTS 词表示例（复制到 $VOICE_HOME/tts-lexicon.txt，或设 VOICE_TTS_LEXICON）
+#
+# 为什么需要：sherpa-onnx 2.0.x 已移除 espeak-ng，只剩 lexicon；
+# 词表没有的词不会“猜读”，会静默丢词（如 iPhone）。
+#
+# 格式与 kokoro-multi-lang/lexicon-*.txt 一致：
+#   word phoneme1 phoneme2 ...
+# 符号集以该目录的 tokens.txt / lexicon 为准；不要用 CMUdict 的 ARPAbet 原样写。
+#
+# 改完必须：
+#   voice-cli say "<含该词的句子>" --voice <音色>
+#   voice-cli stt <生成的 wav>
+# 至少 3 次回读通过才可用于材料 / GOP 基线。
+iphone I f O n
+export ˈ ɛ k s p ɔ ɹ t

@@ -253,10 +253,11 @@ pi -p "列出你现在可用的 skills"
 | `VOICE_PROVIDER` | `cpu` | `cpu` / `cuda`（GPU 未打通，见 ADR-0005） |
 | `VOICE_THREADS` | `4` | ONNX Runtime 线程数 |
 | `VOICE_TTS_WPM` | `140` | 示范音目标语速（雅思 130–160；慢速 110） |
+| `VOICE_TTS_LEXICON` | `$VOICE_HOME/tts-lexicon.txt` | 项目级 TTS 词表（覆盖内置 lexicon；OOV 预检） |
 | `VOICE_MIC` | 空（系统默认） | 输入设备名子串。**蓝牙耳机必须指定**，如 `Hands-Free` |
 
 `config.json` 还支持：`en_engine`（英文默认引擎，默认 `sense-voice`）、`record_max_sec`、
-`record_silence_sec`、`capture_sr`、`default_sid`、`tts_wpm`、`watch_dirs`。
+`record_silence_sec`、`capture_sr`、`default_sid`、`tts_wpm`、`tts_lexicon`、`watch_dirs`。
 
 ---
 

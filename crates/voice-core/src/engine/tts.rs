@@ -3,6 +3,9 @@
 //! 工程规则（ADR-0002 决策三）：**一段文本只允许一种语言**，
 //! 中文讲解与英文示范必须拆成两次调用。
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use anyhow::{Result, anyhow, bail};
 use serde::Serialize;
 use sherpa_onnx::{
@@ -143,6 +146,10 @@ pub struct TtsEngine {
     tts: OfflineTts,
     sample_rate: u32,
     num_speakers: i32,
+    /// 已加载 lexicon 的全部词条（小写）；用于合成前 OOV 预检
+    lexicon_words: HashSet<String>,
+    /// 项目级 overlay 路径（错误提示用）
+    lexicon_path: PathBuf,
 }
 
 impl TtsEngine {
@@ -157,8 +164,14 @@ impl TtsEngine {
             bail!("缺少 Kokoro 音色/词表文件: {}", voices.display());
         }
 
-        // 收集存在的 lexicon 文件（多种语言可共存，逗号分隔）
-        let mut lex: Vec<String> = Vec::new();
+        // 项目 overlay 放在最前；C++ 侧按顺序加载，先命中先赢。
+        let overlay = cfg
+            .tts_lexicon
+            .clone()
+            .unwrap_or_else(|| cfg.data_dir.join("tts-lexicon.txt"));
+        // 顺序很关键：sherpa-onnx 对重复词条是“后加载覆盖先加载”，
+        // 因此自定义 overlay 必须放在最后（export 等内置词才能被覆盖）。
+        let mut paths: Vec<PathBuf> = Vec::new();
         for name in [
             "lexicon-us-en.txt",
             "lexicon-gb-en.txt",
@@ -168,9 +181,18 @@ impl TtsEngine {
         ] {
             let p = cfg.model(format!("kokoro-multi-lang/{name}"));
             if p.is_file() {
-                lex.push(p.to_string_lossy().to_string());
+                paths.push(p);
             }
         }
+        if overlay.is_file() {
+            paths.push(overlay.clone());
+        }
+        let lex: Vec<String> = paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let lexicon_words: HashSet<String> =
+            paths.iter().flat_map(|p| parse_lexicon_words(p)).collect();
 
         let config = OfflineTtsConfig {
             model: OfflineTtsModelConfig {
@@ -200,6 +222,8 @@ impl TtsEngine {
             tts,
             sample_rate,
             num_speakers,
+            lexicon_words,
+            lexicon_path: overlay,
         })
     }
 
@@ -245,6 +269,14 @@ impl TtsEngine {
     pub fn synthesize(&self, text: &str, sid: i32, speed: f32) -> Result<Synthesized> {
         if text.trim().is_empty() {
             bail!("待合成文本为空");
+        }
+        let oov = self.oov_words(text);
+        if !oov.is_empty() {
+            bail!(
+                "TTS 词表缺少 {}；请在 {} 增加词条（如 `iphone ˈ I f ˌ O n`）或改写文本（如 iPhone→eye phone）",
+                oov.join(", "),
+                self.lexicon_path.display()
+            );
         }
         let gcfg = GenerationConfig {
             sid,
@@ -311,6 +343,71 @@ impl TtsEngine {
         out.target_wpm = Some(target);
         Ok(out)
     }
+
+    /// 合成前 OOV 预检：返回不在 lexicon 里的 ASCII 词（小写、去重）。
+    ///
+    /// 支持 contraction/连字符：`that's` → `that` + `'s`、`re-export` → `re` + `export`。
+    pub fn oov_words(&self, text: &str) -> Vec<String> {
+        oov_in_text(&self.lexicon_words, text)
+    }
+}
+
+/// 读 lexicon 的词条（只取每行第一个字段，去掉 `(2)` 变体后缀）。
+fn parse_lexicon_words(path: &Path) -> HashSet<String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return HashSet::new();
+    };
+    text.lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .map(|w| {
+            w.trim_start_matches('\'')
+                .split('(')
+                .next()
+                .unwrap_or(w)
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+fn oov_in_text(known: &HashSet<String>, text: &str) -> Vec<String> {
+    let text = text.replace('’', "'");
+    if !text.is_ascii() {
+        return Vec::new(); // 中文/混说交给 lexicon-zh；WPM/OOV 检查只针对英文
+    }
+    let mut out: Vec<String> = Vec::new();
+    for raw in text.split_whitespace() {
+        let cleaned: String = raw
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '\'' || *c == '-')
+            .collect();
+        let w = cleaned
+            .trim_matches(|c| c == '\'' || c == '-')
+            .to_lowercase();
+        if w.is_empty() || w.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if !known_word(known, &w) && !out.iter().any(|x| x == &w) {
+            out.push(w);
+        }
+    }
+    out
+}
+
+fn known_word(known: &HashSet<String>, w: &str) -> bool {
+    if known.contains(w) {
+        return true;
+    }
+    if let Some((base, suffix)) = w.rsplit_once('\'')
+        && matches!(suffix, "s" | "t" | "re" | "ve" | "ll" | "d" | "m")
+        && known.contains(base)
+    {
+        return true;
+    }
+    if w.contains('-') {
+        return w.split('-').all(|p| !p.is_empty() && known.contains(p));
+    }
+    false
 }
 
 /// ASCII 词数（标点不算；缩写算 1 个词）。中文返回 0，调用方应跳过 WPM 校准。
@@ -388,6 +485,21 @@ mod tests {
         assert_eq!(count_words("don't stop"), 2);
         assert_eq!(count_words("   "), 0);
         assert_eq!(count_words("你好 world"), 1, "中文不计入 ASCII 词");
+    }
+
+    #[test]
+    fn oov_detects_missing_words_and_allows_contractions() {
+        let known: HashSet<String> = ["i", "know", "that", "s", "export", "tool", "don't"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert!(oov_in_text(&known, "I know that's export tool").is_empty());
+        assert!(oov_in_text(&known, "I don't know").is_empty());
+        assert_eq!(oov_in_text(&known, "I know iPhone"), vec!["iphone"]);
+        assert_eq!(
+            oov_in_text(&known, "zzzqx, iPhone!"),
+            vec!["zzzqx", "iphone"]
+        );
     }
 
     #[test]

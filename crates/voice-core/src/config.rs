@@ -9,6 +9,7 @@
 //! | `VOICE_PROVIDER` | `cpu` |
 //! | `VOICE_THREADS` | 4 |
 //! | `VOICE_TTS_WPM` | 140（雅思 130–160） |
+//! | `VOICE_TTS_LEXICON` | $VOICE_HOME/tts-lexicon.txt |
 
 use std::path::{Path, PathBuf};
 
@@ -39,6 +40,8 @@ pub struct Config {
     pub default_sid: i32,
     /// 示范音默认目标语速（wpm）。雅思听说练习默认 140，建议区间 130–160。
     pub tts_wpm: f32,
+    /// 项目级 TTS 词表（覆盖内置 lexicon；默认 `$VOICE_HOME/tts-lexicon.txt`）
+    pub tts_lexicon: Option<PathBuf>,
     /// 监视目录（Win11 录音机输出目录），可为空
     pub watch_dirs: Vec<PathBuf>,
     /// 高精度采集采样率（cpal）
@@ -59,6 +62,7 @@ impl Default for Config {
             record_silence_sec: 2.0,
             default_sid: 0,
             tts_wpm: 140.0,
+            tts_lexicon: None,
             capture_sr: 48_000,
             mic: None,
             watch_dirs: default_watch_dirs(),
@@ -112,6 +116,9 @@ impl Config {
             && let Ok(n) = v.parse::<f32>()
         {
             cfg.tts_wpm = n.clamp(80.0, 220.0);
+        }
+        if let Some(v) = std::env::var_os("VOICE_TTS_LEXICON") {
+            cfg.tts_lexicon = Some(PathBuf::from(v));
         }
         Ok(cfg)
     }

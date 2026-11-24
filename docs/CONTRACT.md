@@ -170,6 +170,9 @@ sessions/<date>/<hhmmss>_drill/takes/
 | `slow_too` | bool | | 同时生成一对：`label=slow`(**110 wpm**) + `label=norm`(**140 wpm**)；显式 `speed` 时 slow 取 `speed×0.75` |
 | `scene` | string | | 场景标签 |
 
+**OOV 预检**：合成前会检查英文词是否在 lexicon 中；缺词直接 `ok:false`，错误里列出缺词并提示
+`$VOICE_HOME/tts-lexicon.txt`。不再静默丢词（sherpa-onnx 2.0.x 已移除 espeak-ng，只认 lexicon）。
+
 返回 `detail`：`voice` / `sid` / `sample_rate`(24000) / `files[]{label,speed,wpm,target_wpm,path,duration,gen_ms,rtf}` / `session` / `prefix`
 
 合成逻辑集中在 `voice_core::engine::demo_targets` + `TtsEngine::synthesize_at_wpm`（MCP 与 CLI 共用，有单测）：

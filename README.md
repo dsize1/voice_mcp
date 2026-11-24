@@ -293,6 +293,7 @@ voice-cli mic [--secs 3]                      # 麦克风诊断：支持的格�
 voice-cli stt <path|last> [--lang en] [--plain]# 转写（留证）
 voice-cli say "text" [--voice af_heart] [--speed <倍率>] [--slow-too] [--play]  # 默认 140 wpm
 voice-cli tts-verify "text" [--voice af_heart] [--runs 3] [--no-phones]        # TTS 参考音验证（双 ASR/音素/WPM）
+voice-cli tts-audit --manifest <jsonl> --out <report.jsonl> [--no-phones]    # 只读审计现有 TTS 资产
 voice-cli play <path>
 voice-cli assess <path|last> [--reference "原句"] [--with-gop]   # 评测（含词级 GOP + TTS 基线）
 voice-cli gop <path|last> --text "原句" [--top N]  # 只跑音素级 GOP（输出 heard / confusion）

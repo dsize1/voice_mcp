@@ -23,6 +23,7 @@
 | [GOALS.md](GOALS.md) | **目标与进度：近期 / 中期 / 远期，含验收标准与当前状态** | Living |
 | [STATE.md](STATE.md) | 交接页：现状 / 实测数字 / 待办 / 硬件障碍 | Living |
 | [levels.md](levels.md) | **英语水平与训练就绪等级（L0–L4）+ 自由说 gate** | Living |
+| [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md) | **TTS 现有资产审计报告**（只读；缺陷/基线/处置） | 2026-11-24 |
 | [adr/0007-prosody-and-gop.md](adr/0007-prosody-and-gop.md) | 韵律与 GOP（**两者均已实现**，纯 Rust） | ✅ 完成 |
 | [adr/0008-technical-debt.md](adr/0008-technical-debt.md) | **技术欠债登记**（51 条债 + 触发条件 + 偿付顺序） | Living |
 | [adr/0009-drill-library.md](adr/0009-drill-library.md) | 跟读素材库（Drill Library）与 NCE 语料接入 | Accepted（5 007 条） |

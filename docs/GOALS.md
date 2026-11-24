@@ -122,6 +122,7 @@
 | 2026-11-24 | readiness gate + L0–L4；7/7 训练；`/θ/` 修正；D46–D50 | `7394b48` / `87e03de` |
 | 2026-11-24 | TTS 默认语速校准：140 wpm（130–160），slow=110；短文本/中文不校准 | 本次提交 |
 | 2026-11-24 | TTS OOV 预检 + overlay + `tts-verify` + `gop_baseline_valid` | 本次提交 |
+| 2026-11-24 | TTS 资产审计：38 项静态 + 10 prompts + 6 baseline 抽样 | [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md) |
 
 ---
 

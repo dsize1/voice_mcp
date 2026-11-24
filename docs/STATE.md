@@ -58,6 +58,7 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe bank pick --tag theta_to_s --level 2 --limit 3     # 按 tag 权重取材
 ./target/release/voice-cli.exe bank drill nce1/019/003                            # 播原生音频
 ./target/release/voice-cli.exe lesson <mp3> --lrc <lrc> --verbose
+./target/release/voice-cli.exe tts-audit --manifest <jsonl> --out <report.jsonl>  # 只读审计 TTS 资产
 VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 ```
 

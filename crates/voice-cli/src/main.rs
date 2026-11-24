@@ -168,6 +168,18 @@ enum Cmd {
         #[arg(long, default_value = "The quick brown fox jumps over the lazy dog.")]
         text: String,
     },
+    /// 只读审计现有 TTS wav：双 ASR + OOV + WPM + 音素（不修改文件）
+    TtsAudit {
+        /// JSONL 清单：{"id","path","text","kind","voice","speed"}
+        #[arg(long)]
+        manifest: String,
+        /// 输出 report.jsonl
+        #[arg(long)]
+        out: String,
+        /// 跳过音素检查（更快）
+        #[arg(long)]
+        no_phones: bool,
+    },
     /// TTS 参考音验证：合成 N 次，双 ASR 回读 + 音素检查 + WPM
     TtsVerify {
         /// 待验证的文本（英文；中文不支持 OOV/ASR 严格校验）
@@ -506,6 +518,11 @@ fn main() -> Result<()> {
         ),
         Cmd::Watch { dir, lang } => watch(&cfg, dir.as_deref(), &lang),
         Cmd::TtsProbe { text } => tts_probe(&cfg, &text),
+        Cmd::TtsAudit {
+            manifest,
+            out,
+            no_phones,
+        } => tts_audit(&cfg, &manifest, &out, no_phones),
         Cmd::TtsVerify {
             text,
             voices,
@@ -1502,6 +1519,175 @@ fn import_and_transcribe(
 }
 
 // ------------------------------------------------------------------ tts-probe
+
+/// 只读审计现有 TTS 资产：一行 manifest → 一行 report。
+fn tts_audit(cfg: &Config, manifest: &str, out: &str, no_phones: bool) -> Result<()> {
+    let text = std::fs::read_to_string(manifest)
+        .with_context(|| format!("读取 manifest 失败: {manifest}"))?;
+    let engines = Engines::load(cfg.clone())?;
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+
+    for (lineno, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let m: serde_json::Value = serde_json::from_str(line)
+            .with_context(|| format!("manifest 第 {} 行不是 JSON", lineno + 1))?;
+        let id = m["id"].as_str().unwrap_or("?").to_string();
+        let path = m["path"].as_str().unwrap_or("").to_string();
+        let intended = m["text"].as_str().unwrap_or("").to_string();
+        let kind = m["kind"].as_str().unwrap_or("asset");
+        let voice = m["voice"].as_str();
+        let speed = m["speed"].as_f64();
+
+        let row = (|| -> Result<serde_json::Value> {
+            let decoded =
+                voice_core::audio::load_16k(&path).with_context(|| format!("解码失败: {path}"))?;
+            let duration = decoded.samples.len() as f32 / decoded.sample_rate as f32;
+            let words = voice_core::engine::count_words(&intended);
+            let wpm = if duration > 0.0 {
+                words as f32 / duration * 60.0
+            } else {
+                0.0
+            };
+            let ascii = intended.is_ascii() && !intended.trim().is_empty();
+            let oov = if ascii {
+                engines.tts.oov_words(&intended)
+            } else {
+                Vec::new()
+            };
+            let (sense, whisper, sense_ok, whisper_ok) = if ascii {
+                let sv = engines.asr.transcribe(
+                    &decoded.samples,
+                    decoded.sample_rate,
+                    "en",
+                    Some("sense-voice"),
+                )?;
+                let wh = engines.asr.transcribe(
+                    &decoded.samples,
+                    decoded.sample_rate,
+                    "en",
+                    Some("whisper"),
+                )?;
+                let want = voice_core::assess::normalize::words(&intended);
+                (
+                    Some(sv.text.clone()),
+                    Some(wh.text.clone()),
+                    voice_core::assess::normalize::words(&sv.text) == want,
+                    voice_core::assess::normalize::words(&wh.text) == want,
+                )
+            } else {
+                (None, None, false, false)
+            };
+            let (phone_min, phone_suspect) = if no_phones || !ascii {
+                (None, false)
+            } else {
+                let g = voice_core::gop::with_engine(|e| {
+                    voice_core::gop::score_text(&mut e.model, &decoded.samples, &intended, &e.g2p)
+                })?;
+                let min = g
+                    .words
+                    .iter()
+                    .map(|w| w.gop_mean)
+                    .fold(f32::INFINITY, f32::min);
+                let min = if min.is_finite() { Some(min) } else { None };
+                (min, min.map(|v| v < -1.5).unwrap_or(false))
+            };
+
+            let mut reasons: Vec<&str> = Vec::new();
+            if intended.trim().is_empty() {
+                reasons.push("metadata_missing_text");
+            }
+            if !intended.is_ascii() {
+                reasons.push("unsupported_language");
+            }
+            if !oov.is_empty() {
+                reasons.push("oov");
+            }
+            if ascii && !sense_ok {
+                reasons.push("sense_mismatch");
+            }
+            if ascii && !whisper_ok {
+                reasons.push("whisper_mismatch");
+            }
+            if ascii && wpm > 0.0 && !(100.0..=180.0).contains(&wpm) {
+                reasons.push("wpm_out_of_range");
+            }
+            if phone_suspect {
+                reasons.push("phone_suspect");
+            }
+            let reject = reasons.iter().any(|r| {
+                matches!(
+                    *r,
+                    "oov" | "phone_suspect" | "wpm_out_of_range" | "metadata_missing_text"
+                )
+            }) || (ascii && !sense_ok && !whisper_ok);
+            let review =
+                !reject && (ascii && (!sense_ok || !whisper_ok || !(130.0..=160.0).contains(&wpm)));
+            let verdict = if !intended.is_ascii() {
+                "unsupported"
+            } else if reject {
+                "reject"
+            } else if review {
+                "review"
+            } else {
+                "pass"
+            };
+
+            Ok(serde_json::json!({
+                "id": id, "kind": kind, "path": path,
+                "text": intended,
+                "voice": voice, "speed": speed,
+                "duration": round3(duration), "words": words,
+                "wpm": round3(wpm),
+                "oov": oov,
+                "asr_sense": sense, "asr_whisper": whisper,
+                "sense_match": sense_ok, "whisper_match": whisper_ok,
+                "phone_min_gop": phone_min, "phone_suspect": phone_suspect,
+                "verdict": verdict, "reasons": reasons,
+            }))
+        })();
+
+        match row {
+            Ok(v) => rows.push(v),
+            Err(e) => rows.push(serde_json::json!({
+                "id": id, "kind": kind, "path": path, "verdict": "error",
+                "reasons": ["decode_or_engine_error"], "error": format!("{e:#}"),
+            })),
+        }
+    }
+
+    let body = rows
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join(
+            "
+",
+        );
+    if let Some(parent) = Path::new(out).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        out,
+        format!(
+            "{body}
+"
+        ),
+    )?;
+    let n = rows.len();
+    let count = |k: &str| rows.iter().filter(|r| r["verdict"] == k).count();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "assets": n,
+            "pass": count("pass"), "review": count("review"),
+            "reject": count("reject"), "unsupported": count("unsupported"),
+            "error": count("error"), "out": out,
+        }))?
+    );
+    Ok(())
+}
 
 /// TTS 参考音验证：合成 N 次，双 ASR 回读 + 音素检查 + WPM；失败退出码 2。
 #[allow(clippy::too_many_arguments)]

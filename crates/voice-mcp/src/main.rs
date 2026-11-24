@@ -804,6 +804,7 @@ impl VoiceServer {
                 },
                 "gop": gop_json,
                 "prosody": assessment.prosody.as_ref(),
+                "gop_baseline_valid": assessment.gop_baseline_valid,
                 "gop_baseline": assessment.gop_baseline.as_ref().map(|g| serde_json::json!({
                     "version": g.version,
                     "words": g.words.iter().map(|w| serde_json::json!({

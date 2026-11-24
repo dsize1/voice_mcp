@@ -168,6 +168,23 @@ enum Cmd {
         #[arg(long, default_value = "The quick brown fox jumps over the lazy dog.")]
         text: String,
     },
+    /// TTS 参考音验证：合成 N 次，双 ASR 回读 + 音素检查 + WPM
+    TtsVerify {
+        /// 待验证的文本（英文；中文不支持 OOV/ASR 严格校验）
+        text: String,
+        /// 音色，可重复；默认 am_michael
+        #[arg(long = "voice")]
+        voices: Vec<String>,
+        /// 每个音色重复几次（默认 3，要求 3/3）
+        #[arg(long, default_value_t = 3)]
+        runs: usize,
+        /// 目标 wpm（默认 config.tts_wpm / 140）
+        #[arg(long)]
+        wpm: Option<f32>,
+        /// 跳过音素级检查（更快，只做 ASR + WPM）
+        #[arg(long)]
+        no_phones: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -489,6 +506,13 @@ fn main() -> Result<()> {
         ),
         Cmd::Watch { dir, lang } => watch(&cfg, dir.as_deref(), &lang),
         Cmd::TtsProbe { text } => tts_probe(&cfg, &text),
+        Cmd::TtsVerify {
+            text,
+            voices,
+            runs,
+            wpm,
+            no_phones,
+        } => tts_verify(&cfg, &text, &voices, runs, wpm, no_phones),
     }
 }
 
@@ -1478,6 +1502,161 @@ fn import_and_transcribe(
 }
 
 // ------------------------------------------------------------------ tts-probe
+
+/// TTS 参考音验证：合成 N 次，双 ASR 回读 + 音素检查 + WPM；失败退出码 2。
+#[allow(clippy::too_many_arguments)]
+fn tts_verify(
+    cfg: &Config,
+    text: &str,
+    voices: &[String],
+    runs: usize,
+    wpm: Option<f32>,
+    no_phones: bool,
+) -> Result<()> {
+    let store = Store::open(&cfg.data_dir)?;
+    let session = store.new_session("tts_verify")?;
+    let seq = session.next_seq()?;
+    let prefix = session.take_prefix(seq, "tts_verify");
+    let engines = Engines::load(cfg.clone())?;
+    let target = wpm.unwrap_or(cfg.tts_wpm);
+    let voices: Vec<String> = if voices.is_empty() {
+        vec!["am_michael".into()]
+    } else {
+        voices.to_vec()
+    };
+    let want = voice_core::assess::normalize::words(text);
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    let mut all_pass = true;
+
+    for voice in &voices {
+        let sid = engines.tts.resolve_sid(voice);
+        for run in 1..=runs.max(1) {
+            let row = (|| -> Result<serde_json::Value> {
+                let s = engines.tts.synthesize_at_wpm(text, sid, target)?;
+                let pcm = voice_core::audio::resample::resample(
+                    &s.samples,
+                    s.sample_rate,
+                    voice_core::INTERNAL_SR,
+                );
+                let sv = engines.asr.transcribe(
+                    &pcm,
+                    voice_core::INTERNAL_SR,
+                    "en",
+                    Some("sense-voice"),
+                )?;
+                let wh =
+                    engines
+                        .asr
+                        .transcribe(&pcm, voice_core::INTERNAL_SR, "en", Some("whisper"))?;
+                let sv_ok = voice_core::assess::normalize::words(&sv.text) == want;
+                let wh_ok = voice_core::assess::normalize::words(&wh.text) == want;
+                let wpm_ok = s
+                    .target_wpm
+                    .map(|t| (s.wpm - t).abs() <= 10.0)
+                    .unwrap_or(true);
+
+                let (phone_min, phone_suspect, confusions) = if no_phones {
+                    (None, false, Vec::<String>::new())
+                } else {
+                    let g = voice_core::gop::with_engine(|e| {
+                        voice_core::gop::score_text(&mut e.model, &pcm, text, &e.g2p)
+                    })?;
+                    let min = g
+                        .words
+                        .iter()
+                        .map(|w| w.gop_mean)
+                        .fold(f32::INFINITY, f32::min);
+                    let min = if min.is_finite() { Some(min) } else { None };
+                    let conf: Vec<String> = g
+                        .phones
+                        .iter()
+                        .filter_map(|p| p.confusion.clone())
+                        .collect();
+                    // 词级 GOP 太低说明 TTS 音频本身偏离参考音素
+                    let suspect = min.map(|m| m < -1.5).unwrap_or(false);
+                    (min, suspect, conf)
+                };
+                let pass = sv_ok && wh_ok && wpm_ok && !phone_suspect;
+                let label = format!("{voice}_{run}");
+                let path = session.write_reference(
+                    &prefix,
+                    &label,
+                    &s.samples,
+                    s.sample_rate,
+                    text,
+                    &s.voice,
+                    s.speed,
+                    s.wpm,
+                    s.target_wpm,
+                )?;
+                Ok(serde_json::json!({
+                    "voice": voice, "run": run, "pass": pass,
+                    "speed": round3(s.speed), "wpm": round3(s.wpm),
+                    "target_wpm": s.target_wpm,
+                    "asr_sense": sv.text, "asr_whisper": wh.text,
+                    "sense_match": sv_ok, "whisper_match": wh_ok, "wpm_ok": wpm_ok,
+                    "phone_min_gop": phone_min, "phone_suspect": phone_suspect,
+                    "confusions": confusions, "wav": path,
+                }))
+            })();
+            match row {
+                Ok(v) => {
+                    all_pass &= v["pass"].as_bool().unwrap_or(false);
+                    rows.push(v);
+                }
+                Err(e) => {
+                    all_pass = false;
+                    rows.push(serde_json::json!({
+                        "voice": voice, "run": run, "pass": false,
+                        "error": format!("{e:#}"),
+                    }));
+                }
+            }
+        }
+    }
+
+    let pass_runs = rows
+        .iter()
+        .filter(|r| r["pass"].as_bool().unwrap_or(false))
+        .count();
+    let report = rows
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join(
+            "
+",
+        );
+    std::fs::write(
+        session.dir.join("report.jsonl"),
+        format!(
+            "{report}
+"
+        ),
+    )?;
+    let summary = serde_json::json!({
+        "text": text, "target_wpm": target,
+        "runs": runs, "voices": voices,
+        "pass_runs": pass_runs, "total_runs": rows.len(),
+        "verdict": if all_pass { "verified" } else { "reject" },
+        "report": session.dir.join("report.jsonl"),
+    });
+    std::fs::write(
+        session.dir.join("summary.json"),
+        serde_json::to_string_pretty(&summary)?,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&summary)?);
+    if !all_pass {
+        eprintln!(
+            "[tts-verify] 未通过（{pass_runs}/{}）；报告 {}",
+            rows.len(),
+            session.dir.display()
+        );
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
 fn tts_probe(cfg: &Config, text: &str) -> Result<()> {
     let out = cfg.data_dir.join("probe").join("voices");
     std::fs::create_dir_all(&out)?;

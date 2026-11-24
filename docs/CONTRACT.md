@@ -322,7 +322,12 @@ $VOICE_HOME (默认 D:/voice_data)
 
 ## GOP 对照基线（`baseline_tts`）
 
-`with_gop=true, baseline_tts=true` 时返回 `gop_baseline`（TTS 标准发音的 GOP 结果，字段为 `version` + 全量 `words[]`）。
+`with_gop=true, baseline_tts=true` 时返回 `gop_baseline`（TTS 标准发音的 GOP 结果，字段为 `version` + 全量 `words[]`）
+和 `gop_baseline_valid`（TTS 音频 ASR 回读是否与参考文本一致）。
+
+- `gop_baseline_valid=true`：可以算 `用户 − 基线`；
+- `false`：**禁止**使用 Δ，`limitations` 会说明回读不一致（D51）；
+- 字段缺失：本次没有生成基线（未请求 / 无 GOP / 合成失败）。
 
 动机：GOP 绝对值带模型偏好。实测同一个音素 CTC 模型读 `their` 也只有 −0.36，
 所以"用户 −基线"才是可解释的量。

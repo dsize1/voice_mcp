@@ -48,6 +48,10 @@ pub struct Assessment {
     /// TTS 标准发音的 GOP 基线（`baseline_tts=true` 才有），用于和用户分数对比。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop_baseline: Option<crate::gop::GopResult>,
+    /// TTS 基线自检：ASR 回读是否与参考文本一致。
+    /// `false` 时**禁止**使用 `gop_baseline` 做 Δ 对比。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gop_baseline_valid: Option<bool>,
     /// 音素级 GOP（`with_gop=true` 才有）。只能当排序/趋势，不能当判决。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop: Option<crate::gop::GopResult>,
@@ -149,6 +153,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     }
     // TTS 对照基线：同一段参考文本用标准发音再跑一遍 GOP（失败不影响主流程）
     let mut gop_baseline = None;
+    let mut gop_baseline_valid = None;
     if req.baseline_tts
         && gop.is_some()
         && let Some(text) = req.reference
@@ -166,14 +171,40 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
                     syn.sample_rate,
                     crate::INTERNAL_SR,
                 );
-                match crate::gop::with_engine(|e| {
-                    crate::gop::score_text(&mut e.model, &pcm, text, &e.g2p)
-                }) {
-                    Ok(b) => gop_baseline = Some(b),
-                    Err(e) => limitations.push(format!("TTS 基线 GOP 失败：{e}")),
+                // 先自检：TTS 自己读出来的词必须与参考文本一致，否则基线不可信
+                let want = normalize::words(text);
+                match engines
+                    .asr
+                    .transcribe(&pcm, crate::INTERNAL_SR, "en", Some("sense-voice"))
+                {
+                    Ok(t) if normalize::words(&t.text) == want => {
+                        gop_baseline_valid = Some(true);
+                    }
+                    Ok(t) => {
+                        gop_baseline_valid = Some(false);
+                        limitations.push(format!(
+                            "TTS 基线自检失败：回读为「{}」，与参考文本不一致；该基线不能用于 Δ 对比（D51）",
+                            t.text
+                        ));
+                    }
+                    Err(e) => {
+                        gop_baseline_valid = Some(false);
+                        limitations.push(format!("TTS 基线自检失败（ASR）：{e}"));
+                    }
+                }
+                if gop_baseline_valid != Some(false) {
+                    match crate::gop::with_engine(|e| {
+                        crate::gop::score_text(&mut e.model, &pcm, text, &e.g2p)
+                    }) {
+                        Ok(b) => gop_baseline = Some(b),
+                        Err(e) => limitations.push(format!("TTS 基线 GOP 失败：{e}")),
+                    }
                 }
             }
-            Err(e) => limitations.push(format!("TTS 基线合成失败：{e}")),
+            Err(e) => {
+                gop_baseline_valid = Some(false);
+                limitations.push(format!("TTS 基线合成失败：{e}"));
+            }
         }
     }
 
@@ -290,6 +321,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         text_diff,
         snr_db,
         gop_baseline,
+        gop_baseline_valid,
         gop,
         prosody,
         limitations,

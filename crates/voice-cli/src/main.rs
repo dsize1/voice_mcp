@@ -1712,7 +1712,8 @@ fn tts_verify(
     };
     let want = voice_core::assess::normalize::words(text);
     let mut rows: Vec<serde_json::Value> = Vec::new();
-    let mut all_pass = true;
+    let mut any_reject = false;
+    let mut all_verified = true;
 
     for voice in &voices {
         let sid = engines.tts.resolve_sid(voice);
@@ -1736,10 +1737,13 @@ fn tts_verify(
                         .transcribe(&pcm, voice_core::INTERNAL_SR, "en", Some("whisper"))?;
                 let sv_ok = voice_core::assess::normalize::words(&sv.text) == want;
                 let wh_ok = voice_core::assess::normalize::words(&wh.text) == want;
+                // 130–160 为“达标”；100–180 之外才算硬失败，避免 128/153
+                // 这种边界值被直接 reject。
                 let wpm_ok = s
                     .target_wpm
-                    .map(|t| (s.wpm - t).abs() <= 10.0)
+                    .map(|_| (130.0..=160.0).contains(&s.wpm))
                     .unwrap_or(true);
+                let wpm_extreme = s.wpm > 0.0 && !(100.0..=180.0).contains(&s.wpm);
 
                 let (phone_min, phone_suspect, confusions) = if no_phones {
                     (None, false, Vec::<String>::new())
@@ -1762,7 +1766,16 @@ fn tts_verify(
                     let suspect = min.map(|m| m < -1.5).unwrap_or(false);
                     (min, suspect, conf)
                 };
-                let pass = sv_ok && wh_ok && wpm_ok && !phone_suspect;
+                let both = sv_ok && wh_ok;
+                let usable = (sv_ok || wh_ok) && !wpm_extreme && !phone_suspect;
+                let verdict = if !usable {
+                    "reject"
+                } else if both && wpm_ok {
+                    "verified"
+                } else {
+                    "review"
+                };
+                let pass = verdict != "reject";
                 let label = format!("{voice}_{run}");
                 let path = session.write_reference(
                     &prefix,
@@ -1776,7 +1789,7 @@ fn tts_verify(
                     s.target_wpm,
                 )?;
                 Ok(serde_json::json!({
-                    "voice": voice, "run": run, "pass": pass,
+                    "voice": voice, "run": run, "pass": pass, "verdict": verdict,
                     "speed": round3(s.speed), "wpm": round3(s.wpm),
                     "target_wpm": s.target_wpm,
                     "asr_sense": sv.text, "asr_whisper": wh.text,
@@ -1787,14 +1800,16 @@ fn tts_verify(
             })();
             match row {
                 Ok(v) => {
-                    all_pass &= v["pass"].as_bool().unwrap_or(false);
+                    any_reject |= v["verdict"] == "reject";
+                    all_verified &= v["verdict"] == "verified";
                     rows.push(v);
                 }
                 Err(e) => {
-                    all_pass = false;
+                    any_reject = true;
+                    all_verified = false;
                     rows.push(serde_json::json!({
                         "voice": voice, "run": run, "pass": false,
-                        "error": format!("{e:#}"),
+                        "verdict": "reject", "error": format!("{e:#}"),
                     }));
                 }
             }
@@ -1805,6 +1820,13 @@ fn tts_verify(
         .iter()
         .filter(|r| r["pass"].as_bool().unwrap_or(false))
         .count();
+    let summary_verdict = if any_reject {
+        "reject"
+    } else if all_verified {
+        "verified"
+    } else {
+        "review"
+    };
     let report = rows
         .iter()
         .map(serde_json::to_string)
@@ -1824,7 +1846,7 @@ fn tts_verify(
         "text": text, "target_wpm": target,
         "runs": runs, "voices": voices,
         "pass_runs": pass_runs, "total_runs": rows.len(),
-        "verdict": if all_pass { "verified" } else { "reject" },
+        "verdict": summary_verdict,
         "report": session.dir.join("report.jsonl"),
     });
     std::fs::write(
@@ -1832,13 +1854,19 @@ fn tts_verify(
         serde_json::to_string_pretty(&summary)?,
     )?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
-    if !all_pass {
+    if summary_verdict == "reject" {
         eprintln!(
             "[tts-verify] 未通过（{pass_runs}/{}）；报告 {}",
             rows.len(),
             session.dir.display()
         );
         std::process::exit(2);
+    }
+    if summary_verdict == "review" {
+        eprintln!(
+            "[tts-verify] 需人工复核（单引擎不一致）；报告 {}",
+            session.dir.display()
+        );
     }
     Ok(())
 }

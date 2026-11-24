@@ -336,7 +336,11 @@ impl TtsEngine {
         let measured = probe.wpm.max(1.0);
         let mut speed = (target / measured).clamp(0.4, 1.2);
         let mut out = self.synthesize(text, sid, speed)?;
-        if (out.wpm - target).abs() > target * 0.03 {
+        // 最多再校正 2 次：Kokoro 的 speed→wpm 不是严格线性，长句尤其明显
+        for _ in 0..2 {
+            if (out.wpm - target).abs() <= target * 0.03 {
+                break;
+            }
             speed = (speed * target / out.wpm.max(1.0)).clamp(0.4, 1.2);
             out = self.synthesize(text, sid, speed)?;
         }

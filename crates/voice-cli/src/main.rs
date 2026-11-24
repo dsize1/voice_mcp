@@ -44,9 +44,10 @@ enum Cmd {
         text: String,
         #[arg(long)]
         voice: Option<String>,
+        /// 显式倍率（高级用法）；不传则按目标 140 wpm 自动校准
         #[arg(long)]
         speed: Option<f32>,
-        /// 同时生成 0.75x 慢速版
+        /// 同时生成 110 wpm 慢速 + 140 wpm 常速一对
         #[arg(long)]
         slow_too: bool,
         /// 生成后立即播放
@@ -741,9 +742,12 @@ fn say(
     let prefix = session.take_prefix(seq, scene);
 
     let mut out = Vec::new();
-    let speeds = voice_core::engine::demo_speeds(slow_too, speed, cfg.synth_speed);
-    for (label, sp) in &speeds {
-        let s = tts.synthesize(text, sid, *sp)?;
+    let targets = voice_core::engine::demo_targets(slow_too, speed, cfg.tts_wpm);
+    for (label, target) in &targets {
+        let s = match target {
+            voice_core::engine::SpeechTarget::Wpm(w) => tts.synthesize_at_wpm(text, sid, *w)?,
+            voice_core::engine::SpeechTarget::Speed(sp) => tts.synthesize(text, sid, *sp)?,
+        };
         let p = session.write_reference(
             &prefix,
             label,
@@ -751,10 +755,13 @@ fn say(
             s.sample_rate,
             text,
             &s.voice,
-            *sp,
+            s.speed,
+            s.wpm,
+            s.target_wpm,
         )?;
         out.push(serde_json::json!({
-            "label": label, "speed": sp, "path": p,
+            "label": label, "speed": round3(s.speed), "path": p,
+            "wpm": round3(s.wpm), "target_wpm": s.target_wpm,
             "dur": round3(s.duration), "gen_ms": round3(s.gen_ms as f32),
             "rtf": round3((s.gen_ms / 1000.0 / s.duration as f64) as f32),
         }));

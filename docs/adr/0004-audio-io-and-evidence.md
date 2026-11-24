@@ -66,7 +66,7 @@ C:/voice_data/
         ├── 001_read_think.asr.json       # 转写全文 + words[] 时间戳 + engine + degraded
         ├── 001_read_think.metrics.json   # 对齐/GOP/flow/prosody 全部数值
         ├── 001_read_think.md             # 该 take 的反馈文本（Agent 写的）
-        ├── 001_read_think.ref_slow.wav   # TTS 示范音（0.75x）
+        ├── 001_read_think.ref_slow.wav   # TTS 示范音（旧 0.75x；现默认 110 wpm）
         ├── 001_read_think.ref_norm.wav   # TTS 示范音（1.0x）
         └── 001_read_think.ref.txt        # 示范音对应的文本 + voice + speed 参数
 ```

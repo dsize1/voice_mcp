@@ -56,7 +56,7 @@ bank/
 └── nce2/02-breakfast-or-lunch/
     ├── lesson.json                  # 源信息、lrc_fit、逐行质量、rejected[]
     ├── 001.ref.wav                  # 该行的原生朗读切片（16k mono，前后各留 0.15 s）
-    ├── 001.ref_slow.wav             # 可选：TTS 0.75x 慢速示范（默认不生成）
+    ├── 001.ref_slow.wav             # 可选：TTS 110 wpm 慢速示范（默认不生成）
     └── 001.mp3                      # 可选：该行原音轨片段（--keep-source 时保留）
 ```
 

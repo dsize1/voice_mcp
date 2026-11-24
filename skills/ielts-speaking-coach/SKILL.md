@@ -25,7 +25,7 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 | 工具（MCP `voice`） | 用途 |
 |---|---|
 | `mcp__voice__status` | 自检：`mic` 是否为 null、模型是否齐全 |
-| `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`speed` 0.75/1.0、`play=true` 服务端出声、`slow_too=true` 一次产出 slow(0.75)+norm(1.0) 两个文件 |
+| `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`play=true` 服务端出声；默认 140 wpm，`slow_too=true` 产出 slow(110)+norm(140) 两个文件；显式 `speed` 才按倍率 |
 | `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"`；`with_gop=true` 额外给音素级排序（见 4.1）；`with_prosody=true` 或 `reference_audio=<示范音>` 给 F0/升降/重音候选（见 4.2） |
 | `mcp__voice__record` | 麦克风录音（静音自动停）。`mic` 为 null 时不可用 |
 | `voice-cli bank …` | **素材库（CLI，非 MCP）**：`pick/show/drill`。`pick` 按 focus tags + level 从 3 368 条里取 1–3 条 |
@@ -85,8 +85,8 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 ```
 ① 选素材        → drill_queue 优先→ focus 命中的 tags → 同 level 素材（用 `bank pick`，见 1.5 节）
 ② 播示范        → 先播**原声**：`bank drill <id>`（真人朗读，不是 TTS）
-                  → 再合成慢速：synthesize(text=句, speed=0.75, play=true, slow_too=true)
-                  → 返回 files 里 label="slow"(0.75) 与 label="norm"(1.0) 一对；play 播的是慢速版
+                  → 合成：synthesize(text=句, play=true, slow_too=true)（默认 slow=110 / norm=140 wpm）
+                  → 返回 files 里 label="slow" 与 label="norm" 一对；play 播的是慢速版
                   再 play(path=<label="norm" 的 path>) 播常速，**不要**再 synthesize(speed=1.0)
 ③ 用户跟读      → record 或让用户用录音机
 ④ 评测          → assess(path="last", reference=句, lang="en", scene="bank")

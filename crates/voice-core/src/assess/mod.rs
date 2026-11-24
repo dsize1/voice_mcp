@@ -156,7 +156,10 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         let sid = engines.tts.resolve_sid(
             &std::env::var("VOICE_GOP_BASELINE_VOICE").unwrap_or_else(|_| "af_heart".into()),
         );
-        match engines.tts.synthesize(text, sid, 1.0) {
+        match engines
+            .tts
+            .synthesize_at_wpm(text, sid, engines.cfg.tts_wpm)
+        {
             Ok(syn) => {
                 let pcm = crate::audio::resample::resample(
                     &syn.samples,

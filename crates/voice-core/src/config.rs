@@ -8,6 +8,7 @@
 //! | `VOICE_HOME` | `D:/voice_data` |
 //! | `VOICE_PROVIDER` | `cpu` |
 //! | `VOICE_THREADS` | 4 |
+//! | `VOICE_TTS_WPM` | 140（雅思 130–160） |
 
 use std::path::{Path, PathBuf};
 
@@ -36,8 +37,8 @@ pub struct Config {
     pub record_silence_sec: f32,
     /// 未指定音色时的默认 sid
     pub default_sid: i32,
-    /// 示范音默认语速
-    pub synth_speed: f32,
+    /// 示范音默认目标语速（wpm）。雅思听说练习默认 140，建议区间 130–160。
+    pub tts_wpm: f32,
     /// 监视目录（Win11 录音机输出目录），可为空
     pub watch_dirs: Vec<PathBuf>,
     /// 高精度采集采样率（cpal）
@@ -57,7 +58,7 @@ impl Default for Config {
             record_max_sec: 30.0,
             record_silence_sec: 2.0,
             default_sid: 0,
-            synth_speed: 1.0,
+            tts_wpm: 140.0,
             capture_sr: 48_000,
             mic: None,
             watch_dirs: default_watch_dirs(),
@@ -106,6 +107,11 @@ impl Config {
             && let Ok(n) = v.parse()
         {
             cfg.num_threads = n;
+        }
+        if let Ok(v) = std::env::var("VOICE_TTS_WPM")
+            && let Ok(n) = v.parse::<f32>()
+        {
+            cfg.tts_wpm = n.clamp(80.0, 220.0);
         }
         Ok(cfg)
     }

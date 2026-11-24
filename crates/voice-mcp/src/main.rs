@@ -83,13 +83,13 @@ struct SynthesizeParams {
     /// 音色名（如 af_heart / bf_emma / am_michael / zf_xiaobei）或 sid 数字
     #[serde(default)]
     voice: Option<String>,
-    /// 语速，1.0 为常速；跟读示范建议 0.75
+    /// 显式倍率（高级用法）；不传则按目标 140 wpm（雅思 130–160）自动校准
     #[serde(default)]
     speed: Option<f32>,
     /// 是否在服务端直接播放（Pi 的 TUI 无法播放音频，必须由服务端出声）
     #[serde(default)]
     play: bool,
-    /// 同时生成 0.75x 慢速版（跟读用）
+    /// 同时生成 110 wpm 慢速 + 140 wpm 常速一对（跟读用）
     #[serde(default)]
     slow_too: bool,
     #[serde(default)]
@@ -299,7 +299,7 @@ impl VoiceServer {
     /// 中文讲解与英文示范必须分开调用（一段文本只允许一种语言）。
     #[tool(
         name = "synthesize",
-        description = "文字转语音（示范音，24kHz）。voice 可传音色名或 sid；play=true 由服务端播放；slow_too 同时生成 0.75x 慢速跟读版。"
+        description = "文字转语音（示范音，24kHz）。默认按雅思目标 140 wpm（130–160）；slow_too 生成 110 wpm 慢速 + 140 wpm 常速；显式 speed 时按倍率。"
     )]
     async fn synthesize(&self, Parameters(p): Parameters<SynthesizeParams>) -> Json<OkResult> {
         let app = self.app.clone();
@@ -308,14 +308,21 @@ impl VoiceServer {
             let seq = session.next_seq()?;
             let scene = p.scene.clone().unwrap_or_else(|| "tts".into());
             let prefix = session.take_prefix(seq, &scene);
-            let speeds = voice_core::engine::demo_speeds(p.slow_too, p.speed, app.cfg.synth_speed);
+            let targets = voice_core::engine::demo_targets(p.slow_too, p.speed, app.cfg.tts_wpm);
             let voice = p.voice.clone().unwrap_or_else(|| "af_heart".into());
 
             let files = app.with_engines(|e| {
                 let sid = e.tts.resolve_sid(&voice);
                 let mut out = Vec::new();
-                for (label, sp) in &speeds {
-                    let s = e.tts.synthesize(&p.text, sid, *sp)?;
+                for (label, target) in &targets {
+                    let s = match target {
+                        voice_core::engine::SpeechTarget::Wpm(w) => {
+                            e.tts.synthesize_at_wpm(&p.text, sid, *w)?
+                        }
+                        voice_core::engine::SpeechTarget::Speed(sp) => {
+                            e.tts.synthesize(&p.text, sid, *sp)?
+                        }
+                    };
                     let path = session.write_reference(
                         &prefix,
                         label,
@@ -323,10 +330,13 @@ impl VoiceServer {
                         s.sample_rate,
                         &p.text,
                         &s.voice,
-                        *sp,
+                        s.speed,
+                        s.wpm,
+                        s.target_wpm,
                     )?;
                     out.push(serde_json::json!({
-                        "label": label, "speed": sp, "path": path,
+                        "label": label, "speed": round3(s.speed), "path": path,
+                        "wpm": round3(s.wpm), "target_wpm": s.target_wpm,
                         "duration": round3(s.duration),
                         "gen_ms": round3(s.gen_ms as f32),
                         "rtf": round3((s.gen_ms / 1000.0 / s.duration as f64) as f32),

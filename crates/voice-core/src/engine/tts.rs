@@ -70,27 +70,44 @@ pub const KOKORO_VOICES: [&str; 54] = [
     "zm_yunyang",
 ];
 
-/// 跟读示范的慢速倍率（跟 skill 约定的固定值）
-pub const SLOW_SPEED: f32 = 0.75;
+/// 雅思听力/口语练习的目标语速区间（wpm）。
+///
+/// 来源：Cambridge IELTS 听力 Section 1–4 与口语示范约 130–160 wpm；
+/// 教学默认取中位数 140，避免 `speed=1.0`（实测 220+ wpm）或固定 0.75（160–200 wpm）。
+pub const IELTS_WPM_MIN: f32 = 130.0;
+pub const IELTS_WPM_MAX: f32 = 160.0;
+pub const IELTS_WPM_DEFAULT: f32 = 140.0;
+/// 慢速示范目标（约 NCE 原声的 0.9 倍，仍高于“逐词顿开”）
+pub const TTS_SLOW_WPM: f32 = 110.0;
+
+/// 一次合成请求的目标：显式倍率（高级用法）或目标 wpm（默认）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpeechTarget {
+    Speed(f32),
+    Wpm(f32),
+}
 
 /// 决定一次示范要生成哪几个语速版本。
 ///
-/// 语义（曾经踩过的坑）：`slow_too=true` 表示"慢速 + 常速"一对，此时 `speed`
-/// 若等于慢速值（0.75）就**不能**被当成常速再次使用，否则两个文件语速相同、
-/// 常速示范实际缺席。因此 slow 分支里常速取 `speed` 仅在它明显快于慢速时生效，
-/// 否则回落到配置默认（1.0）。
-pub fn demo_speeds(
+/// - 不传 `speed`：`norm` 用目标 wpm（默认 140），`slow` 用 110 wpm；
+/// - 传 `speed`：尊重显式倍率；`slow` 取 `speed × 0.75`（兼容旧调用）。
+pub fn demo_targets(
     slow_too: bool,
     speed: Option<f32>,
-    default_speed: f32,
-) -> Vec<(&'static str, f32)> {
-    let norm = speed
-        .filter(|s| *s > SLOW_SPEED + 0.01)
-        .unwrap_or(default_speed);
-    if slow_too {
-        vec![("slow", SLOW_SPEED), ("norm", norm)]
-    } else {
-        vec![("norm", speed.unwrap_or(default_speed))]
+    default_wpm: f32,
+) -> Vec<(&'static str, SpeechTarget)> {
+    let default_wpm = default_wpm.clamp(80.0, 220.0);
+    match (slow_too, speed) {
+        (true, Some(sp)) => vec![
+            ("slow", SpeechTarget::Speed((sp * 0.75).max(0.45))),
+            ("norm", SpeechTarget::Speed(sp)),
+        ],
+        (true, None) => vec![
+            ("slow", SpeechTarget::Wpm((default_wpm - 30.0).max(90.0))),
+            ("norm", SpeechTarget::Wpm(default_wpm)),
+        ],
+        (false, Some(sp)) => vec![("norm", SpeechTarget::Speed(sp))],
+        (false, None) => vec![("norm", SpeechTarget::Wpm(default_wpm))],
     }
 }
 
@@ -103,6 +120,13 @@ pub struct Synthesized {
     pub voice: String,
     pub sid: i32,
     pub speed: f32,
+    /// 文本词数（ASCII 词；中文为 0）
+    pub words: usize,
+    /// 实际语速（词/分钟）
+    pub wpm: f32,
+    /// 本次请求的目标 wpm（显式 speed 时为 None）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_wpm: Option<f32>,
     pub gen_ms: f64,
 }
 
@@ -235,6 +259,12 @@ impl TtsEngine {
         let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let samples = audio.samples().to_vec();
         let duration = samples.len() as f32 / self.sample_rate as f32;
+        let words = count_words(text);
+        let wpm = if duration > 0.0 {
+            words as f32 / duration * 60.0
+        } else {
+            0.0
+        };
         Ok(Synthesized {
             samples,
             sample_rate: self.sample_rate,
@@ -246,9 +276,48 @@ impl TtsEngine {
                 .to_string(),
             sid,
             speed,
+            words,
+            wpm,
+            target_wpm: None,
             gen_ms,
         })
     }
+
+    /// 按目标 wpm 合成：先 1.0 测速，再算倍率；必要时二次校正。
+    ///
+    /// 短文本（<3 词）与中文不做 WPM 校准（WPM 不可靠），用接近自然的 0.8/1.0。
+    pub fn synthesize_at_wpm(&self, text: &str, sid: i32, target_wpm: f32) -> Result<Synthesized> {
+        let target = target_wpm.clamp(80.0, 220.0);
+        let words = count_words(text);
+        if !text.is_ascii() {
+            // 中文/混合：WPM 不适用；用旧倍率保证 slow/norm 仍有差异
+            let sp = if target < 120.0 { 0.75 } else { 1.0 };
+            // 短文本/中文的 wpm 不可靠：不写 target，避免误读
+            return self.synthesize(text, sid, sp);
+        }
+        if words < 3 {
+            // 单词/两词：WPM 不可靠，按目标/220 估一个倍率（140→0.64，110→0.50）
+            let sp = (target / 220.0).clamp(0.45, 1.0);
+            return self.synthesize(text, sid, sp);
+        }
+        let probe = self.synthesize(text, sid, 1.0)?;
+        let measured = probe.wpm.max(1.0);
+        let mut speed = (target / measured).clamp(0.4, 1.2);
+        let mut out = self.synthesize(text, sid, speed)?;
+        if (out.wpm - target).abs() > target * 0.03 {
+            speed = (speed * target / out.wpm.max(1.0)).clamp(0.4, 1.2);
+            out = self.synthesize(text, sid, speed)?;
+        }
+        out.target_wpm = Some(target);
+        Ok(out)
+    }
+}
+
+/// ASCII 词数（标点不算；缩写算 1 个词）。中文返回 0，调用方应跳过 WPM 校准。
+pub fn count_words(text: &str) -> usize {
+    text.split_whitespace()
+        .filter(|w| w.chars().any(|c| c.is_ascii_alphanumeric()))
+        .count()
 }
 
 fn voice_lang(name: &str) -> String {
@@ -288,23 +357,45 @@ mod tests {
     }
 
     #[test]
-    fn demo_speeds_slow_pair_is_not_duplicated() {
-        // 传 0.75 + slow_too：常速必须是 1.0，不能也是 0.75
-        let v = demo_speeds(true, Some(0.75), 1.0);
-        assert_eq!(v, vec![("slow", 0.75), ("norm", 1.0)]);
-        // 不传 speed：常速用配置默认
+    fn demo_targets_default_to_wpm() {
         assert_eq!(
-            demo_speeds(true, None, 1.0),
-            vec![("slow", 0.75), ("norm", 1.0)]
+            demo_targets(false, None, 140.0),
+            vec![("norm", SpeechTarget::Wpm(140.0))]
         );
-        // 显式给一个更快语速：尊重它
         assert_eq!(
-            demo_speeds(true, Some(1.2), 1.0),
-            vec![("slow", 0.75), ("norm", 1.2)]
+            demo_targets(true, None, 140.0),
+            vec![
+                ("slow", SpeechTarget::Wpm(110.0)),
+                ("norm", SpeechTarget::Wpm(140.0))
+            ]
         );
-        // 不要慢速版时 speed 原样生效
-        assert_eq!(demo_speeds(false, Some(0.9), 1.0), vec![("norm", 0.9)]);
-        assert_eq!(demo_speeds(false, None, 1.0), vec![("norm", 1.0)]);
+    }
+
+    #[test]
+    fn demo_targets_honor_explicit_speed() {
+        assert_eq!(
+            demo_targets(false, Some(0.9), 140.0),
+            vec![("norm", SpeechTarget::Speed(0.9))]
+        );
+        let v = demo_targets(true, Some(0.9), 140.0);
+        assert!(matches!(v[0], ("slow", SpeechTarget::Speed(s)) if (s - 0.675).abs() < 1e-6));
+        assert!(matches!(v[1], ("norm", SpeechTarget::Speed(s)) if (s - 0.9).abs() < 1e-6));
+    }
+
+    #[test]
+    fn count_words_ignores_punctuation_and_empty() {
+        assert_eq!(count_words("On Monday, we found a bug!"), 6);
+        assert_eq!(count_words("don't stop"), 2);
+        assert_eq!(count_words("   "), 0);
+        assert_eq!(count_words("你好 world"), 1, "中文不计入 ASCII 词");
+    }
+
+    #[test]
+    fn wpm_math_is_reasonable() {
+        // 140 wpm ⇔ 10 词约 4.29 s
+        let words = 10.0f32;
+        let dur = 4.286f32;
+        assert!((words / dur * 60.0 - 140.0).abs() < 0.5);
     }
 
     #[test]

@@ -252,10 +252,11 @@ pi -p "列出你现在可用的 skills"
 | `VOICE_HOME` | `D:/voice_data` | 留证/档案/索引目录 |
 | `VOICE_PROVIDER` | `cpu` | `cpu` / `cuda`（GPU 未打通，见 ADR-0005） |
 | `VOICE_THREADS` | `4` | ONNX Runtime 线程数 |
+| `VOICE_TTS_WPM` | `140` | 示范音目标语速（雅思 130–160；慢速 110） |
 | `VOICE_MIC` | 空（系统默认） | 输入设备名子串。**蓝牙耳机必须指定**，如 `Hands-Free` |
 
 `config.json` 还支持：`en_engine`（英文默认引擎，默认 `sense-voice`）、`record_max_sec`、
-`record_silence_sec`、`capture_sr`、`default_sid`、`synth_speed`、`watch_dirs`。
+`record_silence_sec`、`capture_sr`、`default_sid`、`tts_wpm`、`watch_dirs`。
 
 ---
 
@@ -267,7 +268,7 @@ pi -p "列出你现在可用的 skills"
 |---|---|
 | `assess` | **核心**：转写 + 语流 + 词级差异；`with_gop=true` 追加音素级 GOP（词级口径），`baseline_tts=true` 追加标准发音对照基线 |
 | `transcribe` | 纯转写（词级 + token 级时间戳） |
-| `synthesize` | 示范音（`play=true` 服务端出声，`slow_too` 出 0.75x 版） |
+| `synthesize` | 示范音（默认 140 wpm；`slow_too` 出 110/140 一对；`play=true` 服务端出声） |
 | `record` | 麦克风录音，静音自动停（需麦克风） |
 | `play` | 播放 wav |
 | `prepare_audio` | 音频体检 + 去首尾静音 + 16k 派生 |
@@ -289,7 +290,7 @@ pi -p "列出你现在可用的 skills"
 voice-cli doctor [--load]                     # 自检（--load 会真实加载引擎）
 voice-cli mic [--secs 3]                      # 麦克风诊断：支持的格式 + 底噪分位数 + 阈值建议
 voice-cli stt <path|last> [--lang en] [--plain]# 转写（留证）
-voice-cli say "text" [--voice af_heart] [--speed 0.75] [--slow-too] [--play]
+voice-cli say "text" [--voice af_heart] [--speed <倍率>] [--slow-too] [--play]  # 默认 140 wpm
 voice-cli play <path>
 voice-cli assess <path|last> [--reference "原句"] [--with-gop]   # 评测（含词级 GOP + TTS 基线）
 voice-cli gop <path|last> --text "原句" [--top N]  # 只跑音素级 GOP（输出 heard / confusion）

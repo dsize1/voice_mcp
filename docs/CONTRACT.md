@@ -165,16 +165,19 @@ sessions/<date>/<hhmmss>_drill/takes/
 |---|---|---|---|
 | `text` | string | ✅ | 待合成文本。**一段文本只能一种语言** |
 | `voice` | string | | 音色名（`af_heart`/`bf_emma`/`am_michael`/`zf_xiaobei`…）或 sid 数字，默认 `af_heart` |
-| `speed` | number | | 语速，默认 1.0；跟读示范建议 0.75 |
+| `speed` | number | | **显式倍率**（高级用法）；不传时按目标 **140 wpm**（雅思区间 130–160）自动校准。传了就以倍率为准 |
 | `play` | bool | | `true` 时由**服务端**播放（Pi 终端放不出声音，必须用这个） |
-| `slow_too` | bool | | 同时生成一对：`label=slow`(0.75x) + `label=norm`。**此时 `speed` 只影响 norm，且 `speed ≤ 0.75` 时 norm 回落到 1.0**（否则会出现两个文件语速相同的假慢速版） |
+| `slow_too` | bool | | 同时生成一对：`label=slow`(**110 wpm**) + `label=norm`(**140 wpm**)；显式 `speed` 时 slow 取 `speed×0.75` |
 | `scene` | string | | 场景标签 |
 
-返回 `detail`：`voice` / `sid` / `sample_rate`(24000) / `files[]{label,speed,path,duration,gen_ms,rtf}` / `session` / `prefix`
+返回 `detail`：`voice` / `sid` / `sample_rate`(24000) / `files[]{label,speed,wpm,target_wpm,path,duration,gen_ms,rtf}` / `session` / `prefix`
 
-合成逻辑集中在 `voice_core::engine::demo_speeds`（MCP 与 CLI 共用，有单测）：
-`slow_too=false` → `[norm]`；`slow_too=true` → `[(slow, 0.75), (norm, speed>0.75 ? speed : 1.0)]`。
-`play=true` 只播 `files[0]`（即 slow 版）；要听常速请用 `play(path=<label=norm 的 path>)`，不必再合成一次。
+合成逻辑集中在 `voice_core::engine::demo_targets` + `TtsEngine::synthesize_at_wpm`（MCP 与 CLI 共用，有单测）：
+- 默认：`slow_too=false` → `[norm @ 140 wpm]`；`slow_too=true` → `[(slow,110), (norm,140)]`
+- 校准：先按 1.0 生成测速，再算 `speed = target/measured`；偏差 >3% 再校正一次
+- 短文本（<3 词）与中文不做 WPM 校准（WPM 不可靠），返回 `target_wpm=null`
+- `speed=1.0` 的 Kokoro 实测约 **220 wpm**，不要当“常速”；旧 `0.75` 也约 **160–200 wpm**
+- `play=true` 只播 `files[0]`（即 slow 版）；要听常速请用 `play(path=<label=norm 的 path>)`
 
 **规则（重要）**：中文讲解与英文示范**必须拆成两次调用**（Kokoro 是单语模型）。
 中文讲解默认只出文字、不必合成音频。
@@ -267,9 +270,9 @@ $VOICE_HOME (默认 D:/voice_data)
         ├── 001_<scene>.capture.json  ← 采集元信息 + 能量包络（record）
         ├── 001_<scene>.metrics.json  ← 评测指标（assess；重复评测时上一份为 .metrics.prev.json）
         ├── 001_<scene>.md            ← 反馈骨架（assess 建，Agent 填）
-        ├── 001_<scene>.ref_norm.wav  ← 示范音（1.0x）
-        ├── 001_<scene>.ref_slow.wav  ← 示范音（0.75x）
-        └── 001_<scene>.ref_*.json    ← text/voice/speed/model
+        ├── 001_<scene>.ref_norm.wav  ← 示范音（默认 140 wpm）
+        ├── 001_<scene>.ref_slow.wav  ← 示范音（默认 110 wpm）
+        └── 001_<scene>.ref_*.json    ← text/voice/speed/wpm/target_wpm/model
 ```
 
 `manifest.jsonl` 可直接 `grep`，也是 `progress` 趋势分析的数据源。
@@ -363,7 +366,7 @@ $VOICE_HOME (默认 D:/voice_data)
   词时长来自 ASR（±0.5 s 量级），只能当"大概第几个词"；**不是"你重音放错了"的判决**。
 - `energy_z` 在蓝牙 AGC 设备上不可信（D36），只作第 3 特征；反馈中不要拿它说"重音太轻"。
 - `reference.dtw_cost_st` 是**时间归一化后**的半音形状 DTW 平均代价（越小越像）。
-  用户与参考各自减掉自己的中位数，所以音高/性别/0.75x 时长差异都被消掉。
+  用户与参考各自减掉自己的中位数，所以音高/性别/参考音时长差异都被消掉。
 - `degraded=true`、`snr_db < 13`、浊音帧不足 → 不返回 `prosody`，`limitations` 说明原因。
 - 无词级时间戳 → 只给句级指标，`stress_top` 为空并追加 limitation。
 

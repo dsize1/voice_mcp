@@ -264,6 +264,8 @@ impl Session {
         text: &str,
         voice: &str,
         speed: f32,
+        wpm: f32,
+        target_wpm: Option<f32>,
     ) -> Result<PathBuf> {
         let p = self
             .dir
@@ -272,6 +274,7 @@ impl Session {
         wav::write_wav_i16(&p, samples, sr)?;
         let meta = serde_json::json!({
             "text": text, "voice": voice, "speed": speed,
+            "wpm": crate::round_to(wpm, 1), "target_wpm": target_wpm,
             "sample_rate": sr, "model": "kokoro-multi-lang-v1_0",
         });
         let mp = self

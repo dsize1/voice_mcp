@@ -15,7 +15,7 @@
 | 项 | 数值 |
 |---|---|
 | ASR SenseVoice int8 | 6 s 音频 82 ms（RTF 0.013）；81 s 音频分块后 2.3 s（RTF 0.028） |
-| TTS Kokoro 82M | RTF 0.21，24 kHz，54 音色（`af_heart`=sid 3 已验证） |
+| TTS Kokoro 82M | RTF 0.21，24 kHz，54 音色；**默认 140 wpm**（130–160），slow=110；短文本/中文不按 WPM 校准 |
 | 引擎冷启动 | 1.7 s（ASR 与 TTS 并行加载） |
 | `.m4a`/mp3 解码 | 纯 Rust（symphonia），6 s 音频 1.8 ms |
 | 麦克风（EDIFIER W820NB 蓝牙 HFP 端点） | 48 kHz 单声道 F32 可用；底噪 p50 −54.7 / p99 −46 dBFS（**偏高，AGC 强**） |

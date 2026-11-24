@@ -5,7 +5,10 @@ pub mod tts;
 pub mod vad;
 
 pub use asr::{Asr, AsrEngine, AsrKind, Transcript, Word};
-pub use tts::{KOKORO_VOICES, SLOW_SPEED, Synthesized, TtsEngine, VoiceInfo, demo_speeds};
+pub use tts::{
+    IELTS_WPM_DEFAULT, IELTS_WPM_MAX, IELTS_WPM_MIN, KOKORO_VOICES, SpeechTarget, Synthesized,
+    TTS_SLOW_WPM, TtsEngine, VoiceInfo, count_words, demo_targets,
+};
 
 use anyhow::Result;
 

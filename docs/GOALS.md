@@ -61,8 +61,8 @@
 
 | 目标 | 状态 | 说明 |
 |---|---|---|
-| 推送本地 3 个 commit | ⏳ | `main` 领先 `origin/main` 3 个（2026-11-25：语速/伪影+bank refs、s5 复测、默认男声） |
-| 重启 MCP 进程 | ⏳ | 让 `with_prosody`、`text_agreement`、`onset_gap_ms`、默认男声在 MCP 端生效（CLI 已生效） |
+| 推送本地 5 个 commit | ⏳ | `main` 领先 `origin/main` 3 个（2026-11-25：语速/伪影+bank refs、s5 复测、默认男声） |
+| 重启 MCP 进程 | ✅ | 2026-11-25：杀子进程 → 重建 `voice-mcp.exe` → Pi 自动重连；实测 `synthesize` 返回 `am_michael` + `speech_duration` + `onset_gap_ms` |
 | CI 首跑 | ⏳ | D20 部分偿还；workflow 已写，未在 GitHub 验证 |
 
 ---

@@ -158,8 +158,10 @@ SKILL 4.2 已固化措辞规则（先看句型再解读升降、`stress_top` 只
 - 蓝牙 AGC 让 `energy_z` 失真（D36），只作第 3 特征；
 - `voiced_ratio` 含静音帧，不要与 `flow.speech_ratio` 混用。
 
-**注意**：本次改的是 `voice-mcp` 源码，正在运行的 MCP 进程仍是旧二进制；重启 Pi / MCP 后
-`assess` 才会接受 `with_prosody` 参数（CLI 已可直接用 `--with-prosody`）。
+**已生效（2026-11-25）**：`voice-mcp.exe` 已重编译并在 MCP 端实测（`synthesize` 返回 `voice=am_michael`、
+`speech_duration`、`onset_gap_ms`）。MCP 是 Pi 的 stdio 子进程：换二进制必须先让旧进程退出
+（`/mcp` 里 disable/reconnect，或杀掉 PID），再 `cargo build --release -p voice-mcp`，
+否则 Windows 文件锁会让构建静默复用旧 exe。
 
 ## Route A 立项（2026-11-23，暂不实现）
 

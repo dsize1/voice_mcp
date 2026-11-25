@@ -1,6 +1,6 @@
 # ADR-0008: 技术欠债登记（Debt Register）
 
-- 状态：Accepted（活文档，每还一条就更新；最后更新 **2026-11-25**：D12/D19/D39/D45/D47/D49/D51 已还，D04 部分偿还，D20 部分偿还；未还：D46/D48/D50 + D06/D09/D11/D15/D18/D21/D29/D35/D36/D38/D40/D41/D44）
+- 状态：Accepted（活文档，每还一条就更新；最后更新 **2026-11-25**：D12/D19/D20/D39/D45/D47/D49/D51 已还，D04 部分偿还；未还：D46/D48/D50 + D06/D09/D11/D15/D18/D21/D29/D35/D36/D38/D40/D41/D44）
 - 日期：2026-11-19
 - 相关：ADR-0001（运行时路线）、ADR-0006（评测边界）、ADR-0007（韵律与 GOP）
 
@@ -65,7 +65,7 @@
 | D17 | 引擎加载**失败不缓存**：每次调用都会重试并重新付出加载代价（whisper 1.6 s） | `With_engines` 只缓存成功 | S3 | 出现一次引擎加载失败 | 0.5d |
 | D18 | 原生 DLL 需**手工** `cp .cache/sherpa/lib/*.dll target/release/`，忘掉就启动即崩（Windows loader 报错，没有友好提示） | README 快速开始第 3 步 | S2 | 第二次有人在这台机器上构建 | 0.5d：`build.rs` 或 cargo xtask 自动复制 |
 | D19 | 无 `rust-toolchain.toml`、无 MSRV 声明 | **已还**：`rust-toolchain.toml`（stable + rustfmt/clippy）+ `Cargo.toml` `rust-version = "1.99"`（实测版本；edition 2024 理论下限 1.85 未验证） | ~~S3~~ ✅已还 | – | – |
-| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | **部分偿还**：`tools/check.ps1` + `.github/workflows/ci.yml` 已就位，本地实测 97 单测 + 9 用例通过；**GitHub 上尚未首跑** | S2 | 首次 push 后确认 CI 绿 | 0.5h：跑通首轮 |
+| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | **已还（2026-11-25）**：`tools/check.ps1` + `.github/workflows/ci.yml`；GitHub Actions 在 `windows-latest` 上绿两次（`530e668` 2026-11-24、`3cf8736` 2026-11-25，run 45643953511），136 单测 + clippy `-D warnings` + fmt 全过。残留：CI 里没有音频 fixture（另记 D21） | ~~S2~~ ✅已还 | – | – |
 | D45 | **没有门禁导致 HEAD 编译失败无人发现**：`{peak_dbfs:.1f}` 在 `4f57a36` 引入后陪着 3 个提交 | `cargo build --release` 报 `unknown format trait f` | ~~S1~~ ✅已还 | – | – |
 | D21 | 回归用例 | **部分偿还**：`cases/*.json` 只存断言（音频留本机，`VOICE_CASES_DIR` 指过去），`voice-cli cases` 一条命令跑全部；已覆盖 16k/48k/TTS/自由说/漏词 5 个场景。仍缺：没有**合成** fixture（正弦/噪声），CI 里无法无音频跑 decode/flow | S2 | 接 CI 前 | 2h |
 | D22 | `assess` 的 MCP 版与 CLI `assess_cmd` **逻辑重复**，两处维护 | 两个文件各 ~80 行 | S3 | 参数再变一次时 | 2h：抽到 `voice-core::pipeline` |
@@ -109,7 +109,7 @@
 | 1 | ~~D03 时间戳错位~~ | 已还（见第七节） | – |
 | 2 | **D07 record 实测** | 没有麦克风，短句跟读体验缺失（`mic=null`） | 硬件到位后立即 |
 | 3 | ~~D18 + D19 + D21~~ | D19 已还；D18 仍靠 `check.ps1` 加 PATH 缓解；D21 只差合成 fixture | – |
-| 4 | ~~D20 CI~~ | 门禁已落地（D45），待 GitHub 首跑 | 下一次 push |
+| 4 | ~~D20 CI~~ | **已还**：门禁落地 + GitHub Actions 绿（2026-11-25） | – |
 | 5 | D12/D09 韵律与 GOP | 能力提升，但需真实数据校准阈值 | ADR-0007 触发条件 |
 
 **暂不偿付**：D25/D26/D30/D31（都是"规模变大才痛"的问题），D24/D14（洁癖级）。
@@ -174,7 +174,7 @@
 | **新增 D42** | 蓝牙耳机麦克风增益自动漂移（同一小时内 peak −11.8 ~ −33.5 dBFS）→ 已加绝对电平闸门与 rec 即时提示，但**无法根治**（用户侧设备行为） |
 | **新增 D43** | 音素级精确率受基率锁死（上限 0.45）；下一步方向是"可疑词定向重录"降基率，而不是继续训更大的模型 |
 | **新增 D44** | `bank` 的 tag 是关键词启发式，召回偏低（`theta_to_s` 只命中 237/4 997）；已用 so762 统计数据做权重，但覆盖仍靠人工维护变体表 |
-| **新增 D45** | 无门禁 → HEAD 编译失败 3 个提交无人发现；**已还**（`check.ps1` + CI） |
+| **新增 D45** | 无门禁 → HEAD 编译失败 3 个提交无人发现；**已还**（`check.ps1` + CI，Actions 已绿） |
 | D19 / D39 | **已还**：toolchain+MSRV；`start_timeout_sec` 可配置 |
-| D20 | **部分偿还**：CI workflow 已写并推送；本地门禁跑绿（136 单测 + 9 用例）；GitHub 首跑待确认 |
+| D20 | **已还（2026-11-25）**：GitHub Actions 在 `windows-latest` 上绿（136 单测 + clippy -D warnings + fmt） |
 | D11 / ADR-0007 触发条件 | **已满足**：`learner.json` history 14 条（含 2026-11-23 自由说） → 停顿/语速阈值校准与韵律分析可以开始 |

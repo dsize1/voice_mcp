@@ -63,7 +63,7 @@
 |---|---|---|
 | 推送本地 5 个 commit | ⏳ | `main` 领先 `origin/main` 3 个（2026-11-25：语速/伪影+bank refs、s5 复测、默认男声） |
 | 重启 MCP 进程 | ✅ | 2026-11-25：杀子进程 → 重建 `voice-mcp.exe` → Pi 自动重连；实测 `synthesize` 返回 `am_michael` + `speech_duration` + `onset_gap_ms` |
-| CI 首跑 | ⏳ | D20 部分偿还；workflow 已随本轮推送上去，**GitHub 侧结果未验证**（本机无 `gh`；见 `docs/STATE.md`） |
+| CI 首跑 | ✅ | 绿：`530e668`（2026-11-24）+ `3cf8736`（2026-11-25），`windows-latest` 上 `fmt → clippy -D warnings → test` 全过（run 45643953511） |
 
 ---
 
@@ -129,7 +129,8 @@
 | 2026-11-25 | D47 短语音 SNR 豁免；D49 双引擎文本闸门（`text_agreement`）；D04 routing + 3 fixture 单测；会话目录同秒防撞 | `cargo test` 135 单测 + 9 录音回归全绿 |
 | 2026-11-25 | N12：Day 9 听辨/复测口径切到 `chunks-listening-verified/`（原 C1 记录不动） | `weeks/week-02/day-9.md` |
 | 2026-11-25 | 默认音色改为 **am_michael（男声）**（MCP/CLI/GOP 基线三处统一，`DEFAULT_VOICE` 常量 + 单测） | `080e8aa` |
-| 2026-11-25 | MCP 端换新二进制（杀子进程 → 重建 → Pi 自动重连），`synthesize` 实测返回 `am_michael`/`speech_duration`/`onset_gap_ms` | 本次提交 |
+| 2026-11-25 | MCP 端换新二进制（杀子进程 → 重建 → Pi 自动重连），`synthesize` 实测返回 `am_michael`/`speech_duration`/`onset_gap_ms` | `97d7793` |
+| 2026-11-25 | CI 首跑确认绿（D20 部分偿还→偿还）：run [45643953511](https://github.com/dsize1/voice_mcp/actions/runs/45643953511) | 本次推送 |
 
 ---
 

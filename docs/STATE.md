@@ -110,7 +110,7 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 
 S1 级已全部偿还。剩余主要项：
 D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D11 时间戳与阈值（韵律已上线，D12 已还）
-D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（**D20 已有 CI，待首跑**；仍无合成 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
+D15 全局锁串行 · D18 DLL 手工复制 · D21 CI 里的合成 fixture（**D20 已还：Actions 已绿**；仍缺音频 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
 D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）· D46 G2P 同形异音词只取首变体（live/read）· D48 readiness 未自动评估 · D50 韵律 12 条标注验收未做
 D04 whisper 端到端音频回归仍缺（routing + 3 个 fixture 单测已补）
 
@@ -197,8 +197,9 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 - `tools/check.ps1`：`fmt --check` → `clippy --all-targets -D warnings` → `test`，
   可选 `-Cases` 跑录音回归。本地实测：**136 单测 + 9 用例全绿**（2026-11-25）。
 - `.github/workflows/ci.yml`：windows-latest 上跑同一套脚本，先 `fetch_deps.ps1` 取原生库。
-  **已随 2026-11-25 推送上 GitHub，但首跑结果尚未确认**（本机无 `gh`；去 Actions 页看
-  `windows-latest` 上的 `fmt → clippy -D warnings → test`）。D20 只算部分偿还。
+  **GitHub Actions 已跑绿**：`530e668`（2026-11-24）/ `3cf8736`（2026-11-25），
+  `windows-latest` 上 `fmt → clippy -D warnings → test`（136 单测）全过。
+  仍缺的是**合成 fixture**（D21）：CI 里跑不了带音频的 decode/flow 用例。
 - `rust-toolchain.toml` + `Cargo.toml` 的 `rust-version = "1.99"`（实测版本；edition 2024 的理论下限 1.85 未验证）。
 
 同批对齐的文档漂移：

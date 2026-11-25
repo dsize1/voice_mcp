@@ -101,6 +101,9 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
   只有 verified 进 `out/`。10 条 IELTS prompt 已 10/10 verified 3/3（含音素），
   产物 `D:/voice_data/bank/tts-refs/ielts-prompts/`。
 - **词表**：`hometown` 的次重音会让 whisper 拆成 `home town`，已改成 `h ˈ O m t W n`（无次重音）。
+- **默认音色仍是 af_heart**（MCP `synthesize` / CLI `say`）。audit §8 建议改成已验证音色，
+  但改动会让同一轮训练里示范音换人 → **未擅自改**；材料侧的做法是“逐条验证 + 失败换音色”
+  （见 `bank refs`）。要改默认值，先定一条规则（全程一个音色 / 只对 prompt 用男声）。
 
 ## 已知债务（详见 ADR-0008）
 
@@ -234,5 +237,6 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 - **`gop_baseline_valid`**：TTS 基线先 ASR 回读；不一致时禁止 Δ（country/thank/tokyo 已被拦）。
 - verified 听力素材：`D:/code/up-main/up-main/.memory/private/2026-11-24/chunks-listening-verified/`
   - s1–s7 为 `tts-verify` 3/3；s8 人耳确认 `error` 正常（SenseVoice 偏差）。
-  - s5 用 **af_heart 0.7×（159 wpm）** 避开 140 wpm 附近的前置 schwa 伪影；**不采用裁切**。
+  - s5 用 **af_heart 0.7×** 避开 140 wpm 附近的前置 schwa 伪影；**不采用裁切**。
+    旧口径 159 wpm，按语音跨度复测 **168 wpm**（唯一越界的一条，其余 7 条 139–149）。
 - 仍待：批量材料生成接入 `tts-verify`、10 条 IELTS prompt 的 3/3 + phones 复测、TTS “And…” 起始问题。

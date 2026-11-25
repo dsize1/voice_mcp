@@ -124,7 +124,7 @@
 | 2026-11-24 | TTS 默认语速校准：140 wpm（130–160），slow=110；短文本/中文不校准 | 本次提交 |
 | 2026-11-24 | TTS OOV 预检 + overlay + `tts-verify` + `gop_baseline_valid` | 本次提交 |
 | 2026-11-24 | TTS 资产审计：38 项静态 + 10 prompts + 6 baseline 抽样 | [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md) |
-| 2026-11-24 | s1–s8 verified 集；s5 af_heart 0.7×（159 wpm）；s8 error 人耳确认 | `chunks-listening-verified/README.md` |
+| 2026-11-24 | s1–s8 verified 集；s5 af_heart 0.7×（旧口径 159 / 复测 168 wpm）；s8 error 人耳确认 | `chunks-listening-verified/README.md` |
 | 2026-11-25 | TTS 语速口径改为语音跨度 + 最优候选校正 + 起始伪影检测/规避；`bank refs` 批量验证（换语速/换音色回退）；10/10 IELTS prompt 3/3 | [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md) §12 |
 | 2026-11-25 | D47 短语音 SNR 豁免；D49 双引擎文本闸门（`text_agreement`）；D04 routing + 3 fixture 单测；会话目录同秒防撞 | `cargo test` 135 单测 + 9 录音回归全绿 |
 | 2026-11-25 | N12：Day 9 听辨/复测口径切到 `chunks-listening-verified/`（原 C1 记录不动） | `weeks/week-02/day-9.md` |

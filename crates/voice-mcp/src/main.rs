@@ -80,7 +80,7 @@ struct TranscribeParams {
 struct SynthesizeParams {
     /// 待合成文本。**一段文本只能有一种语言**：中文讲解与英文示范请分两次调用
     text: String,
-    /// 音色名（如 af_heart / bf_emma / am_michael / zf_xiaobei）或 sid 数字
+    /// 音色名（默认 am_michael 男声；也可 af_heart / bf_emma / zf_xiaobei）或 sid 数字
     #[serde(default)]
     voice: Option<String>,
     /// 显式倍率（高级用法）；不传则按目标 140 wpm（雅思 130–160）自动校准
@@ -309,7 +309,10 @@ impl VoiceServer {
             let scene = p.scene.clone().unwrap_or_else(|| "tts".into());
             let prefix = session.take_prefix(seq, &scene);
             let targets = voice_core::engine::demo_targets(p.slow_too, p.speed, app.cfg.tts_wpm);
-            let voice = p.voice.clone().unwrap_or_else(|| "af_heart".into());
+            let voice = p
+                .voice
+                .clone()
+                .unwrap_or_else(|| voice_core::engine::DEFAULT_VOICE.to_string());
 
             let files = app.with_engines(|e| {
                 let sid = e.tts.resolve_sid(&voice);

@@ -6,8 +6,8 @@ pub mod vad;
 
 pub use asr::{Asr, AsrEngine, AsrKind, Transcript, Word};
 pub use tts::{
-    IELTS_WPM_DEFAULT, IELTS_WPM_MAX, IELTS_WPM_MIN, KOKORO_VOICES, SpeechTarget, Synthesized,
-    TTS_SLOW_WPM, TtsEngine, VoiceInfo, count_words, demo_targets,
+    DEFAULT_VOICE, IELTS_WPM_DEFAULT, IELTS_WPM_MAX, IELTS_WPM_MIN, KOKORO_VOICES, SpeechTarget,
+    Synthesized, TTS_SLOW_WPM, TtsEngine, VoiceInfo, count_words, demo_targets,
 };
 
 use anyhow::Result;

@@ -165,7 +165,7 @@ sessions/<date>/<hhmmss>_drill/takes/
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `text` | string | ✅ | 待合成文本。**一段文本只能一种语言** |
-| `voice` | string | | 音色名（`af_heart`/`bf_emma`/`am_michael`/`zf_xiaobei`…）或 sid 数字，默认 `af_heart` |
+| `voice` | string | | 音色名（`am_michael`/`am_fenrir`/`bf_emma`/`af_heart`/`zf_xiaobei`…）或 sid 数字，**默认 `am_michael`（男声）** |
 | `speed` | number | | **显式倍率**（高级用法）；不传时按目标 **140 wpm**（雅思区间 130–160）自动校准。传了就以倍率为准 |
 | `play` | bool | | `true` 时由**服务端**播放（Pi 终端放不出声音，必须用这个） |
 | `slow_too` | bool | | 同时生成一对：`label=slow`(**110 wpm**) + `label=norm`(**140 wpm**)；显式 `speed` 时 slow 取 `speed×0.75` |
@@ -361,7 +361,8 @@ $VOICE_HOME (默认 D:/voice_data)
 | their | −0.60 | −0.36 | −0.24（都是低分 → 模型偏好，不怪用户） |
 
 规则：基线 < 0.30 的词直接不报；Δ ≤ −3 且基线 ≥ 4 才算"低于示范"；其余不报。
-声音可用 `VOICE_GOP_BASELINE_VOICE` 指定（默认 `af_heart`）。
+声音可用 `VOICE_GOP_BASELINE_VOICE` 指定，**默认 `am_michael`**（2026-11-25 由 `af_heart` 改来：
+af_heart 在 140 wpm 附近有起始伪影，会让基线自检误判；改后 Δ 与旧记录不可严格横比）。
 
 ## 韵律（`with_prosody=true` / `reference_audio`）
 

@@ -832,7 +832,7 @@ fn say(
     let engines = Engines::load(cfg.clone())?;
     let tts = &engines.tts;
 
-    let voice_name = voice.unwrap_or("af_heart");
+    let voice_name = voice.unwrap_or(voice_core::engine::DEFAULT_VOICE);
     let sid = tts.resolve_sid(voice_name);
 
     let seq = session.next_seq()?;

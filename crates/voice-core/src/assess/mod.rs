@@ -230,7 +230,8 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         && let Some(text) = req.reference
     {
         let sid = engines.tts.resolve_sid(
-            &std::env::var("VOICE_GOP_BASELINE_VOICE").unwrap_or_else(|_| "af_heart".into()),
+            &std::env::var("VOICE_GOP_BASELINE_VOICE")
+                .unwrap_or_else(|_| crate::engine::DEFAULT_VOICE.to_string()),
         );
         match engines
             .tts

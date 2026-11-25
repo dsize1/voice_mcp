@@ -101,9 +101,10 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
   只有 verified 进 `out/`。10 条 IELTS prompt 已 10/10 verified 3/3（含音素），
   产物 `D:/voice_data/bank/tts-refs/ielts-prompts/`。
 - **词表**：`hometown` 的次重音会让 whisper 拆成 `home town`，已改成 `h ˈ O m t W n`（无次重音）。
-- **默认音色仍是 af_heart**（MCP `synthesize` / CLI `say`）。audit §8 建议改成已验证音色，
-  但改动会让同一轮训练里示范音换人 → **未擅自改**；材料侧的做法是“逐条验证 + 失败换音色”
-  （见 `bank refs`）。要改默认值，先定一条规则（全程一个音色 / 只对 prompt 用男声）。
+- **默认音色 = `am_michael`（男声）**（2026-11-25 用户决定，MCP `synthesize` / CLI `say` / GOP 基线三处统一，
+  常量 `voice_core::engine::DEFAULT_VOICE`）。理由：af_heart 在 140 wpm 附近有起始伪影（双 ASR 听成 “And”），
+  am_michael 是 10 条 IELTS prompt 的主力已验证音色。需要女声时显式传 `--voice`。
+  注意：GOP 基线音色同步改了 → **2026-11-25 前后的 Δ 不可严格横比**。
 
 ## 已知债务（详见 ADR-0008）
 

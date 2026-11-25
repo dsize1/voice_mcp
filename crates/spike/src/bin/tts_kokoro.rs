@@ -19,7 +19,7 @@ fn main() -> Result<()> {
     let voice = args
         .get(2)
         .cloned()
-        .unwrap_or_else(|| "af_heart".to_string());
+        .unwrap_or_else(|| voice_core::engine::DEFAULT_VOICE.to_string());
     let dir = args
         .get(3)
         .cloned()

@@ -83,6 +83,14 @@ pub const IELTS_WPM_DEFAULT: f32 = 140.0;
 /// 慢速示范目标（约 NCE 原声的 0.9 倍，仍高于“逐词顿开”）
 pub const TTS_SLOW_WPM: f32 = 110.0;
 
+/// 默认示范音色（**男声**，2026-11-25 用户定）。
+///
+/// 为什么不是 af_heart：af_heart 在 140 wpm 附近会出现“起始多一小段音”的伪影，
+/// 双 ASR 都会听成开头多一个 “And”（audit §11/§12）；am_michael 在同一批句子上
+/// 3/3 verified（10 条 IELTS prompt 里的主力音色）。
+/// 这是**默认值**，不是“唯一可用音色”：材料侧仍逐条验证，必要时回退 am_fenrir。
+pub const DEFAULT_VOICE: &str = "am_michael";
+
 /// 一次合成请求的目标：显式倍率（高级用法）或目标 wpm（默认）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SpeechTarget {
@@ -610,6 +618,20 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), 54, "音色名有重复");
+    }
+
+    #[test]
+    fn default_voice_is_a_male_english_voice_in_the_table() {
+        assert!(
+            KOKORO_VOICES.contains(&DEFAULT_VOICE),
+            "默认音色必须在音色表里"
+        );
+        assert!(
+            DEFAULT_VOICE.starts_with("am_") || DEFAULT_VOICE.starts_with("bm_"),
+            "默认音色按用户决定应为男声，实际 {DEFAULT_VOICE}"
+        );
+        assert_eq!(voice_lang(DEFAULT_VOICE), "en-us");
+        assert_eq!(voice_gender(DEFAULT_VOICE), "male");
     }
 
     #[test]

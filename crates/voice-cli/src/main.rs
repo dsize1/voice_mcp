@@ -319,6 +319,36 @@ enum BankCmd {
     Import { file: String },
     /// 重算全部素材的 tags（纯文本规则，不动音频）
     Retag,
+    /// 批量生成示范音（TTS）并逐条接入 `tts-verify` 验证（D51 / N11）
+    Refs {
+        /// 指定素材 id（可重复）；与 --kind/--corpus 一起用时取交集
+        ids: Vec<String>,
+        /// 只取某一类：read_aloud | prompt
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long)]
+        corpus: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 音色，可重复；按顺序回退（默认 am_michael → am_fenrir）
+        #[arg(long = "voice")]
+        voices: Vec<String>,
+        /// 目标语速（默认 config.tts_wpm / 140）
+        #[arg(long)]
+        wpm: Option<f32>,
+        /// 每条重复验证几次（3/3 才算 verified）
+        #[arg(long, default_value_t = 3)]
+        runs: usize,
+        /// 同时生成 110 wpm 慢速版
+        #[arg(long)]
+        slow_too: bool,
+        /// 跳过音素级检查（更快）
+        #[arg(long)]
+        no_phones: bool,
+        /// 输出目录（写 wav + metadata.json + report.jsonl）
+        #[arg(long)]
+        out: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -478,6 +508,32 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::json!({"retagged": n}));
                 Ok(())
             }
+            BankCmd::Refs {
+                ids,
+                kind,
+                corpus,
+                limit,
+                voices,
+                wpm,
+                runs,
+                slow_too,
+                no_phones,
+                out,
+            } => bank_refs(
+                &cfg,
+                BankRefsArgs {
+                    ids,
+                    kind,
+                    corpus,
+                    limit,
+                    voices,
+                    wpm,
+                    runs,
+                    slow_too,
+                    no_phones,
+                    out,
+                },
+            ),
         },
         Cmd::Mic { secs } => mic(&cfg, &secs),
         Cmd::Rec {
@@ -803,6 +859,9 @@ fn say(
         out.push(serde_json::json!({
             "label": label, "speed": round3(s.speed), "path": p,
             "wpm": round3(s.wpm), "target_wpm": s.target_wpm,
+            "speech_duration": round3(s.speech_duration),
+            // Some(...) = 起始“多出一个音”的伪影（实测 af_heart 会多读成 “And”）
+            "onset_gap_ms": s.onset_gap_ms.map(round3),
             "dur": round3(s.duration), "gen_ms": round3(s.gen_ms as f32),
             "rtf": round3((s.gen_ms / 1000.0 / s.duration as f64) as f32),
         }));
@@ -1689,6 +1748,118 @@ fn tts_audit(cfg: &Config, manifest: &str, out: &str, no_phones: bool) -> Result
     Ok(())
 }
 
+/// 一次合成结果证据化校验：双 ASR 回读 + WPM + 可选音素 GOP。
+///
+/// `tts-verify` 与 `bank refs`（批量材料生成）共用这一个函数，
+/// 保证“verified 资产”的口径只有一处定义（D51 / N11）。
+fn verify_synthesized(
+    engines: &Engines,
+    s: &voice_core::engine::Synthesized,
+    text: &str,
+    no_phones: bool,
+) -> Result<serde_json::Value> {
+    let pcm =
+        voice_core::audio::resample::resample(&s.samples, s.sample_rate, voice_core::INTERNAL_SR);
+    let sv = engines
+        .asr
+        .transcribe(&pcm, voice_core::INTERNAL_SR, "en", Some("sense-voice"))?;
+    let wh = engines
+        .asr
+        .transcribe(&pcm, voice_core::INTERNAL_SR, "en", Some("whisper"))?;
+    let want = voice_core::assess::normalize::words(text);
+    let sv_words = voice_core::assess::normalize::words(&sv.text);
+    let wh_words = voice_core::assess::normalize::words(&wh.text);
+    let sv_ok = sv_words == want;
+    // whisper 会把合成词拆成两个词（`hometown` → `home town`）：只算“词界不一致”，
+    // 不能当成内容错（但也不能算 verified）。
+    let boundary_only = !want.is_empty() && wh_words != want && wh_words.join("") == want.join("");
+    let wh_ok = wh_words == want || boundary_only;
+    // 开头多出一个词（实测 af_heart 在某些慢速点会多读成 “And”）：正文对得上，只是前面多词
+    let extra_leading = |got: &[String]| -> bool {
+        !want.is_empty() && got.len() > want.len() && got.ends_with(&want[..])
+    };
+    let prefix_insert = !sv_ok && extra_leading(&sv_words) || !wh_ok && extra_leading(&wh_words);
+
+    // 130–160 为“达标”；100–180 之外才算硬失败，避免 128/153 这种边界值被直接 reject。
+    let wpm_ok = s
+        .target_wpm
+        .map(|_| {
+            (voice_core::engine::IELTS_WPM_MIN..=voice_core::engine::IELTS_WPM_MAX).contains(&s.wpm)
+        })
+        .unwrap_or(true);
+    let wpm_extreme = s.wpm > 0.0 && !(100.0..=180.0).contains(&s.wpm);
+
+    let (phone_min, phone_suspect, confusions) = if no_phones {
+        (None, false, Vec::<String>::new())
+    } else {
+        let g = voice_core::gop::with_engine(|e| {
+            voice_core::gop::score_text(&mut e.model, &pcm, text, &e.g2p)
+        })?;
+        let min = g
+            .words
+            .iter()
+            .map(|w| w.gop_mean)
+            .fold(f32::INFINITY, f32::min);
+        let min = if min.is_finite() { Some(min) } else { None };
+        let conf: Vec<String> = g
+            .phones
+            .iter()
+            .filter_map(|p| p.confusion.clone())
+            .collect();
+        // 词级 GOP 太低说明 TTS 音频本身偏离参考音素
+        let suspect = min.map(|m| m < -1.5).unwrap_or(false);
+        (min, suspect, conf)
+    };
+
+    let mut reasons: Vec<String> = Vec::new();
+    if !sv_ok {
+        reasons.push("sense_mismatch".into());
+    }
+    if !wh_ok {
+        reasons.push("whisper_mismatch".into());
+    }
+    if !wpm_ok {
+        reasons.push("wpm_out_of_range".into());
+    }
+    if phone_suspect {
+        reasons.push("phone_suspect".into());
+    }
+    if s.onset_gap_ms.is_some() {
+        reasons.push("onset_artifact".into());
+    }
+    if prefix_insert {
+        reasons.push("leading_insert".into());
+    }
+    if boundary_only {
+        reasons.push("word_boundary".into());
+    }
+
+    // 结构上可疑（起始有多余的一小段）且 ASR 也多听出词 → 确定为材料缺陷，直接 reject；
+    // 只有结构信号、ASR 读写正常 → 只降到 review（自然语流里也会有短闭塞，不能硬卡）。
+    let onset_only = s.onset_gap_ms.is_some() && !prefix_insert;
+    let usable = (sv_ok || wh_ok) && !wpm_extreme && !phone_suspect;
+    let verdict = if !usable || (s.onset_gap_ms.is_some() && prefix_insert) {
+        "reject"
+    } else if sv_ok && wh_ok && !boundary_only && wpm_ok && !onset_only {
+        "verified"
+    } else {
+        "review"
+    };
+    Ok(serde_json::json!({
+        "verdict": verdict,
+        "pass": verdict != "reject",
+        "speed": round3(s.speed), "wpm": round3(s.wpm),
+        "target_wpm": s.target_wpm,
+        "speech_duration": round3(s.speech_duration),
+        "onset_gap_ms": s.onset_gap_ms.map(round3),
+        "asr_sense": sv.text, "asr_whisper": wh.text,
+        "sense_match": sv_ok, "whisper_match": wh_ok, "wpm_ok": wpm_ok,
+        "prefix_insert": prefix_insert, "word_boundary_only": boundary_only,
+        "phone_min_gop": phone_min, "phone_suspect": phone_suspect,
+        "confusions": confusions, "reasons": reasons,
+    }))
+}
+
 /// TTS 参考音验证：合成 N 次，双 ASR 回读 + 音素检查 + WPM；失败退出码 2。
 #[allow(clippy::too_many_arguments)]
 fn tts_verify(
@@ -1710,7 +1881,6 @@ fn tts_verify(
     } else {
         voices.to_vec()
     };
-    let want = voice_core::assess::normalize::words(text);
     let mut rows: Vec<serde_json::Value> = Vec::new();
     let mut any_reject = false;
     let mut all_verified = true;
@@ -1720,62 +1890,8 @@ fn tts_verify(
         for run in 1..=runs.max(1) {
             let row = (|| -> Result<serde_json::Value> {
                 let s = engines.tts.synthesize_at_wpm(text, sid, target)?;
-                let pcm = voice_core::audio::resample::resample(
-                    &s.samples,
-                    s.sample_rate,
-                    voice_core::INTERNAL_SR,
-                );
-                let sv = engines.asr.transcribe(
-                    &pcm,
-                    voice_core::INTERNAL_SR,
-                    "en",
-                    Some("sense-voice"),
-                )?;
-                let wh =
-                    engines
-                        .asr
-                        .transcribe(&pcm, voice_core::INTERNAL_SR, "en", Some("whisper"))?;
-                let sv_ok = voice_core::assess::normalize::words(&sv.text) == want;
-                let wh_ok = voice_core::assess::normalize::words(&wh.text) == want;
-                // 130–160 为“达标”；100–180 之外才算硬失败，避免 128/153
-                // 这种边界值被直接 reject。
-                let wpm_ok = s
-                    .target_wpm
-                    .map(|_| (130.0..=160.0).contains(&s.wpm))
-                    .unwrap_or(true);
-                let wpm_extreme = s.wpm > 0.0 && !(100.0..=180.0).contains(&s.wpm);
-
-                let (phone_min, phone_suspect, confusions) = if no_phones {
-                    (None, false, Vec::<String>::new())
-                } else {
-                    let g = voice_core::gop::with_engine(|e| {
-                        voice_core::gop::score_text(&mut e.model, &pcm, text, &e.g2p)
-                    })?;
-                    let min = g
-                        .words
-                        .iter()
-                        .map(|w| w.gop_mean)
-                        .fold(f32::INFINITY, f32::min);
-                    let min = if min.is_finite() { Some(min) } else { None };
-                    let conf: Vec<String> = g
-                        .phones
-                        .iter()
-                        .filter_map(|p| p.confusion.clone())
-                        .collect();
-                    // 词级 GOP 太低说明 TTS 音频本身偏离参考音素
-                    let suspect = min.map(|m| m < -1.5).unwrap_or(false);
-                    (min, suspect, conf)
-                };
-                let both = sv_ok && wh_ok;
-                let usable = (sv_ok || wh_ok) && !wpm_extreme && !phone_suspect;
-                let verdict = if !usable {
-                    "reject"
-                } else if both && wpm_ok {
-                    "verified"
-                } else {
-                    "review"
-                };
-                let pass = verdict != "reject";
+                // 先回读校验，再落盘（落盘只做留证）
+                let mut v = verify_synthesized(&engines, &s, text, no_phones)?;
                 let label = format!("{voice}_{run}");
                 let path = session.write_reference(
                     &prefix,
@@ -1788,15 +1904,10 @@ fn tts_verify(
                     s.wpm,
                     s.target_wpm,
                 )?;
-                Ok(serde_json::json!({
-                    "voice": voice, "run": run, "pass": pass, "verdict": verdict,
-                    "speed": round3(s.speed), "wpm": round3(s.wpm),
-                    "target_wpm": s.target_wpm,
-                    "asr_sense": sv.text, "asr_whisper": wh.text,
-                    "sense_match": sv_ok, "whisper_match": wh_ok, "wpm_ok": wpm_ok,
-                    "phone_min_gop": phone_min, "phone_suspect": phone_suspect,
-                    "confusions": confusions, "wav": path,
-                }))
+                v["voice"] = serde_json::json!(voice);
+                v["run"] = serde_json::json!(run);
+                v["wav"] = serde_json::json!(path);
+                Ok(v)
             })();
             match row {
                 Ok(v) => {
@@ -1864,9 +1975,290 @@ fn tts_verify(
     }
     if summary_verdict == "review" {
         eprintln!(
-            "[tts-verify] 需人工复核（单引擎不一致）；报告 {}",
+            "[tts-verify] 需人工复核（单引擎不一致/边界语速）；报告 {}",
             session.dir.display()
         );
+    }
+    Ok(())
+}
+
+struct BankRefsArgs {
+    ids: Vec<String>,
+    kind: Option<String>,
+    corpus: Option<String>,
+    limit: Option<usize>,
+    voices: Vec<String>,
+    wpm: Option<f32>,
+    runs: usize,
+    slow_too: bool,
+    no_phones: bool,
+    out: String,
+}
+
+/// 批量生成示范音（TTS）并逐条接入 `tts-verify`（D51 / N11）。
+///
+/// 产出的每个 wav 都带双 ASR 回读、WPM、起始伪影与（可选）音素证据；
+/// `metadata.json` 里的 `status` 只能是 verified / review / reject。
+fn bank_refs(cfg: &Config, a: BankRefsArgs) -> Result<()> {
+    use voice_core::bank;
+
+    let home = Path::new(&cfg.data_dir);
+    let idx = bank::read_index(home)?;
+    let mut picked: Vec<bank::BankEntry> = idx
+        .into_iter()
+        .filter(|e| {
+            a.kind
+                .as_deref()
+                .map(|k| e.kind.eq_ignore_ascii_case(k))
+                .unwrap_or(true)
+                && a.corpus
+                    .as_deref()
+                    .map(|c| e.corpus.eq_ignore_ascii_case(c))
+                    .unwrap_or(true)
+        })
+        .collect();
+    if !a.ids.is_empty() {
+        // 保持用户给的顺序
+        let mut ordered = Vec::new();
+        for id in &a.ids {
+            if let Some(pos) = picked.iter().position(|e| &e.id == id) {
+                ordered.push(picked.remove(pos));
+            } else {
+                bail!("素材库里没有 id={id}");
+            }
+        }
+        picked = ordered;
+    }
+    if let Some(n) = a.limit {
+        picked.truncate(n);
+    }
+    if picked.is_empty() {
+        bail!("没有匹配的素材（--kind/--corpus/ids 全空？先跑 bank list）");
+    }
+
+    let out = PathBuf::from(&a.out);
+    std::fs::create_dir_all(&out)?;
+    let store = Store::open(&cfg.data_dir)?;
+    let session = store.new_session("bank_refs")?;
+    let engines = Engines::load(cfg.clone())?;
+    let target = a.wpm.unwrap_or(cfg.tts_wpm);
+    // 音色回退链：同一句在不同音色下读坏的情况差别很大（实测 "Describe a place" 在
+    // am_michael/af_heart 下会丢 a，am_fenrir 下干净）。按顺序试到 verified 为止。
+    let voices: Vec<String> = if a.voices.is_empty() {
+        vec!["am_michael".into(), "am_fenrir".into()]
+    } else {
+        a.voices.clone()
+    };
+    let runs = a.runs.max(1);
+
+    let mut meta: Vec<serde_json::Value> = Vec::new();
+    let mut report: Vec<serde_json::Value> = Vec::new();
+    let mut counts = [0usize; 3]; // verified / review / reject
+
+    for e in &picked {
+        let slug_i = e.id.replace(['/', '\\', ' '], "_");
+        let mut variants: Vec<(&str, f32)> = vec![("norm", target)];
+        if a.slow_too {
+            variants.push(("slow", voice_core::engine::TTS_SLOW_WPM));
+        }
+        let mut entry_done = false;
+        let mut pending: Vec<serde_json::Value> = Vec::new();
+        for (voice_i, voice) in voices.iter().enumerate() {
+            if entry_done {
+                break;
+            }
+            let voice = voice.clone();
+            let sid = engines.tts.resolve_sid(&voice);
+            let mut failed_variant = false;
+            for (variant, base_wpm) in &variants {
+                let variant = *variant;
+                let base_wpm = *base_wpm;
+                let mut slug = if variant == "norm" {
+                    slug_i.clone()
+                } else {
+                    format!("{slug_i}.{variant}")
+                };
+                if voice_i > 0 {
+                    // 回退音色的产物另存一份，不覆盖主力音色的音频
+                    slug = format!("{slug}.{voice}");
+                }
+                // 自动重试：合成音在 140 wpm 附近会吞掉弱读词（实测 "Describe a place" → "Describe place"），
+                // 换个目标语速（仍在 130–160）通常能修好。每个目标都要 3/3 才算 verified。
+                let mut attempts: Vec<f32> = vec![base_wpm];
+                for d in [4.0f32, -4.0] {
+                    let w = base_wpm + d;
+                    if (voice_core::engine::IELTS_WPM_MIN..=voice_core::engine::IELTS_WPM_MAX)
+                        .contains(&w)
+                        && !attempts.iter().any(|x| (x - w).abs() < 0.01)
+                    {
+                        attempts.push(w);
+                    }
+                }
+                let n_attempts = attempts.len();
+                for (attempt_i, wpm) in attempts.iter().enumerate() {
+                    let mut rows: Vec<serde_json::Value> = Vec::new();
+                    let mut any_reject = false;
+                    let mut all_verified = true;
+                    let mut wav_path = String::new();
+                    let mut dur = 0.0f64;
+                    for run in 1..=runs {
+                        let row = (|| -> Result<serde_json::Value> {
+                            let s = engines.tts.synthesize_at_wpm(&e.text, sid, *wpm)?;
+                            let mut v = verify_synthesized(&engines, &s, &e.text, a.no_phones)?;
+                            let label = format!("{slug}_{run}");
+                            let ev = session.write_reference(
+                                &slug,
+                                &label,
+                                &s.samples,
+                                s.sample_rate,
+                                &e.text,
+                                &s.voice,
+                                s.speed,
+                                s.wpm,
+                                s.target_wpm,
+                            )?;
+                            if run == 1 {
+                                let name = if attempt_i == 0 {
+                                    format!("{slug}.wav")
+                                } else {
+                                    format!("{slug}.wpm{:.0}.wav", wpm)
+                                };
+                                let p = out.join(name);
+                                voice_core::audio::wav::write_wav_i16(
+                                    &p,
+                                    &s.samples,
+                                    s.sample_rate,
+                                )?;
+                                wav_path = p.to_string_lossy().to_string();
+                                dur = s.duration as f64;
+                            }
+                            v["id"] = serde_json::json!(e.id);
+                            v["variant"] = serde_json::json!(variant);
+                            v["run"] = serde_json::json!(run);
+                            v["attempt"] = serde_json::json!(attempt_i);
+                            v["evidence"] = serde_json::json!(ev);
+                            Ok(v)
+                        })();
+                        match row {
+                            Ok(v) => {
+                                any_reject |= v["verdict"] == "reject";
+                                all_verified &= v["verdict"] == "verified";
+                                rows.push(v);
+                            }
+                            Err(err) => {
+                                any_reject = true;
+                                all_verified = false;
+                                rows.push(serde_json::json!({
+                                    "id": e.id, "variant": variant, "run": run,
+                                    "pass": false, "verdict": "reject",
+                                    "error": format!("{err:#}"),
+                                }));
+                            }
+                        }
+                    }
+                    let status = if any_reject {
+                        "reject"
+                    } else if all_verified {
+                        "verified"
+                    } else {
+                        "review"
+                    };
+                    let pass_runs = rows
+                        .iter()
+                        .filter(|r| r["pass"].as_bool().unwrap_or(false))
+                        .count();
+                    let accepted = status == "verified";
+                    let first = rows.first().cloned().unwrap_or_default();
+                    let entry = serde_json::json!({
+                        "id": e.id,
+                        "variant": variant,
+                        "text": e.text,
+                        "level": e.level,
+                        "voice": voice,
+                        "status": status,
+                        "attempt": attempt_i,
+                        "target_wpm": wpm,
+                        "runs": runs,
+                        "pass_runs": pass_runs,
+                        "wpm": first["wpm"],
+                        "speed": first["speed"],
+                        "duration": round3(dur as f32),
+                        "onset_gap_ms": first["onset_gap_ms"],
+                        "reasons": first["reasons"],
+                        "wav": wav_path,
+                        "evidence_dir": session.dir.to_string_lossy().to_string(),
+                    });
+                    report.extend(rows);
+                    eprintln!(
+                        "[bank refs] {:<28} {variant:<4} wpm{:<5.0} {status:<8} {}/{}",
+                        e.id, wpm, runs, pass_runs
+                    );
+                    if accepted {
+                        // 只有 verified 的尝试进入 metadata；前面失败的尝试只留在 report.jsonl
+                        pending.push(entry);
+                        break;
+                    }
+                    if attempt_i + 1 == n_attempts {
+                        // 所有目标语速都失败：登记最后一次判定，并标记该变体未过
+                        pending.push(entry);
+                        failed_variant = true;
+                    } else {
+                        eprintln!("[bank refs]   ↳ 换目标语速重试（{} wpm 未通过）", wpm);
+                    }
+                }
+            }
+            if !failed_variant {
+                entry_done = true;
+            } else if voice_i + 1 < voices.len() {
+                eprintln!("[bank refs]   ↳ 换音色重试（{} 未通过：{}）", voice, e.id);
+            }
+        }
+        if entry_done {
+            // 成功：只留 verified 的产物（失败音色的尝试在 report.jsonl 里）
+            for m in pending.iter().filter(|m| m["status"] == "verified") {
+                counts[0] += 1;
+                meta.push(m.clone());
+            }
+        } else {
+            for m in pending {
+                match m["status"].as_str().unwrap_or("reject") {
+                    "review" => counts[1] += 1,
+                    _ => counts[2] += 1,
+                }
+                meta.push(m);
+            }
+        }
+    }
+
+    let meta_path = out.join("metadata.json");
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
+    let report_path = out.join("report.jsonl");
+    let body = report
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join(
+            "
+",
+        );
+    std::fs::write(&report_path, format!("{body}\n"))?;
+
+    let summary = serde_json::json!({
+        "assets": meta.len(),
+        "verified": counts[0], "review": counts[1], "reject": counts[2],
+        "voices": voices, "target_wpm": target, "runs": runs,
+        "metadata": meta_path.to_string_lossy(),
+        "report": report_path.to_string_lossy(),
+        "evidence_dir": session.dir.to_string_lossy(),
+    });
+    println!("{}", serde_json::to_string_pretty(&summary)?);
+    if counts[2] > 0 {
+        eprintln!(
+            "[bank refs] {} 项未通过：不进教学/听力材料（报告 {}）",
+            counts[2],
+            report_path.display()
+        );
+        std::process::exit(2);
     }
     Ok(())
 }

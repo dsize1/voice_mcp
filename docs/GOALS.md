@@ -1,6 +1,6 @@
 # 目标与进度（近期 / 远期）
 
-> 更新：2026-11-24 · 状态图例：✅ 完成 · 🟡 进行中 · ⛔ 阻塞 · ⏳ 未开始 · 🅿️ 挂起
+> 更新：2026-11-25 · 状态图例：✅ 完成 · 🟡 进行中 · ⛔ 阻塞 · ⏳ 未开始 · 🅿️ 挂起
 >
 > 相关：[STATE.md](STATE.md)（交接）· [levels.md](levels.md)（等级与自由说 gate）·
 > [ADR-0008](adr/0008-technical-debt.md)（技术债务）· [ADR-0009](adr/0009-drill-library.md)（素材库）·
@@ -16,8 +16,8 @@
 | 自由说 | **关闭**（`readiness.free_speech_enabled=false`）；L3 后做 30–45 s 提纲，L4 才做 60 s 无稿 |
 | 素材库 | **5 007 条**（NCE 4 997 + IELTS prompt 10），可直接练 3 378 |
 | 诊断能力 | 词级 diff + flow + 词级 GOP（TTS 基线/混淆对）+ 韵律（F0/升降/平调/重音候选/DTW） |
-| TTS | 默认 **140 wpm**（130–160），slow=110；OOV 预检 + `tts-verify`（双 ASR/音素/WPM/3 次）+ 基线自检；verified 听力集见 STATE |
-| 债务 | D01–D51 已登记；2026-11-24 新增 D46–D51 |
+| TTS | 默认 **140 wpm**（130–160），slow=110；WPM 按**语音跨度**；起始伪影检测 + 自动换速度/换音色；OOV 预检 + `tts-verify` + `bank refs` 批量验证；verified 听力集/10 条 prompt 见 STATE |
+| 债务 | D01–D51 已登记；**2026-11-25 还 D47/D49/D51，D04 部分偿还** |
 | 近期训练 | 计划 **7/7 项**完成；`/θ/` 词首/词尾修正；144 wpm 下 `/θ/`、`/v/` 守住 |
 | 本地提交 | 2026-11-24 已推送 |
 
@@ -29,9 +29,9 @@
 
 | ID | 目标 | 状态 | 验收 | 依赖 |
 |---|---|---|---|---|
-| **N1** | D04：whisper 路径回归（token→词、标点、无时间戳降级） | ⏳ | 3 个 fixture + routing 测试；`mixed` 不再只靠手测 | 无 |
-| **N2** | D49：文本可用性闸门（声学过闸但 ASR 不可用） | ⏳ | 双引擎一致率/coverage 低于阈值 → 只出 flow/prosody + limitation | N1 同批 |
-| **N3** | D47：短语音（<2 s）SNR 误杀单词 drill | ⏳ | 1.5–2.5 s、peak ≥−25 的 drill 不再被 SNR 拒 | 无 |
+| **N1** | D04：whisper 路径回归（token→词、标点、无时间戳降级） | 🟡 | routing 单测 ✅ + 3 个 fixture ✅；**端到端 whisper 音频回归仍缺** | 无 |
+| **N2** | D49：文本可用性闸门（声学过闸但 ASR 不可用） | ✅ | `assess.text_agreement`（LCS 一致率）<0.7 → `degraded` + 只出 flow/prosody；9 条录音回归无误杀 | N1 同批 |
+| **N3** | D47：短语音（<2 s）SNR 误杀单词 drill | ✅ | `snr_verdict`：语音跨度 <3 s 且 peak ≥−25 → 不降级（只记 limitation），GOP 照跑 | 无 |
 
 ### B. 让反馈正确
 
@@ -54,8 +54,8 @@
 |---|---|---|---|---|
 | **N9** | 雅思素材入库（先 1 本 / Part 1） | ⛔ | 至少 200 条 IELTS 可练素材 | **缺源音频 + LRC/字幕** |
 | **N10** | 外部录音（手机/系统录音机）可用性 | 🟡 | 3 条录音双引擎一致率 ≥0.8，能出词级结论 | 与 N2 联动 |
-| **N11** | TTS 参考音验证（D51）：OOV 预检 + 双 ASR/音素/WPM + 基线自检 | ✅ 工具已上线 | `tts-verify` 3/3；OOV 0；`gop_baseline_valid` 生效 | 剩余：批量材料接入 + prompts 3/3 |
-| **N12** | Day 9 听力改用 `chunks-listening-verified/` 并更新答案键/训练记录 | ⏳ | 记录指向 verified 目录；原文件不动 | 与 N11 联动 |
+| **N11** | TTS 参考音验证（D51）：OOV 预检 + 双 ASR/音素/WPM + 基线自检 | ✅ | `tts-verify` 3/3；OOV 0；`gop_baseline_valid` 生效；**`bank refs` 批量接入**；**10/10 IELTS prompt verified 3/3（含音素）** | 无 |
+| **N12** | Day 9 听力改用 `chunks-listening-verified/` 并更新答案键/训练记录 | ✅ | `day-9.md` 材料表 + `chunks-recall(.md/-key.md)` + 会话记录全部指向 verified；原文件未动；复测口径已写清（只有 s5 = 168 wpm 越界） | — |
 
 ### E. 运维收尾
 
@@ -125,6 +125,9 @@
 | 2026-11-24 | TTS OOV 预检 + overlay + `tts-verify` + `gop_baseline_valid` | 本次提交 |
 | 2026-11-24 | TTS 资产审计：38 项静态 + 10 prompts + 6 baseline 抽样 | [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md) |
 | 2026-11-24 | s1–s8 verified 集；s5 af_heart 0.7×（159 wpm）；s8 error 人耳确认 | `chunks-listening-verified/README.md` |
+| 2026-11-25 | TTS 语速口径改为语音跨度 + 最优候选校正 + 起始伪影检测/规避；`bank refs` 批量验证（换语速/换音色回退）；10/10 IELTS prompt 3/3 | [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md) §12 |
+| 2026-11-25 | D47 短语音 SNR 豁免；D49 双引擎文本闸门（`text_agreement`）；D04 routing + 3 fixture 单测；会话目录同秒防撞 | `cargo test` 135 单测 + 9 录音回归全绿 |
+| 2026-11-25 | N12：Day 9 听辨/复测口径切到 `chunks-listening-verified/`（原 C1 记录不动） | `weeks/week-02/day-9.md` |
 
 ---
 

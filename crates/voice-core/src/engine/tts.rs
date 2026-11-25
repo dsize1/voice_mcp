@@ -125,8 +125,14 @@ pub struct Synthesized {
     pub speed: f32,
     /// 文本词数（ASCII 词；中文为 0）
     pub words: usize,
-    /// 实际语速（词/分钟）
+    /// 实际语速（词/分钟）——按**语音跨度**计（去掉首尾静音，见 `speech_span`）
     pub wpm: f32,
+    /// 语音跨度（秒）：首个到最后一个有声帧，不含首尾静音
+    pub speech_duration: f32,
+    /// 起始伪影的停顿长度（ms）。Some(值) 表示“先出一个短音 → 停顿 → 才进正文”，
+    /// 实测 af_heart 在某些速度点会把这段读成多一个 “And”。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub onset_gap_ms: Option<f32>,
     /// 本次请求的目标 wpm（显式 speed 时为 None）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_wpm: Option<f32>,
@@ -292,10 +298,23 @@ impl TtsEngine {
         let samples = audio.samples().to_vec();
         let duration = samples.len() as f32 / self.sample_rate as f32;
         let words = count_words(text);
-        let wpm = if duration > 0.0 {
-            words as f32 / duration * 60.0
+        // 语速按语音跨度算：Kokoro 会在首尾留 0.1–0.4 s 近静音，按总时长算会
+        // 系统性低估（实测长句目标 140 量到 128，导致语速校正循环来回震荡）。
+        let speech_duration = speech_span(&samples, self.sample_rate)
+            .map(|(a, b)| b - a)
+            .filter(|d| *d >= 0.2)
+            .unwrap_or(duration);
+        let wpm = if speech_duration > 0.0 {
+            words as f32 / speech_duration * 60.0
         } else {
             0.0
+        };
+        // 只有 ≥3 词的句子才查起始伪影：单词/两词 drill 里 fricative+塞音本身就有一段
+        // 低电平（如 `Thank you`），查了全是噪声，而短文本本来也不做 WPM 校准。
+        let onset_gap_ms = if words >= 3 {
+            onset_gap_ms(&samples, self.sample_rate)
+        } else {
+            None
         };
         Ok(Synthesized {
             samples,
@@ -310,6 +329,8 @@ impl TtsEngine {
             speed,
             words,
             wpm,
+            speech_duration,
+            onset_gap_ms,
             target_wpm: None,
             gen_ms,
         })
@@ -333,17 +354,49 @@ impl TtsEngine {
             return self.synthesize(text, sid, sp);
         }
         let probe = self.synthesize(text, sid, 1.0)?;
-        let measured = probe.wpm.max(1.0);
-        let mut speed = (target / measured).clamp(0.4, 1.2);
-        let mut out = self.synthesize(text, sid, speed)?;
-        // 最多再校正 2 次：Kokoro 的 speed→wpm 不是严格线性，长句尤其明显
-        for _ in 0..2 {
-            if (out.wpm - target).abs() <= target * 0.03 {
+        // 语速校正：Kokoro 的 speed→wpm 不是连续函数（某些速度点之间时长跳变 0.8 s），
+        // 旧实现“只采用最后一次结果”会落回跳变另一侧（实测 af_heart 目标 140 得到 128）。
+        // 这里改为**保留最优候选**：先看语速是否落在目标 ±6%，再看有无起始伪影，最后看距离。
+        let mut best = probe.clone();
+        let mut speed = (target / probe.wpm.max(1.0)).clamp(0.4, 1.2);
+        let mut tried: Vec<f32> = vec![1.0];
+        for _ in 0..4 {
+            if tried.iter().any(|s| (s - speed).abs() < 1e-3) {
                 break;
             }
-            speed = (speed * target / out.wpm.max(1.0)).clamp(0.4, 1.2);
-            out = self.synthesize(text, sid, speed)?;
+            tried.push(speed);
+            let out = self.synthesize(text, sid, speed)?;
+            if rank(&out, target) < rank(&best, target) {
+                best = out;
+            }
+            if best.onset_gap_ms.is_none() && (best.wpm - target).abs() <= target * 0.03 {
+                break;
+            }
+            if best.wpm <= 1.0 {
+                break;
+            }
+            speed = (speed * target / best.wpm).clamp(0.4, 1.2);
         }
+        // 有起始伪影 → 换速度重试（策略：换速度/换音色，不裁音频；见 audit §11）
+        if best.onset_gap_ms.is_some() {
+            let base = best.speed;
+            for k in [1.04f32, 0.96, 1.08, 0.92] {
+                if tried.len() >= 7 {
+                    break;
+                }
+                let sp = (base * k).clamp(0.4, 1.2);
+                let out = self.synthesize(text, sid, sp)?;
+                tried.push(sp);
+                if out.onset_gap_ms.is_none() && rank(&out, target) < rank(&best, target) {
+                    best = out.clone();
+                }
+                if out.onset_gap_ms.is_none() && (out.wpm - target).abs() <= target * 0.06 {
+                    best = out;
+                    break;
+                }
+            }
+        }
+        let mut out = best;
         out.target_wpm = Some(target);
         Ok(out)
     }
@@ -419,6 +472,108 @@ pub fn count_words(text: &str) -> usize {
     text.split_whitespace()
         .filter(|w| w.chars().any(|c| c.is_ascii_alphanumeric()))
         .count()
+}
+
+/// 10 ms 帧的 RMS 电平（dBFS）。
+fn frame_dbs(samples: &[f32], sr: u32) -> (Vec<f32>, f32) {
+    let hop = (sr as usize / 100).max(1);
+    let dbs: Vec<f32> = samples
+        .chunks(hop)
+        .map(|c| {
+            let ms: f32 = c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32;
+            let rms = ms.sqrt();
+            if rms <= 1e-9 {
+                -120.0
+            } else {
+                20.0 * rms.log10()
+            }
+        })
+        .collect();
+    let hop_sec = hop as f32 / sr.max(1) as f32;
+    (dbs, hop_sec)
+}
+
+/// 语音跨度（秒）：首个到最后一个“接近峰值”的 10 ms 帧，去掉首尾静音。
+///
+/// 门限取 `峰值 − 40 dB`：比 VAD 宽松，但足以排除首尾数字静音与低幅起始伪影。
+fn speech_span(samples: &[f32], sr: u32) -> Option<(f32, f32)> {
+    let (dbs, hop_sec) = frame_dbs(samples, sr);
+    if dbs.len() < 3 {
+        return None;
+    }
+    let peak = dbs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if !peak.is_finite() || peak < -70.0 {
+        return None;
+    }
+    let thr = peak - 40.0;
+    let first = dbs.iter().position(|d| *d >= thr)?;
+    let last = dbs.iter().rposition(|d| *d >= thr)?;
+    if last <= first {
+        return None;
+    }
+    Some((first as f32 * hop_sec, (last + 1) as f32 * hop_sec))
+}
+
+/// 起始伪影：首段短音 → 停顿（≥20 ms）→ 正文。
+///
+/// 实测（audit tts-2026-11-24 §11）：af_heart 在某些速度点先发 0.10–0.16 s 低幅浊音，
+/// 停顿后才是正文，双 ASR 都会多听出一个 “And”。判定条件三条同时成立：
+/// 1. 停顿 ≥ 20 ms 且在开始 0.6 s 内；
+/// 2. 停顿前那段 ≤ 300 ms（伪影很短，真词不会这么短）；
+/// 3. 停顿前比停顿后“整体偏轻”（≥3 dB）——排除词内爆破音闭塞（那是响的一侧在前后文里）。
+fn onset_gap_ms(samples: &[f32], sr: u32) -> Option<f32> {
+    let (dbs, hop_sec) = frame_dbs(samples, sr);
+    if dbs.len() < 10 {
+        return None;
+    }
+    let peak = dbs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if !peak.is_finite() || peak < -70.0 {
+        return None;
+    }
+    // 注意：peak 是**帧 RMS** 峰值（比采样峰值低 6–10 dB），所以门限用 −25 dB
+    // 而不是 −35（实测 af_heart 的 s5/天气句伪影帧在 −36…−45 dB 之间）。
+    let thr = peak - 25.0;
+    let limit = ((0.6 / hop_sec) as usize).min(dbs.len());
+    let first = dbs[..limit].iter().position(|d| *d >= thr)?;
+    let mut i = first;
+    while i < limit {
+        if dbs[i] >= thr {
+            i += 1;
+            continue;
+        }
+        let quiet_start = i;
+        while i < limit && dbs[i] < thr {
+            i += 1;
+        }
+        let quiet = i - quiet_start;
+        if quiet >= 2 && quiet_start > first {
+            let pre = &dbs[first..quiet_start];
+            let post_end = (i + 8).min(dbs.len());
+            let post = &dbs[i..post_end];
+            if pre.len() <= 30 && post.len() >= 3 && post.iter().any(|d| *d >= thr) {
+                let pre_mean = pre.iter().sum::<f32>() / pre.len() as f32;
+                let post_mean = post.iter().sum::<f32>() / post.len() as f32;
+                if pre_mean + 3.0 < post_mean {
+                    return Some(quiet as f32 * hop_sec * 1000.0);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 候选排序：先看是否落在目标 ±6% 内，再看有无起始伪影，最后看距离。
+///
+/// 顺序很重要：如果只看“无伪影”，很慢的候选（实测 93 wpm）会脍过
+/// 140 wpm 但带起始伪影的候选——语速直接超出雅思区间，材料不可用。
+fn rank(s: &Synthesized, target: f32) -> (u8, u8, f32) {
+    let off_band = if (s.wpm - target).abs() > target * 0.06 {
+        1
+    } else {
+        0
+    };
+    let artifact = if s.onset_gap_ms.is_some() { 1 } else { 0 };
+    (off_band, artifact, (s.wpm - target).abs())
 }
 
 fn voice_lang(name: &str) -> String {
@@ -512,6 +667,49 @@ mod tests {
         let words = 10.0f32;
         let dur = 4.286f32;
         assert!((words / dur * 60.0 - 140.0).abs() < 0.5);
+    }
+
+    /// 生成 24 kHz 测试信号：若干段（振幅, 秒）拼接。
+    fn synth(segments: &[(f32, f32)]) -> Vec<f32> {
+        let sr = 24_000usize;
+        let mut out = Vec::new();
+        for (amp, secs) in segments {
+            let n = (*secs * sr as f32) as usize;
+            for i in 0..n {
+                let t = i as f32 / sr as f32;
+                out.push(amp * (2.0 * std::f32::consts::PI * 180.0 * t).sin());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn speech_span_trims_leading_and_trailing_silence() {
+        let s = synth(&[(0.0, 0.2), (0.3, 1.0), (0.0, 0.3)]);
+        let (a, b) = speech_span(&s, 24_000).expect("应能找到语音跨度");
+        assert!((a - 0.2).abs() < 0.02, "起点 {a}");
+        assert!((b - 1.2).abs() < 0.02, "终点 {b}");
+    }
+
+    #[test]
+    fn onset_gap_flags_quiet_blob_before_body() {
+        // 0.1 s 静音 → 0.15 s 低幅“a” → 0.04 s 停顿 → 0.5 s 正文
+        let s = synth(&[(0.0, 0.1), (0.03, 0.15), (0.0, 0.04), (0.3, 0.5)]);
+        let gap = onset_gap_ms(&s, 24_000).expect("应识别出起始伪影");
+        assert!((20.0..=60.0).contains(&gap), "gap={gap}");
+    }
+
+    #[test]
+    fn onset_gap_ignores_word_internal_closure() {
+        // 词内爆破音闭塞：停顿前比停顿后更响（真词），不能当成伪影
+        let s = synth(&[(0.0, 0.1), (0.3, 0.2), (0.0, 0.05), (0.25, 0.4)]);
+        assert!(onset_gap_ms(&s, 24_000).is_none());
+    }
+
+    #[test]
+    fn onset_gap_none_for_continuous_speech() {
+        let s = synth(&[(0.0, 0.1), (0.3, 0.6), (0.0, 0.2)]);
+        assert!(onset_gap_ms(&s, 24_000).is_none());
     }
 
     #[test]

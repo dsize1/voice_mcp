@@ -338,6 +338,9 @@ impl VoiceServer {
                         "label": label, "speed": round3(s.speed), "path": path,
                         "wpm": round3(s.wpm), "target_wpm": s.target_wpm,
                         "duration": round3(s.duration),
+                        "speech_duration": round3(s.speech_duration),
+                        // Some(...) = 起始多出一个音的伪影；非 None 时不要直接当示范音
+                        "onset_gap_ms": s.onset_gap_ms.map(round3),
                         "gen_ms": round3(s.gen_ms as f32),
                         "rtf": round3((s.gen_ms / 1000.0 / s.duration as f64) as f32),
                     }));

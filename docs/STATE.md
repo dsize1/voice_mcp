@@ -1,12 +1,12 @@
 # 当前状态与下一步（交接用）
 
-> 写于 2026-11-19，最后更新 2026-11-24（TTS 语速/OOV/验证 + 资产审计）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
+> 写于 2026-11-19，最后更新 2026-11-25（TTS 语速口径/伪影规避/批量验证 + D47/D49）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
 > 再读这一页、README / CONTRACT / ADR。
 
 ## 一句话现状
 
 **P3 闭环 + P4 素材库（NCE 4 997 + IELTS prompt 10 = 5 007 条）+ 音素级 GOP（词级口径）+ 韵律分析均已上线并在真机验证。**
-`crates` 10 400+ 行 Rust，**120 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
+`crates` 10 400+ 行 Rust，**135 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
 已由 `tools/check.ps1` 与 GitHub Actions 守住（ADR-0008 D45）。
 下一步：雅思素材入库 + 按 `error_stats` 做定向训练。
 
@@ -15,7 +15,7 @@
 | 项 | 数值 |
 |---|---|
 | ASR SenseVoice int8 | 6 s 音频 82 ms（RTF 0.013）；81 s 音频分块后 2.3 s（RTF 0.028） |
-| TTS Kokoro 82M | RTF 0.21，24 kHz，54 音色；**默认 140 wpm**（130–160），slow=110；短文本/中文不按 WPM 校准 |
+| TTS Kokoro 82M | RTF 0.21，24 kHz，54 音色；**默认 140 wpm**（130–160），slow=110；短文本/中文不按 WPM 校准；WPM 按**语音跨度**算 |
 | 引擎冷启动 | 1.7 s（ASR 与 TTS 并行加载） |
 | `.m4a`/mp3 解码 | 纯 Rust（symphonia），6 s 音频 1.8 ms |
 | 麦克风（EDIFIER W820NB 蓝牙 HFP 端点） | 48 kHz 单声道 F32 可用；底噪 p50 −54.7 / p99 −46 dBFS（**偏高，AGC 强**） |
@@ -59,6 +59,8 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe bank drill nce1/019/003                            # 播原生音频
 ./target/release/voice-cli.exe lesson <mp3> --lrc <lrc> --verbose
 ./target/release/voice-cli.exe tts-audit --manifest <jsonl> --out <report.jsonl>  # 只读审计 TTS 资产
+./target/release/voice-cli.exe bank refs --kind prompt --runs 3 --out <dir>       # 批量生成示范音 + 逐条 tts-verify（verified 才落盘）
+./target/release/voice-cli.exe bank refs ielts/custom/p1-weather --voice am_fenrir --runs 3 --out <dir>  # 指定素材/音色
 VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 ```
 
@@ -87,12 +89,28 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 详见 [docs/levels.md](levels.md)。`bank plan` 默认按 `readiness.free_speech_enabled` 自动决定槽位。
 （`record` 的 8 s 起始等待已可通过 `start_timeout_sec` 调整，D39 已还。）
 
+## TTS 语速与伪影（2026-11-25 更新）
+
+- **WPM 口径**：按语音跨度（峰值 −40 dB 界定的首末 10 ms 帧）算，不按文件总时长。
+  旧口径目标 140 会量到 128（历史 s 集 wpm 也是旧口径，复测后 7/8 仍在 130–160，s5 = 168）。
+- **语速校正**：保留最优候选（先看目标 ±6%、再看有无起始伪影），不再“只取最后一次”
+  （Kokoro 的 speed→wpm 不连续：0.78→132、0.815→153）。
+- **起始伪影**：`onset_gap_ms` 非 null = 先出一小段音 → 停顿 → 正文；af_heart 会被双 ASR 听成多一个 “And”。
+  规避 = 换速度/换音色；**不裁音频**。结构信号只降到 `review`，只有双 ASR 也多听出词才 `reject`。
+- **批量生成**：`bank refs` 逐条验证，失败自动换目标语速（±4）→ 换音色（am_michael → am_fenrir）；
+  只有 verified 进 `out/`。10 条 IELTS prompt 已 10/10 verified 3/3（含音素），
+  产物 `D:/voice_data/bank/tts-refs/ielts-prompts/`。
+- **词表**：`hometown` 的次重音会让 whisper 拆成 `home town`，已改成 `h ˈ O m t W n`（无次重音）。
+
 ## 已知债务（详见 ADR-0008）
 
 S1 级已全部偿还。剩余主要项：
 D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D11 时间戳与阈值（韵律已上线，D12 已还）
 D15 全局锁串行 · D18 DLL 手工复制 · D20/D21 CI（**D20 已有 CI，待首跑**；仍无合成 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
-D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）· D46 G2P 同形异音词只取首变体（live/read）· D47 短语音 SNR 误杀单词 drill · D48 readiness 未自动评估 · D49 双引擎听不清时无文本闸门 · D50 韵律 12 条标注验收未做 · **D51 TTS 仅 lexicon 且未验证**（OOV 预检 + overlay + `tts-verify` + `gop_baseline_valid` 已上线；批量材料接入未做）
+D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）· D46 G2P 同形异音词只取首变体（live/read）· D48 readiness 未自动评估 · D50 韵律 12 条标注验收未做
+D04 whisper 端到端音频回归仍缺（routing + 3 个 fixture 单测已补）
+
+已还（2026-11-25）：**D47**（短语音 SNR 豁免）· **D49**（双引擎文本闸门 `text_agreement`）· **D51**（`bank refs` 批量验证 + 10/10 prompt 3/3 + 起始伪影检测）
 
 已还：D19 rust-toolchain/MSRV · D39 `record.start_timeout_sec` · D45 构建门禁。（D18 只缓解：`check.ps1` 把 DLL 目录加进 PATH。）
 

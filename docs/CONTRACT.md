@@ -80,6 +80,7 @@ sessions/<date>/<hhmmss>_drill/takes/
             "pauses": [{"t0":2.92,"t1":3.46,"dur":0.54}],
             "word_gaps": [], "fillers": [], "longest_run_words": 7 },
   "words": [{"w":"I","t0":1.86,"t1":2.28}],
+  "text_agreement": 1.0,
   "limitations": ["源音频采样率 ≤16 kHz…", "SenseVoice…token 时间戳 ±0.5 s…", "尚无音素级对齐…"],
   "scorer_version": "p2.0-wordlevel",
   "evidence": { "src": "…", "norm_wav": "…", "metrics_json": "…", "feedback_md": "…" },
@@ -173,11 +174,18 @@ sessions/<date>/<hhmmss>_drill/takes/
 **OOV 预检**：合成前会检查英文词是否在 lexicon 中；缺词直接 `ok:false`，错误里列出缺词并提示
 `$VOICE_HOME/tts-lexicon.txt`。不再静默丢词（sherpa-onnx 2.0.x 已移除 espeak-ng，只认 lexicon）。
 
-返回 `detail`：`voice` / `sid` / `sample_rate`(24000) / `files[]{label,speed,wpm,target_wpm,path,duration,gen_ms,rtf}` / `session` / `prefix`
+返回 `detail`：`voice` / `sid` / `sample_rate`(24000) /
+`files[]{label,speed,wpm,target_wpm,path,duration,speech_duration,onset_gap_ms,gen_ms,rtf}` / `session` / `prefix`
+
+- `wpm` 按**语音跨度**算（去掉首尾静音），不再按文件总时长（后者系统性低估，目标 140 会量到 128）
+- `onset_gap_ms`：`null` 表示没有起始伪影；非 `null`（如 `40`）表示“先出一小段音 → 停顿 → 才进正文”，
+  实测 af_heart 在某些速度点会被双 ASR 听成开头多一个 “And”。这种音频**不要直接当示范音/听力材料**
 
 合成逻辑集中在 `voice_core::engine::demo_targets` + `TtsEngine::synthesize_at_wpm`（MCP 与 CLI 共用，有单测）：
 - 默认：`slow_too=false` → `[norm @ 140 wpm]`；`slow_too=true` → `[(slow,110), (norm,140)]`
-- 校准：先按 1.0 生成测速，再算 `speed = target/measured`；偏差 >3% 再校正一次
+- 校准：先按 1.0 生成测速，再算 `speed = target/measured`；偏差 >3% 继续校正，**保留最优候选**而不是最后一次
+  （Kokoro 的 speed→wpm 不连续：实测 0.78→132 wpm、0.815→153 wpm，只取最后一次会来回震荡）
+- 起始伪影规避：若最优候选仍有 `onset_gap_ms`，自动换速度（×1.04/0.96/1.08/0.92）重试；**不裁音频**（audit §11）
 - 短文本（<3 词）与中文不做 WPM 校准（WPM 不可靠），返回 `target_wpm=null`
 - `speed=1.0` 的 Kokoro 实测约 **220 wpm**，不要当“常速”；旧 `0.75` 也约 **160–200 wpm**
 - `play=true` 只播 `files[0]`（即 slow 版）；要听常速请用 `play(path=<label=norm 的 path>)`
@@ -315,7 +323,19 @@ $VOICE_HOME (默认 D:/voice_data)
 - 第三个方向：**绝对电平过低**。`peak_dbfs < −30 dBFS` → `degraded`。
   实测同一句：peak −24.6 → ASR acc 0.83；peak −33.5 → ASR 只输出 "The."（acc 0.00），而 SNR 仍有 17.9 dB
 - 短录音（<4 s）的 SNR 口径不同：用 `top-5% 帧均值 − p10`（单词 drill 里语音只占 10–25% 帧）
+- **短语音豁免（D47）**：VAD 语音跨度 < 3 s 且 `peak_dbfs ≥ −25` 时，`snr_db` 只写进 `limitations`
+  （“SNR 会被低估，仅供参考”），**不置 `degraded`、照常跑 GOP**——单词 drill 的静音帧太少，
+  p10 会落在轻声语音上（实测 1.8 s `word` drill 只有 12.6 dB 却被整条判死）
 - `< 13 dB` → `degraded = true`，`limitations` 追加明确原因，**不跑 GOP**
+
+## 文本可用性闸门（`text_agreement`，D49）
+
+声学过闸（电平/SNR/削波都 OK）不等于 ASR 听清了。`assess` 在**给了 `reference` 且非中文**时会用另一个引擎
+再转一遍，返回 `text_agreement`（词级 LCS 一致率 `2·|LCS|/(|a|+|b|)`，0–1）：
+
+- `≥ 0.7`：正常出词级 / 音素级结论；
+- `< 0.7`：`degraded = true`，`limitations` 写明“ASR 自身没听清”，本条**只保留语流与韵律**；
+- 第二引擎不可用（未下载模型等）不降级，只追加 limitation。
 - 为什么用 p90 而不是 p95：蓝牙 AGC 的尖峰帧会把 p95 抬高，两条作废录音会算出 13.0/15.4 dB 的假高 SNR
 - 实测梯度（TTS + 噪声）：名义 30/20/12/8/4 dB → 测得 30.1/23.8/16.9/14.0/11.3 dB，
   最后两档 ASR 仍全对、只有 4 dB 档被拦截 —— 说明该闸门卡在"ASR 开始失效"的位置

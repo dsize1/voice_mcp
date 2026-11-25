@@ -207,15 +207,7 @@ impl Asr {
         let forced = engine.and_then(AsrKind::parse);
         let lang_lc = lang.trim().to_ascii_lowercase();
 
-        let primary = match forced {
-            Some(k) => k,
-            None => match lang_lc.as_str() {
-                "zh" => AsrKind::SenseVoice,
-                "mixed" => AsrKind::Whisper,
-                "en" => AsrKind::parse(&self.cfg.en_engine).unwrap_or(AsrKind::SenseVoice),
-                _ => AsrKind::SenseVoice, // auto
-            },
-        };
+        let primary = route_engine(&lang_lc, &self.cfg.en_engine, forced);
 
         let attempt = |k: AsrKind| -> Result<Transcript> {
             let e = match k {
@@ -249,6 +241,27 @@ impl Asr {
             t.lang = detect_lang(&t.text);
         }
         Ok(t)
+    }
+}
+
+/// ASR 路由（纯函数，可回归测试；D04）。
+///
+/// - 显式 `engine` 优先（命令行/MCP 强制）；
+/// - `zh` → SenseVoice（中文 + 标点）；
+/// - `mixed` → Whisper（中英混说，标点增强）；
+/// - `en` → 配置里的 `en_engine`（默认 sense-voice，因为它也有 token 时间戳）；
+/// - `auto`/未知 → SenseVoice。
+///
+/// 两个引擎都失败时由调用方降级到另一个并置 `degraded=true`，这里只决定首选。
+pub fn route_engine(lang: &str, en_engine: &str, forced: Option<AsrKind>) -> AsrKind {
+    if let Some(k) = forced {
+        return k;
+    }
+    match lang.trim().to_ascii_lowercase().as_str() {
+        "zh" => AsrKind::SenseVoice,
+        "mixed" => AsrKind::Whisper,
+        "en" => AsrKind::parse(en_engine).unwrap_or(AsrKind::SenseVoice),
+        _ => AsrKind::SenseVoice,
     }
 }
 
@@ -467,5 +480,80 @@ mod tests {
         assert_eq!(detect_lang("hello world"), "en");
         assert_eq!(detect_lang("你好"), "zh");
         assert_eq!(detect_lang("I mean 就是那样"), "mixed");
+    }
+
+    // ---------------- D04：whisper 路径回归（fixture 级） ----------------
+
+    #[test]
+    fn routes_lang_to_engine() {
+        assert_eq!(route_engine("zh", "sense-voice", None), AsrKind::SenseVoice);
+        assert_eq!(route_engine("mixed", "sense-voice", None), AsrKind::Whisper);
+        assert_eq!(route_engine("en", "sense-voice", None), AsrKind::SenseVoice);
+        assert_eq!(route_engine("en", "whisper", None), AsrKind::Whisper);
+        assert_eq!(route_engine("auto", "whisper", None), AsrKind::SenseVoice);
+        assert_eq!(route_engine("", "whisper", None), AsrKind::SenseVoice);
+        assert_eq!(route_engine("EN", "whisper-turbo", None), AsrKind::Whisper);
+        // 强制引擎覆盖语言路由
+        assert_eq!(
+            route_engine("zh", "sense-voice", Some(AsrKind::Whisper)),
+            AsrKind::Whisper
+        );
+        // 配置里写了不认识的引擎 → 回落到 SenseVoice（不能静默不转写）
+        assert_eq!(route_engine("en", "nonsense", None), AsrKind::SenseVoice);
+    }
+
+    /// whisper 的 token 带 Ġ 前缀 + 标点粘在词上（`time.` `Don't`）。
+    fn whisper_tokens(words: &[(&str, f32)]) -> Vec<Word> {
+        words
+            .iter()
+            .map(|(w, t)| Word {
+                w: (*w).into(),
+                t0: *t,
+                t1: t + 0.25,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn whisper_tokens_map_to_words_with_punctuation() {
+        let toks = whisper_tokens(&[
+            ("\u{0120}Don't", 0.0),
+            ("\u{0120}stop", 0.3),
+            ("\u{0120}now", 0.6),
+            (".", 0.9),
+        ]);
+        let ws = words_from_tokens("Don't stop now.", &toks);
+        assert_eq!(
+            ws.iter().map(|w| w.w.as_str()).collect::<Vec<_>>(),
+            vec!["Don't", "stop", "now."]
+        );
+    }
+
+    #[test]
+    fn whisper_word_truncated_by_next_word_still_maps() {
+        // whisper 的 token 可能把词切碎：`after` → `aft` + `er`
+        let toks = whisper_tokens(&[("\u{0120}aft", 0.0), ("er", 0.2), ("\u{0120}next", 0.5)]);
+        let ws = words_from_tokens("after next", &toks);
+        assert_eq!(ws.len(), 2);
+        assert_eq!(ws[0].w, "after");
+        assert!((ws[0].t1 - 0.5).abs() < 1e-6, "t1={}", ws[0].t1);
+        assert_eq!(ws[1].w, "next");
+    }
+
+    #[test]
+    fn no_tokens_means_no_words_and_degraded() {
+        // 无时间戳（降级）时必须给出空词表，让上层走 degraded 分支而不是编时间
+        assert!(words_from_tokens("hello world", &[]).is_empty());
+        let t = Transcript {
+            text: "hello world".into(),
+            lang: "en".into(),
+            engine: "whisper-turbo".into(),
+            duration: 1.0,
+            words: Vec::new(),
+            tokens: Vec::new(),
+            degraded: true,
+            infer_ms: 1.0,
+        };
+        assert!(t.degraded && t.words.is_empty());
     }
 }

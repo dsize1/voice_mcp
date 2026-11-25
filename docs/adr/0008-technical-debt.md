@@ -1,6 +1,6 @@
 # ADR-0008: 技术欠债登记（Debt Register）
 
-- 状态：Accepted（活文档，每还一条就更新；最后更新 2026-11-24：D12/D19/D39/D45 已还，D20 部分偿还；新增 D46–D51（G2P 同形异音 / 短语音 SNR 误杀 / readiness 未自动评估 / 双引擎不可用无闸门 / 韵律标注验收 / TTS 仅 lexicon 且未验证））
+- 状态：Accepted（活文档，每还一条就更新；最后更新 **2026-11-25**：D12/D19/D39/D45/D47/D49/D51 已还，D04 部分偿还，D20 部分偿还；未还：D46/D48/D50 + D06/D09/D11/D15/D18/D21/D29/D35/D36/D38/D40/D41/D44）
 - 日期：2026-11-19
 - 相关：ADR-0001（运行时路线）、ADR-0006（评测边界）、ADR-0007（韵律与 GOP）
 
@@ -32,7 +32,7 @@
 | D01 | `assess` 在 manifest 写的 `feedback_ref` 曾指向**不存在的 .md**（只算路径不建文件） | 提交前自查发现；已修（现在会写入带模板的空反馈文件） | ~~S1~~ ✅已还 | – | – |
 | D02 | VAD 静默失败时（`speech_duration≈0` 但转写出词）仍照常输出语流指标，`speech_rate`/`articulation_rate` 会变成荒谬值 | 实测曾出现 `articulation_rate=1891 wpm`（VAD 状态 bug 的次生现象）。现已在 `assess` 里检测 `words≥2 且 speech_duration<0.2` → `degraded=true` + limitations 追加警告 | ~~S1~~ ✅已还 | – | – |
 | D03 | 词时间戳 → 规范化词序列曾用**按比例映射**，缩写展开/数字转词后静默错位 | **已修**：`normalize::Unit` 带来源 token 序号；token 数与 ASR 词数一致时按序号精确取时间，同一 token 展开的多个词在其时间窗内均分，否则才退回比例估算并标 `estimated`。新增 `timestamp_alignment`(exact/estimated/missing) 与 `reference_surface`（`I'm` 不再拆成 2 条问题）。6 个新单测 + 真机回归（`third→straight` 仍是 exact @4.50–5.04） | ~~S1~~ ✅已还 | – | – |
-| D04 | whisper 路径只做过一次手工验证：token→词合并、标点、`enable_token_timestamps=false` 的降级路径都**没有回归测试**；`mixed` 路由首次调用要惰性加载 1.6 s，会顶到 Pi 的交互预期 | `crates/spike/src/bin/asr_whisper.rs` 的输出显示 `tokens: []` | S1（对中英混说用户） | 出现第一个真实中英混说使用场景 | 0.5d：补 3 个 fixture + 一个 `asr_routing` 集成测试 |
+| D04 | whisper 路径：token→词合并、标点、`enable_token_timestamps=false` 的降级路径缺乏回归；`mixed` 首次调用惰性加载 1.6 s | **部分偿还（2026-11-25）**：抽出纯函数 `route_engine()` + `routes_lang_to_engine` 单测（zh/mixed/en/auto/强制/未知引擎回落）；新增 3 个 fixture 单测（whisper `Ġ` 前缀+标点、被下一个词截断的子词、无 token → 空词表 + degraded）。**仍缺**：真机 whisper 音频端到端回归（需要模型，CI 里跑不了） | S1（对中英混说用户）→ 降为 S2 | 出现真实中英混说场景时需要端到端证据 | 0.3d：`cases` 里加一条 `--engine whisper` 用例 |
 | D05 | 中文 TTS 从未实测（`lang` 字段在 sherpa-onnx ≥2.0 已被忽略，只认 lexicon） | **已实测**：`zf_xiaobei`(sid 46) 合成 3.73 s / RTF 0.26；回读校验 `我觉得这个句子读得不错，再练一次。` → ASR 得 `…你再连一次。`（14/15 字一致）。`zm_yunjian`(sid 50) 同样正常。中文合成可用 | ~~S1~~ ✅已还 | – | – |
 | D06 | Kokoro 的 音色名↔sid 表按 hexgrad 官方 voices 目录**字典序推断**，仅 `af_heart→sid=3` 一处自洽，未人耳校准 | 无 | S2 | 用户抱怨音色不对，或要用特定音色做人设 | 1h：跑 `voice-cli tts-probe` 逐个试听 |
 | D07 | `record` 全链路实测 | **已还**：真机 48 kHz 单声道 F32 采集 → 重采样 16 kHz → 自适应阈值自动停止（5.74 s 停、语音段 1.92 s）→ VAD 精修 → ASR（41 ms，accuracy 1.0）→ 原始 `.raw48000.wav` 留证，全链路跑通 | ~~S1~~ ✅已还 | – | – |
@@ -50,11 +50,11 @@
 | D14 | `accuracy = 1-(S+D+I)/N_ref` 对长句不公平（分母大），且不区分错误类型权重 | S3 | 用户开始练长句/Part 2 时 | 0.5d：改用 WER + 关键错误加权 |
 | D41 | 英美拼写/发音变体表 `US_UK_VARIANTS` 需人工维护，只覆盖 50 对高频词；遇到表外变体仍会误报 | 训练中 `theatre/theater` 类误报 | S3 | 出现新的表外变体误报 | 0.5d/次：按真实误报补表，并加回归用例 |
 | D46 | **G2P 同形异音词只取 CMUdict 第一个变体**：`live` 首变体是 `L AY V`（形容词），`I live in…` 的动词 `/lɪv/` 会被判低；`read` 同样（首变体 `R EH D`） | 2026-11-24 自然句：`live` 词级 Δ−4.61，但 GOP 的 V 实为 /v/（5.79/6.42）；TTS 基线用同一错误变体，无法自救 | S2 | 下一次 GOP 标定 / Route A 实现前 | 0.5d：按变体逐一取 max-GOP，或按词性/上下文选变体；补 live/read/use 回归用例 |
-| D47 | **短语音（<2 s）SNR 估计误杀单词 drill**：1.7 s `he'll` 录到 peak −19 dBFS 却报 SNR 7.3；2.0 s `days` 报 6.7；≥3.2 s 同设备可过 13+ | 2026-11-24 训练：单词/最小对立对 drill 连续被 SNR 闸门拒，被迫改回整句 | S2 | 单词/最小对立对成为常规训练项（已发生） | 0.5d：长度感知阈值，或 <3 s 改用 peak+周期性/浊音帧判定，不单看 SNR |
+| D47 | 短语音（<2 s）SNR 估计误杀单词 drill | **已还（2026-11-25）**：`snr_verdict(snr, speech_duration, peak)` 纯函数 + 4 个单测。VAD 语音跨度 <3 s 且 peak ≥−25 dBFS → `SnrVerdict::LowButShort`：**不置 degraded、照跑 GOP**，只在 `limitations` 写明“SNR 会被低估”。历史失败样本（1.8 s word drill、SNR 12.6）已被覆盖 | ~~S2~~ ✅已还 | – | – |
 | D48 | **readiness/free-speech gate 只读 JSON 标志，未自动从 history 计算**：`readiness.stage`/`missing` 目前手动写，升/降级没有代码判定 | 2026-11-24 gate 上线；`plan` 只消费 `free_speech_enabled` | S2 | 下一次升/降级或第二个学习者 | 1d：`voice-core::readiness` 评估器 + CLI `learner readiness`，写回 history 证据 |
-| D49 | **声学闸门通过 ≠ 文本可用**：`录音 (7).m4a` SNR 15.6 / peak −19 仍 accuracy 0.67；`record2.m4a` SNR 14.9，SenseVoice 与 whisper 都听不清 | 2026-11-24 外部录音两次；当前只有 SNR/peak/削波闸门 | S2 | 自由说 / 外部录音 / Route A 实现前 | 0.5d：双引擎一致率/coverage 闸门，低于阈值只出 flow/prosody，不出词级/发音结论 |
+| D49 | 声学闸门通过 ≠ 文本可用 | **已还（2026-11-25）**：`assess.text_agreement`（词级 LCS 一致率 `2·|LCS|/(|a|+|b|)`）。给了 `reference` 且非中文时用另一个引擎复核，`<0.7` → `degraded=true` + limitation（只出 flow/prosody）；第二引擎不可用只记 limitation。3 个单测 + 9 条录音回归零误杀（clean case agreement=1.0） | ~~S2~~ ✅已还 | – | – |
 | D50 | 韵律的 12 条人工标注验收未做（升降/平/重音一致率 ≥80%）；短句窗口与 `unreliable` 已加，但无真值标定 | ADR-0007 验收项；目前只有 10 单测 + 少量真机 | S2 | 下一次语调专项训练 | 0.5d + 标注 2h |
-| D51 | **TTS 参考音未验证就当基准**：sherpa-onnx 2.0.x 已移除 espeak-ng，只认 lexicon；OOV 词无兜底（`iPhone`/`iphone` 合成后 ASR 为空，`eye phone` 正常）。同时 lexicon 内词也可能被某音色读坏（`export` 在词表里，af_* 读成 X-O，am_michael/bf_* 3/3 正常） | 2026-11-24 听力材料审计；`chunks-listening` s1/s6 缺陷；GOP `baseline_tts` 默认 af_heart 也受影响。**部分偿还**：OOV 预检 + 项目 overlay + `tts-verify`（双 ASR/音素/WPM/3 次）+ `gop_baseline_valid` 已上线；剩余：把验证接入批量材料生成 + 审计现有 chunks | S1 | 任何 TTS 材料/示范/GOP 基线（已发生） | 剩余 0.5d：生成管线接入 + 现有资产业务审计 |
+| D51 | TTS 参考音未验证就当基准 | **已还（2026-11-24/25）**：OOV 预检 + 项目 overlay + `tts-verify`（双 ASR/音素/WPM/3 次）+ `gop_baseline_valid`；**`bank refs` 把同一套验证接进批量材料生成**（失败自动换目标语速 → 换音色，只有 verified 落盘）；10/10 IELTS prompt verified 3/3（含音素）。另修：WPM 改按语音跨度、语速校正保留最优候选、`onset_gap_ms` 起始伪影检测。见 `docs/audit/tts-2026-11-24.md` §12 | ~~S1~~ ✅已还 | – | – |
 
 ## 三、工程韧性
 
@@ -148,6 +148,11 @@
 | `record` 起始等待硬编码（D39） | `start_timeout_sec` 贯通 core/CLI/MCP（默认 8，自由说建议 20） |
 | 无 toolchain/MSRV 声明（D19） | `rust-toolchain.toml`（stable + rustfmt/clippy）+ `rust-version = "1.99"`（实测） |
 | 无韵律（D12） | 2026-11-23 纯 Rust 韵律上线：YIN + 半音域 + 句末升降/平调/音域/重音候选/DTW；`prosody.unreliable` 闸门 |
+| 短语音 SNR 误杀单词 drill（D47） | `snr_verdict`：语音跨度 <3 s 且 peak ≥−25 → 只记 limitation，不降级、GOP 照跑 |
+| 声学过闸但 ASR 听不清（D49） | `assess.text_agreement`（双引擎 LCS 一致率）<0.7 → degraded，只出 flow/prosody |
+| TTS 材料未验证就当基准（D51） | `tts-verify` + `bank refs` 批量接入（换语速/换音色回退）；10/10 IELTS prompt 3/3（含音素） |
+| TTS 语速口径：按总时长算导致 140→128、校正震荡 | WPM 改按语音跨度；校正保留最优候选；新增起始伪影 `onset_gap_ms` 检测与规避 |
+| 会话目录同秒相撞（并行 `tts-verify` 覆盖 report） | `Store::new_session` 撞了就加 `-2` 序号 + 单测 |
 
 ## 八、维护约定
 

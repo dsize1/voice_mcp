@@ -68,8 +68,16 @@ impl Store {
         let now = chrono::Local::now();
         let date = now.format("%Y-%m-%d").to_string();
         let hms = now.format("%H%M%S").to_string();
-        let id = format!("{hms}_{kind}");
-        let dir = self.root.join("sessions").join(&date).join(&id);
+        // 同一秒内的并发调用（如并行跑 tts-verify）不能撞目录：撞了就加序号。
+        // 历史上两次并行 tts-verify 共用同一个 `HHMMSS_tts_verify`，后一次覆盖前一次的 report.jsonl。
+        let mut id = format!("{hms}_{kind}");
+        let mut dir = self.root.join("sessions").join(&date).join(&id);
+        let mut n = 1;
+        while dir.exists() {
+            n += 1;
+            id = format!("{hms}_{kind}-{n}");
+            dir = self.root.join("sessions").join(&date).join(&id);
+        }
         std::fs::create_dir_all(dir.join("takes"))?;
 
         let s = Session {
@@ -405,6 +413,21 @@ mod tests {
         assert_eq!(p, "001_read_the_third_time");
         std::fs::write(s.dir.join("takes").join(format!("{p}.asr.json")), "{}").unwrap();
         assert_eq!(s.next_seq().unwrap(), 2);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn sessions_in_same_second_do_not_collide() {
+        let tmp = std::env::temp_dir().join(format!("voice_store_uniq_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = Store::open(&tmp).unwrap();
+        let a = store.new_session("tts_verify").unwrap();
+        let b = store.new_session("tts_verify").unwrap();
+        assert_ne!(a.dir, b.dir, "同一秒的两个会话不能共用目录");
+        let same_second = a.id.split('_').next() == b.id.split('_').next();
+        if same_second {
+            assert!(b.id.ends_with("-2"), "第二个会话应带序号: {}", b.id);
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

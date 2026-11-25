@@ -1,12 +1,12 @@
 # 当前状态与下一步（交接用）
 
-> 写于 2026-11-19，最后更新 2026-11-25（TTS 语速口径/伪影规避/批量验证 + D47/D49）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
+> 写于 2026-11-19，最后更新 2026-11-25（TTS 语速口径/伪影规避/批量验证 + 默认男声 + D47/D49 + MCP 换二进制）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
 > 再读这一页、README / CONTRACT / ADR。
 
 ## 一句话现状
 
 **P3 闭环 + P4 素材库（NCE 4 997 + IELTS prompt 10 = 5 007 条）+ 音素级 GOP（词级口径）+ 韵律分析均已上线并在真机验证。**
-`crates` 10 400+ 行 Rust，**135 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
+`crates` 10 400+ 行 Rust，**136 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
 已由 `tools/check.ps1` 与 GitHub Actions 守住（ADR-0008 D45）。
 下一步：雅思素材入库 + 按 `error_stats` 做定向训练。
 
@@ -195,9 +195,10 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 - 修掉那 1 处编译错误；`cargo fmt --all` 全仓格式化；清掉全部 36 条 clippy 警告
   （26 条 collapsible_if 自动修，4 条手工：needless_range_loop / field_reassign ×2 / too_many_arguments 加注）。
 - `tools/check.ps1`：`fmt --check` → `clippy --all-targets -D warnings` → `test`，
-  可选 `-Cases` 跑录音回归。本地实测：**97 单测 + 9 用例全绿**。
+  可选 `-Cases` 跑录音回归。本地实测：**136 单测 + 9 用例全绿**（2026-11-25）。
 - `.github/workflows/ci.yml`：windows-latest 上跑同一套脚本，先 `fetch_deps.ps1` 取原生库。
-  **尚未在 GitHub 上首跑**（D20 只算部分偿还）。
+  **已随 2026-11-25 推送上 GitHub，但首跑结果尚未确认**（本机无 `gh`；去 Actions 页看
+  `windows-latest` 上的 `fmt → clippy -D warnings → test`）。D20 只算部分偿还。
 - `rust-toolchain.toml` + `Cargo.toml` 的 `rust-version = "1.99"`（实测版本；edition 2024 的理论下限 1.85 未验证）。
 
 同批对齐的文档漂移：

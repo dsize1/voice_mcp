@@ -78,7 +78,9 @@ Pi 里的 LLM **听不到音频**，它只能看到文本和数字。所以：
 | **TTS 对照基线** | ✅ | 同一参考文本用标准发音跑一遍 GOP，区分"用户读错"与"模型分辨不出" |
 | **混淆对信号**（θ→s 等） | ✅ | 仅 TH 系列达到可用精度（P 0.50 / R 0.67），其余只作内部标记 |
 | **跟读素材库** | ✅ | NCE1–4 共 4 997 条逐句切片 + 10 条 IELTS prompt（共 5 007 条，7.1 h），tag 权重来自真实错读率统计 |
-| **音频质量闸门** | ✅ | SNR<13 dB / peak<−30 dBFS / 削波>0.1% → `degraded`，不出诊断结论 |
+| **音频质量闸门** | ✅ | SNR<13 dB / peak<−30 dBFS / 削波>0.1% → `degraded`，不出诊断结论；短语音（<3 s、peak ≥−25）按 D47 豁免 |
+| **文本可用性闸门** | ✅ | 双引擎词级一致率 <0.7 → `degraded`，只出语流/韵律，不出词级/音素级结论（D49） |
+| **TTS 示范音验证** | ✅ | OOV 预检 + 双 ASR/音素/WPM/起始伪影；`bank refs` 批量生成、逐条 3/3 `verified` 才落盘（D51） |
 | **定向训练计划** | ✅ | `bank plan`：drill_queue → error_stats/focus tags → 同难度补足；固定含 60 s 自由说槽位 |
 | **韵律分析**（F0 轮廓/句末升降/平调/音域/重音候选/DTW） | ✅ | 纯 Rust（YIN）；`assess(with_prosody=true)` 或 `reference_audio`，只给数值不下结论 |
 | 流式 / HTTP 模式 / 热键听写 | ⏳ P4 | – |
@@ -269,7 +271,7 @@ pi -p "列出你现在可用的 skills"
 |---|---|
 | `assess` | **核心**：转写 + 语流 + 词级差异；`with_gop=true` 追加音素级 GOP（词级口径），`baseline_tts=true` 追加标准发音对照基线 |
 | `transcribe` | 纯转写（词级 + token 级时间戳） |
-| `synthesize` | 示范音（默认 140 wpm；`slow_too` 出 110/140 一对；`play=true` 服务端出声） |
+| `synthesize` | 示范音（默认 **am_michael 男声** + 140 wpm；`slow_too` 出 110/140 一对；`play=true` 服务端出声） |
 | `record` | 麦克风录音，静音自动停（需麦克风） |
 | `play` | 播放 wav |
 | `prepare_audio` | 音频体检 + 去首尾静音 + 16k 派生 |

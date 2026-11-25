@@ -19,7 +19,7 @@
 | TTS | 默认 **am_michael（男声）+ 140 wpm**（130–160），slow=110；WPM 按**语音跨度**；起始伪影检测 + 自动换速度/换音色；OOV 预检 + `tts-verify` + `bank refs` 批量验证；verified 听力集/10 条 prompt 见 STATE |
 | 债务 | D01–D51 已登记；**2026-11-25 还 D47/D49/D51，D04 部分偿还** |
 | 近期训练 | 计划 **7/7 项**完成；`/θ/` 词首/词尾修正；144 wpm 下 `/θ/`、`/v/` 守住 |
-| 本地提交 | 2026-11-24 已推送 |
+| 本地提交 | 2026-11-25 已推送（本轮 6 个 commit 全部推送） |
 
 ---
 
@@ -63,7 +63,7 @@
 |---|---|---|
 | 推送本地 5 个 commit | ⏳ | `main` 领先 `origin/main` 3 个（2026-11-25：语速/伪影+bank refs、s5 复测、默认男声） |
 | 重启 MCP 进程 | ✅ | 2026-11-25：杀子进程 → 重建 `voice-mcp.exe` → Pi 自动重连；实测 `synthesize` 返回 `am_michael` + `speech_duration` + `onset_gap_ms` |
-| CI 首跑 | ⏳ | D20 部分偿还；workflow 已写，未在 GitHub 验证 |
+| CI 首跑 | ⏳ | D20 部分偿还；workflow 已随本轮推送上去，**GitHub 侧结果未验证**（本机无 `gh`；见 `docs/STATE.md`） |
 
 ---
 
@@ -128,7 +128,8 @@
 | 2026-11-25 | TTS 语速口径改为语音跨度 + 最优候选校正 + 起始伪影检测/规避；`bank refs` 批量验证（换语速/换音色回退）；10/10 IELTS prompt 3/3 | [audit/tts-2026-11-24.md](audit/tts-2026-11-24.md) §12 |
 | 2026-11-25 | D47 短语音 SNR 豁免；D49 双引擎文本闸门（`text_agreement`）；D04 routing + 3 fixture 单测；会话目录同秒防撞 | `cargo test` 135 单测 + 9 录音回归全绿 |
 | 2026-11-25 | N12：Day 9 听辨/复测口径切到 `chunks-listening-verified/`（原 C1 记录不动） | `weeks/week-02/day-9.md` |
-| 2026-11-25 | 默认音色改为 **am_michael（男声）**（MCP/CLI/GOP 基线三处统一，`DEFAULT_VOICE` 常量 + 单测） | 本提交 |
+| 2026-11-25 | 默认音色改为 **am_michael（男声）**（MCP/CLI/GOP 基线三处统一，`DEFAULT_VOICE` 常量 + 单测） | `080e8aa` |
+| 2026-11-25 | MCP 端换新二进制（杀子进程 → 重建 → Pi 自动重连），`synthesize` 实测返回 `am_michael`/`speech_duration`/`onset_gap_ms` | 本次提交 |
 
 ---
 

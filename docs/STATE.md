@@ -127,6 +127,8 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 - 基线自检加了一条**音素**闸门：最差词级 GOP < −1.5 → `gop_baseline_valid=false`（只做内容自检会漏掉“词对但音读坏”）。
 - CLI：`assess <录音> --bank-id <id> --with-gop`；MCP：`assess(bank_id=…, with_gop=true)`；`bank drill`/`bank plan` 会打印这条用法。
 - **历史数据**：2026-11-25 之前 `metrics.json` 里的 Δ 都是 TTS 基线算的，**不可与新结果横比**。
+- **native 基线的已知偏差**：NCE 切片是 16 kHz、用户录音 48 kHz，带宽不同 → 摩擦音的 GOP 会偏；
+  Δ 比 TTS 基线可信，但**不要拿它判 /s/ /θ/ /f/ 的细微差别**（要严格比就把两边都降到 16 kHz）。
 
 ## 已知债务（详见 ADR-0008）
 

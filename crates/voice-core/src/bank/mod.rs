@@ -77,6 +77,10 @@ pub struct BankEntry {
     pub ref_slow: Option<String>,
     pub quality: Quality,
     pub tags: Vec<String>,
+    /// 文本从哪来：`lrc`（教材字幕，权威）/ `book`（题库原文）/ `asr`（ASR 派生，需双引擎复核）。
+    /// **`asr` 的条目不能当“标准文本”**：只能当朗读/听力素材（D52 同类问题）。
+    #[serde(default)]
+    pub text_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,6 +446,10 @@ pub fn normalize_entry(e: &mut BankEntry) {
     if e.words == 0 {
         e.words = crate::assess::normalize::words(&e.text).len();
     }
+    if e.text_source.is_empty() {
+        // 老数据：教材切片来自 LRC，prompt 题库来自题库原文
+        e.text_source = if e.ref_audio == "tts" { "book" } else { "lrc" }.into();
+    }
 }
 
 /// 一条素材的评测参考（`assess --bank-id` 用）。
@@ -802,6 +810,7 @@ pub fn ingest_file(
                 speech_ratio: crate::round_to(speech_ratio, 3),
             },
             tags: tags_for(&l.en),
+            text_source: "lrc".into(),
         };
         kept.push(entry);
 
@@ -873,6 +882,430 @@ pub fn ingest_file(
         kept: kept.len(),
         rejected: meta.rejected.len(),
         entries: kept.into_iter().map(|e| e.id).collect(),
+    })
+}
+
+// ------------------------------------------------------------------ 单文件真人音频入库
+//
+// 为什么需要这条路径：雅思素材入库长期卡在「缺源音频 + LRC」。用户能拿到的往往只有
+// **一段真人录音**（考试音频、播客、示范音），没有逐句字幕。但只要有两件事成立就能入库：
+//   1. 音频是真人（`ref_audio=native`，可当基线）；
+//   2. 能自动切句并**双引擎互相验证**文本（而不是拿单个 ASR 的结果当"标准文本"）。
+//
+// 所以这里的文本是 **ASR 派生**（`text_source="asr"`），不是书本原文；因此：
+// - 写进 `quality.asr` 记录双引擎一致率，`text_source` 标 `asr`；
+// - 一致率低于门槛的行进 quarantine，不冒充"标准文本"。
+
+#[derive(Debug, Clone)]
+pub struct AudioIngestOptions {
+    /// 语料集合（ielts / custom …）
+    pub corpus: String,
+    /// 书名/来源标签（如 `IELTS-2023-12-08`）
+    pub book: String,
+    /// 课/段标签（默认取文件名）
+    pub lesson: String,
+    /// 双引擎词级一致率门槛（低于则拒绝）
+    pub min_agree: f32,
+    /// 单句最长时长（超过就按时间硬切）
+    pub max_sec: f32,
+    pub dry_run: bool,
+}
+
+impl Default for AudioIngestOptions {
+    fn default() -> Self {
+        Self {
+            corpus: "ielts".into(),
+            book: "IELTS".into(),
+            lesson: String::new(),
+            min_agree: 0.7,
+            max_sec: 12.0,
+            dry_run: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AudioIngest {
+    pub lesson_slug: String,
+    pub kept: usize,
+    pub rejected: usize,
+    pub entries: Vec<String>,
+    /// `(id, text, dur)` 预览（dry-run 也看得到文本，便于人耳/人眼抽检）
+    pub preview: Vec<(String, String, f32)>,
+    pub rejects: Vec<Rejection>,
+    pub source_sr: u32,
+    pub band_limited: bool,
+}
+
+/// 在一个语音段内部按**真实停顿**再切细（纯函数，便于回归）。
+///
+/// 为什么不用 ASR 词时间戳切：CTC 时间戳会漂（D09），按它切会切出半句/静音。
+/// 音频里的静音是可靠的：段内 ≥`min_gap` 秒、且比该段峰值低 30 dB 的连续帧就是停顿。
+/// 同时保证单片不超过 `max_sec`（超长又没有停顿时，在中点硬切）。
+pub fn split_on_pauses(
+    samples: &[f32],
+    sr: u32,
+    seg: (f32, f32),
+    min_gap: f32,
+    max_sec: f32,
+) -> Vec<(f32, f32)> {
+    let (a, b) = seg;
+    if b - a < 0.8 {
+        return vec![seg];
+    }
+    let hop = (sr as usize / 100).max(1); // 10 ms
+    let i0 = (a * sr as f32) as usize;
+    let i1 = ((b * sr as f32) as usize).min(samples.len());
+    if i1 <= i0 + hop * 4 {
+        return vec![seg];
+    }
+    let frames: Vec<f32> = samples[i0..i1]
+        .chunks(hop)
+        .map(|c| {
+            let ms: f32 = c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32;
+            let rms = ms.sqrt();
+            if rms <= 1e-9 {
+                -120.0
+            } else {
+                20.0 * rms.log10()
+            }
+        })
+        .collect();
+    let peak = frames.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if !peak.is_finite() || peak < -70.0 {
+        return vec![seg];
+    }
+    let thr = peak - 30.0;
+    let hop_sec = hop as f32 / sr.max(1) as f32;
+
+    // 收集“停顿中点”作为切点
+    let mut cuts: Vec<f32> = Vec::new();
+    let mut i = 0usize;
+    while i < frames.len() {
+        if frames[i] >= thr {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < frames.len() && frames[i] < thr {
+            i += 1;
+        }
+        let gap = (i - start) as f32 * hop_sec;
+        // 首尾静音不算切点（那属于段边界）
+        if gap >= min_gap && start > 0 && i < frames.len() {
+            cuts.push(a + (start as f32 + (i - start) as f32 / 2.0) * hop_sec);
+        }
+    }
+
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    let mut cur = a;
+    for c in cuts {
+        if c - cur >= 0.8 {
+            // 太长的片再硬切，避免单片超过 max_sec
+            while c - cur > max_sec {
+                out.push((cur, cur + max_sec));
+                cur += max_sec;
+            }
+            out.push((cur, c));
+            cur = c;
+        }
+    }
+    if b - cur > 0.05 {
+        while b - cur > max_sec {
+            out.push((cur, cur + max_sec));
+            cur += max_sec;
+        }
+        out.push((cur, b));
+    }
+    if out.is_empty() { vec![seg] } else { out }
+}
+
+/// 合并间隔很近的 VAD 段（同一句话被 VAD 切碎时并回去），返回 `(t0,t1)` 列表。
+pub fn merge_segments(segs: &[crate::engine::vad::Segment], max_gap: f32) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    for s in segs {
+        match out.last_mut() {
+            Some(last) if s.t0 - last.1 <= max_gap => last.1 = s.t1,
+            _ => out.push((s.t0, s.t1)),
+        }
+    }
+    out
+}
+
+/// 把一条带标点的词序列切成句子（纯函数，便于回归）。
+///
+/// 规则：遇到 `.` `!` `?` 收句；或当前句已达 `max_sec` 秒、且≥4 词时硬切
+/// （硬切只影响素材边界，不影响文本）。
+pub fn sentences_from_words(
+    words: &[crate::engine::Word],
+    max_sec: f32,
+) -> Vec<(f32, f32, String)> {
+    let mut out = Vec::new();
+    let mut cur: Vec<&crate::engine::Word> = Vec::new();
+    for w in words {
+        cur.push(w);
+        let end_punct = w.w.ends_with('.') || w.w.ends_with('?') || w.w.ends_with('!');
+        let long = cur.len() >= 4 && w.t1 - cur.first().map(|x| x.t0).unwrap_or(w.t0) >= max_sec;
+        if end_punct || long {
+            let t0 = cur.first().map(|x| x.t0).unwrap_or(0.0);
+            let text = cur
+                .iter()
+                .map(|x| x.w.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            out.push((t0, w.t1, text));
+            cur.clear();
+        }
+    }
+    if !cur.is_empty() {
+        let t0 = cur.first().map(|x| x.t0).unwrap_or(0.0);
+        let text = cur
+            .iter()
+            .map(|x| x.w.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push((t0, cur.last().map(|x| x.t1).unwrap_or(t0), text));
+    }
+    out
+}
+
+/// 单文件真人音频 → 逐句素材（自动切句 + 双引擎验证 + 质量门槛）。
+pub fn ingest_audio(
+    engines: &Engines,
+    home: &Path,
+    audio_path: &Path,
+    opt: &AudioIngestOptions,
+) -> Result<AudioIngest> {
+    let decoded = audio::load_16k(audio_path)?;
+    let sr = decoded.sample_rate;
+    let duration = decoded.samples.len() as f32 / sr as f32;
+
+    // 以 VAD 停顿为切分基础：时间来自音频（可靠），文本来自该片的 ASR（双引擎复核）。
+    // 不用 ASR 词时间戳切句 —— CTC 时间戳会漂（D09），按它切片会切出半句/静音。
+    let segments = merge_segments(&engines.vad.segments(&decoded.samples), 0.35);
+    let mut sents: Vec<(f32, f32, String)> = Vec::new();
+    for (a, b) in &segments {
+        let (a, b) = (*a, *b);
+        if b - a < 0.6 {
+            continue; // 太短：咳嗽/噪声
+        }
+        // 段内再按真实停顿切细（≥0.25 s 的静音），超长无停顿就硬切
+        for (pa, pb) in split_on_pauses(&decoded.samples, sr, (a, b), 0.35, opt.max_sec) {
+            if pb - pa >= 0.8 {
+                sents.push((pa, pb, String::new()));
+            }
+        }
+    }
+    if sents.is_empty() {
+        bail!("没有检测到语音段（VAD 为空）");
+    }
+    // 这一段只按“音频时长”筛（文本在这里还是空的，要逐片 ASR 才有）
+    sents.retain(|(a, b, _)| {
+        let d = b - a;
+        d >= 0.8
+    });
+    if sents.is_empty() {
+        bail!("切句后没有可用句子");
+    }
+
+    let lesson = if opt.lesson.trim().is_empty() {
+        lesson_title(audio_path)
+    } else {
+        opt.lesson.clone()
+    };
+    let slug_dir = format!("{}-{}", slug(&opt.book), slug(&lesson));
+    let dir = bank_dir(home).join(&slug_dir);
+    if !opt.dry_run {
+        std::fs::create_dir_all(&dir)?;
+    }
+
+    let mut idx = read_index(home)?;
+    let mut rejects: Vec<Rejection> = Vec::new();
+    let mut kept: Vec<BankEntry> = Vec::new();
+    let mut agree_sum = 0.0f32;
+
+    for (i, (seg_t0, seg_t1, _)) in sents.iter().enumerate() {
+        // 原始句序（只用于 quarantine 记录）；入库序号在 kept 时重新连续编号
+        let src_seq = (i + 1) as u32;
+        let seq = kept.len() as u32 + 1;
+        // 切片两侧留一点余量，避免切掉词头词尾；仍限制在原音频内
+        let a = (seg_t0 - 0.10).max(0.0);
+        let b = (seg_t1 + 0.30).min(duration);
+        let i0 = (a * sr as f32) as usize;
+        let i1 = ((b * sr as f32) as usize).min(decoded.samples.len());
+        if i1 <= i0 {
+            continue;
+        }
+        let slice = &decoded.samples[i0..i1];
+        let dur = slice.len() as f32 / sr as f32;
+
+        // 该片的“假设文本”用 SenseVoice（它对这段音频更准），whisper 独立听同一片复核；
+        // 两引擎词级一致率低于门槛 → 这句 ASR 自己都没把握，不入库（不冒充标准文本）
+        let sv = match engines.transcribe_long(slice, sr, "en", Some("sense-voice")) {
+            Ok(t) => t,
+            Err(e) => {
+                rejects.push(Rejection {
+                    seq: src_seq,
+                    text: String::new(),
+                    reasons: vec![format!("sense-voice 识别失败: {e}")],
+                });
+                continue;
+            }
+        };
+        let text = sv.text.trim().to_string();
+        if text.is_empty() {
+            rejects.push(Rejection {
+                seq: src_seq,
+                text: String::new(),
+                reasons: vec!["sense-voice 没听出词".into()],
+            });
+            continue;
+        }
+        let wh = match engines.transcribe_long(slice, sr, "en", Some("whisper")) {
+            Ok(t) => t,
+            Err(e) => {
+                rejects.push(Rejection {
+                    seq: src_seq,
+                    text: text.clone(),
+                    reasons: vec![format!("whisper 复核失败: {e}")],
+                });
+                continue;
+            }
+        };
+        let want = normalize::words(&text);
+        let got = normalize::words(&wh.text);
+        let agree = crate::assess::text_agreement(&want, &got);
+
+        if agree < opt.min_agree {
+            rejects.push(Rejection {
+                seq: src_seq,
+                text: text.clone(),
+                reasons: vec![format!(
+                    "双引擎一致率 {:.2} < {:.2}（ASR 自己都没把握，不能当标准文本）",
+                    agree, opt.min_agree
+                )],
+            });
+            continue;
+        }
+        let words = want.len();
+        if words < WORDS_MIN {
+            rejects.push(Rejection {
+                seq: src_seq,
+                text: text.clone(),
+                reasons: vec![format!("words {words} < {WORDS_MIN}")],
+            });
+            continue;
+        }
+        // 语速的分母用“语音跨度”，不用文件时长（首尾/中间静音会把 160 wpm 压成 120）
+        let speech_dur = audio::speech_span_sec(slice, sr).unwrap_or(dur);
+        let wpm = if speech_dur > 0.0 {
+            words as f32 / speech_dur * 60.0
+        } else {
+            0.0
+        };
+        agree_sum += agree;
+
+        let rel = format!("bank/{slug_dir}/{seq:03}.ref.wav");
+        if !opt.dry_run {
+            audio::wav::write_wav_i16(dir.join(format!("{seq:03}.ref.wav")), slice, sr)?;
+        }
+        kept.push(BankEntry {
+            id: format!("{}/{}/{:03}", opt.corpus, slug(&lesson), seq),
+            corpus: opt.corpus.clone(),
+            kind: "read_aloud".into(),
+            ref_audio: "native".into(),
+            exam: None,
+            book: opt.book.clone(),
+            lesson: lesson.clone(),
+            seq,
+            text: text.clone(),
+            zh: String::new(),
+            t0: crate::round_to(*seg_t0, 2),
+            t1: crate::round_to(*seg_t1, 2),
+            dur: crate::round_to(dur, 2),
+            words,
+            wpm: crate::round_to(wpm, 1),
+            level: level_of(words, wpm),
+            src: rel,
+            ref_slow: None,
+            quality: Quality {
+                line_sim: crate::round_to(agree, 3),
+                asr: format!("sense-voice split; whisper agree {agree:.2}; source=asr"),
+                band_limited: decoded.info.band_limited,
+                lrc_fit_scale: 1.0,
+                speech_ratio: 1.0,
+            },
+            tags: tags_for(&text),
+            text_source: "asr".into(),
+        });
+    }
+
+    let kept_n = kept.len();
+    let rejected_n = rejects.len();
+    if !opt.dry_run {
+        idx.extend(kept.iter().cloned());
+        write_index(home, &idx)?;
+        let meta = serde_json::json!({
+            "kind": "audio_ingest",
+            "source": audio_path.to_string_lossy(),
+            "source_sr": decoded.info.source_sr,
+            "band_limited": decoded.info.band_limited,
+            "duration": crate::round_to(duration, 2),
+            "sentences": sents.len(),
+            "kept": kept_n,
+            "rejected": rejected_n,
+            "mean_agreement": crate::round_to(if kept_n > 0 { agree_sum / kept_n as f32 } else { 0.0 }, 3),
+            "text_source": "asr（sense-voice 切句 + whisper 复核；非书本原文）",
+            "ingested": chrono::Local::now().to_rfc3339(),
+        });
+        std::fs::write(
+            dir.join("lesson.json"),
+            serde_json::to_string_pretty(&meta)?,
+        )?;
+        // quarantine：只追加被拒句子，便于人工复核
+        if !rejects.is_empty() {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(quarantine_path(home))?;
+            for r in &rejects {
+                writeln!(
+                    f,
+                    "{}",
+                    serde_json::json!({
+                        "source": audio_path.to_string_lossy(),
+                        "seq": r.seq, "text": r.text, "reasons": r.reasons,
+                    })
+                )?;
+            }
+        }
+        append_attribution(
+            home,
+            &opt.book,
+            &lesson,
+            &audio_path.to_string_lossy(),
+            if kept_n > 0 {
+                agree_sum / kept_n as f32
+            } else {
+                0.0
+            },
+        )?;
+    }
+
+    let preview = kept
+        .iter()
+        .map(|e| (e.id.clone(), e.text.clone(), e.dur))
+        .collect();
+    Ok(AudioIngest {
+        lesson_slug: slug_dir,
+        kept: kept_n,
+        rejected: rejected_n,
+        entries: kept.into_iter().map(|e| e.id).collect(),
+        preview,
+        rejects,
+        source_sr: decoded.info.source_sr,
+        band_limited: decoded.info.band_limited,
     })
 }
 
@@ -1090,6 +1523,7 @@ pub fn import_prompts(home: &Path, docs: &[serde_json::Value]) -> Result<(usize,
                 speech_ratio: 0.0,
             },
             tags: tags_for(&text),
+            text_source: "book".into(),
         });
         added += 1;
     }
@@ -1385,7 +1819,50 @@ mod tests {
                 speech_ratio: 1.0,
             },
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            text_source: "lrc".into(),
         }
+    }
+
+    // ---------------- ingest-audio 的纯函数（真人素材入库） ----------------
+
+    fn tone(amp: f32, secs: f32, sr: usize) -> Vec<f32> {
+        (0..(secs * sr as f32) as usize)
+            .map(|i| amp * (2.0 * std::f32::consts::PI * 180.0 * i as f32 / sr as f32).sin())
+            .collect()
+    }
+
+    #[test]
+    fn split_on_pauses_cuts_at_real_silence() {
+        let sr = 16_000usize;
+        let mut s = tone(0.2, 1.0, sr);
+        s.extend(vec![0.0; sr / 2]); // 0.5 s 停顿
+        s.extend(tone(0.2, 1.0, sr));
+        let parts = split_on_pauses(&s, sr as u32, (0.0, 2.5), 0.25, 12.0);
+        assert_eq!(parts.len(), 2, "应在停顿处切成 2 片: {parts:?}");
+        // 切点落在静音中点（1.0–1.5 s 之间），两片首尾相接
+        assert!((1.0..=1.5).contains(&parts[0].1), "{parts:?}");
+        assert_eq!(parts[0].1, parts[1].0);
+    }
+
+    #[test]
+    fn split_on_pauses_hard_cuts_when_too_long() {
+        let sr = 16_000usize;
+        let s = tone(0.2, 5.0, sr); // 连续 5 s，无停顿
+        let parts = split_on_pauses(&s, sr as u32, (0.0, 5.0), 0.25, 2.0);
+        assert!(parts.len() >= 3, "超长无停顿应硬切: {parts:?}");
+        assert!(parts.iter().all(|(a, b)| b - a <= 2.01), "{parts:?}");
+    }
+
+    #[test]
+    fn merge_segments_joins_short_gaps_only() {
+        use crate::engine::vad::Segment;
+        let segs = vec![
+            Segment { t0: 0.0, t1: 1.0 },
+            Segment { t0: 1.2, t1: 2.0 },
+            Segment { t0: 3.0, t1: 4.0 },
+        ];
+        let m = merge_segments(&segs, 0.35);
+        assert_eq!(m, vec![(0.0, 2.0), (3.0, 4.0)]);
     }
 
     #[test]

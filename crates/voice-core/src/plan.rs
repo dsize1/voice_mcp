@@ -588,6 +588,7 @@ mod tests {
                 speech_ratio: 0.9,
             },
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            text_source: "lrc".into(),
         }
     }
 

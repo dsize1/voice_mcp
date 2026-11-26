@@ -317,6 +317,29 @@ enum BankCmd {
         #[arg(long)]
         allow_noise: bool,
     },
+    /// 单文件真人音频入库（无 LRC）：自动切句 + 双引擎验证文本 + 质量门槛
+    IngestAudio {
+        /// 音频路径（mp3/m4a/wav/flac）
+        audio: String,
+        /// 语料集合（默认 ielts）
+        #[arg(long, default_value = "ielts")]
+        corpus: String,
+        /// 来源标签（默认 IELTS）
+        #[arg(long, default_value = "IELTS")]
+        book: String,
+        /// 课/段标签（默认取文件名）
+        #[arg(long)]
+        lesson: Option<String>,
+        /// 双引擎词级一致率门槛（默认 0.7）
+        #[arg(long, default_value_t = 0.7)]
+        min_agree: f32,
+        /// 单句最长秒数（超过硬切，默认 12）
+        #[arg(long, default_value_t = 12.0)]
+        max_sec: f32,
+        /// 只算，不写文件
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// 把索引升级到当前 schema（补 corpus/kind/ref_audio）
     Migrate,
     /// 导入只有题面的素材（雅思口语题库 JSON 数组）
@@ -427,6 +450,24 @@ fn main() -> Result<()> {
             ),
             BankCmd::Show { id } => bank_show(&cfg, &id),
             BankCmd::Drill { id, quiet } => bank_drill(&cfg, &id, quiet),
+            BankCmd::IngestAudio {
+                audio,
+                corpus,
+                book,
+                lesson,
+                min_agree,
+                max_sec,
+                dry_run,
+            } => bank_ingest_audio(
+                &cfg,
+                &audio,
+                &corpus,
+                &book,
+                lesson.as_deref(),
+                min_agree,
+                max_sec,
+                dry_run,
+            ),
             BankCmd::Migrate => {
                 let n = voice_core::bank::migrate(Path::new(&cfg.data_dir))?;
                 println!("{}", serde_json::json!({"migrated": n}));
@@ -2010,6 +2051,59 @@ fn tts_verify(
     Ok(())
 }
 
+/// `bank ingest-audio`：没有 LRC 的单文件真人音频 → 逐句素材。
+#[allow(clippy::too_many_arguments)]
+fn bank_ingest_audio(
+    cfg: &Config,
+    audio: &str,
+    corpus: &str,
+    book: &str,
+    lesson: Option<&str>,
+    min_agree: f32,
+    max_sec: f32,
+    dry_run: bool,
+) -> Result<()> {
+    let engines = Engines::load(cfg.clone())?;
+    let opt = voice_core::bank::AudioIngestOptions {
+        corpus: corpus.to_string(),
+        book: book.to_string(),
+        lesson: lesson.unwrap_or_default().to_string(),
+        min_agree,
+        max_sec,
+        dry_run,
+    };
+    let r =
+        voice_core::bank::ingest_audio(&engines, Path::new(&cfg.data_dir), Path::new(audio), &opt)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "lesson": r.lesson_slug,
+            "kept": r.kept,
+            "rejected": r.rejected,
+            "source_sr": r.source_sr,
+            "band_limited": r.band_limited,
+            "text_source": "asr（双引擎复核，非书本原文）",
+            "entries": r.entries,
+            "preview": r.preview.iter().map(|(id, text, dur)| serde_json::json!({
+                "id": id, "dur": round3(*dur), "text": text
+            })).collect::<Vec<_>>(),
+            "rejects": r.rejects.iter().map(|x| serde_json::json!({
+                "seq": x.seq, "text": x.text, "reasons": x.reasons
+            })).collect::<Vec<_>>(),
+            "dry_run": dry_run,
+        }))?
+    );
+    if r.kept > 0 {
+        eprintln!(
+            "[bank ingest-audio] {} 句入库（拒 {}）；验证：voice-cli assess <录音> --bank-id {} --with-gop",
+            r.kept,
+            r.rejected,
+            r.entries.first().cloned().unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
 struct BankRefsArgs {
     ids: Vec<String>,
     kind: Option<String>,
@@ -2435,6 +2529,7 @@ fn bank_show(cfg: &Config, id: &str) -> Result<()> {
                 "speech_ratio": f3(e.quality.speech_ratio),
             },
             "audio": e.src, "audio_exists": src.is_file(),
+            "text_source": e.text_source,
         }))?
     );
     Ok(())

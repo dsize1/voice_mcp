@@ -14,7 +14,7 @@
 | 英语水平 | band **6.0**（区间 5.5–6.5），CEFR 近似 **B2**；**跟读/朗读下界**，非官方成绩 |
 | 就绪等级 | **L2+**（跟读稳定，半自由未满） |
 | 自由说 | **关闭**（`readiness.free_speech_enabled=false`）；L3 后做 30–45 s 提纲，L4 才做 60 s 无稿 |
-| 素材库 | **5 007 条**（NCE 4 997 + IELTS prompt 10），可直接练 3 378 |
+| 素材库 | **5 022 条**（NCE 4 997 + IELTS prompt 10 + IELTS 听力真人 14），text_source 区分 lrc/book/asr |
 | 诊断能力 | 词级 diff + flow + 词级 GOP（**真人原声优先**基线/混淆对）+ 韵律（F0/升降/平调/重音候选/DTW，参考音标 native/tts） |
 | TTS | 默认 **am_michael（男声）+ 140 wpm**（130–160），slow=110；WPM 按**语音跨度**；起始伪影检测 + 自动换速度/换音色；OOV 预检 + `tts-verify` + `bank refs` 批量验证；verified 听力集/10 条 prompt 见 STATE |
 | 债务 | D01–D52 已登记；**2026-11-25 还 D20/D47/D49/D51，D04/D52 部分偿还** |
@@ -53,7 +53,7 @@
 
 | ID | 目标 | 状态 | 验收 | 依赖 / 阻塞 |
 |---|---|---|---|---|
-| **N9** | 雅思素材入库（先 1 本 / Part 1） | ⛔ | 至少 200 条 IELTS 可练素材 | **缺源音频 + LRC/字幕** |
+| **N9** | 雅思素材入库（先 1 本 / Part 1） | 🟡 | 至少 200 条 IELTS 可练素材。**已打通无字幕通道**：`bank ingest-audio`（VAD 切句 + 双引擎验证 + `text_source=asr`），首个真人音频 14 句入库 | 仍缺整本题库音频；语速 214 wpm 需降速 |
 | **N10** | 外部录音（手机/系统录音机）可用性 | 🟡 | 3 条录音双引擎一致率 ≥0.8，能出词级结论 | 与 N2 联动 |
 | **N11** | TTS 参考音验证（D51）：OOV 预检 + 双 ASR/音素/WPM + 基线自检 | ✅ | `tts-verify` 3/3；OOV 0；`gop_baseline_valid` 生效；**`bank refs` 批量接入**；**10/10 IELTS prompt verified 3/3（含音素）** | 无 |
 | **N12** | Day 9 听力改用 `chunks-listening-verified/` 并更新答案键/训练记录 | ✅ | `day-9.md` 材料表 + `chunks-recall(.md/-key.md)` + 会话记录全部指向 verified；原文件未动；复测口径已写清（只有 s5 = 168 wpm 越界） | — |
@@ -132,7 +132,8 @@
 | 2026-11-25 | 默认音色改为 **am_michael（男声）**（MCP/CLI/GOP 基线三处统一，`DEFAULT_VOICE` 常量 + 单测） | `080e8aa` |
 | 2026-11-25 | MCP 端换新二进制（杀子进程 → 重建 → Pi 自动重连），`synthesize` 实测返回 `am_michael`/`speech_duration`/`onset_gap_ms` | `97d7793` |
 | 2026-11-25 | CI 首跑确认绿（D20 部分偿还→偿还）：run [45643953511](https://github.com/dsize1/voice_mcp/actions/runs/45643953511) | 本次推送 |
-| 2026-11-25 | D52：TTS 不再当基线 —— `bank_id` 用真人原声切片当 GOP 基线/韵律参考，基线加音素自检，来源打标 | 本次提交 |
+| 2026-11-25 | D52：TTS 不再当基线 —— `bank_id` 用真人原声切片当 GOP 基线/韵律参考，基线加音素自检，来源打标 | `e784cee` |
+| 2026-11-26 | N9 首次打通：`bank ingest-audio`（VAD 切句 + 段内停顿切分 + 双引擎验证 + `text_source=asr`）；雅思听力真人 14 句入库 | 本次提交 |
 
 ---
 

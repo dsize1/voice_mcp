@@ -296,6 +296,7 @@ voice-cli stt <path|last> [--lang en] [--plain]# 转写（留证）
 voice-cli say "text" [--voice am_michael] [--speed <倍率>] [--slow-too] [--play] # 默认 140 wpm / 男声
 voice-cli tts-verify "text" [--voice am_michael] [--runs 3] [--no-phones]      # TTS 参考音验证（双 ASR/音素/WPM/起始伪影）
 voice-cli bank refs [ids...] --kind prompt --runs 3 --out DIR                   # 批量生成示范音并逐条验证（verified 才落盘）
+voice-cli bank ingest-audio <mp3> --lesson <label> [--dry-run]                  # 单文件真人音频入库（无 LRC：VAD 切句 + 双引擎验证）
 voice-cli tts-audit --manifest <jsonl> --out <report.jsonl> [--no-phones]    # 只读审计现有 TTS 资产
 voice-cli play <path>
 voice-cli assess <path|last> [--reference "原句"] [--with-gop]   # 评测（含词级 GOP + TTS 基线）

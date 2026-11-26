@@ -25,6 +25,41 @@ pub fn info(samples: &[f32], sr: u32) -> AudioInfo {
     decode::analyze_pub(samples, sr, 1)
 }
 
+/// 语音跨度（秒）：去掉首尾近静音后的时长（10 ms 帧，门限 = 帧峰值 − 40 dB）。
+///
+/// 用于“语速”这类需要**分母是说话时间**的指标：拿文件总时长算，首尾静音会把
+/// 语速系统性压低（TTS 侧实测目标 140 被量成 128）。
+pub fn speech_span_sec(samples: &[f32], sr: u32) -> Option<f32> {
+    let hop = (sr as usize / 100).max(1); // 10 ms
+    if samples.len() < hop * 5 {
+        return None;
+    }
+    let dbs: Vec<f32> = samples
+        .chunks(hop)
+        .map(|c| {
+            let ms: f32 = c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32;
+            let rms = ms.sqrt();
+            if rms <= 1e-9 {
+                -120.0
+            } else {
+                20.0 * rms.log10()
+            }
+        })
+        .collect();
+    let peak = dbs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if !peak.is_finite() || peak < -70.0 {
+        return None;
+    }
+    let thr = peak - 40.0;
+    let first = dbs.iter().position(|d| *d >= thr)?;
+    let last = dbs.iter().rposition(|d| *d >= thr)?;
+    if last <= first {
+        return None;
+    }
+    let hop_sec = hop as f32 / sr as f32;
+    Some((last + 1 - first) as f32 * hop_sec)
+}
+
 /// 稳健 SNR 估计（dB）。两条分支，因为"语音占空比"差异极大：
 /// - **≥4 s 的长录音**：`p90 − p10`（抗 AGC 尖峰）
 /// - **<4 s 的短词/短句**：`top-5% 帧均值 − p10`

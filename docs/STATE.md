@@ -61,6 +61,7 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe lesson <mp3> --lrc <lrc> --verbose
 ./target/release/voice-cli.exe tts-audit --manifest <jsonl> --out <report.jsonl>  # 只读审计 TTS 资产
 ./target/release/voice-cli.exe bank refs --kind prompt --runs 3 --out <dir>       # 批量生成示范音 + 逐条 tts-verify（verified 才落盘）
+./target/release/voice-cli.exe bank ingest-audio <mp3> --lesson <label>          # 单文件真人音频入库（无 LRC：VAD 切句 + 双引擎验证）
 ./target/release/voice-cli.exe bank refs ielts/custom/p1-weather --voice am_fenrir --runs 3 --out <dir>  # 指定素材/音色
 VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 ```
@@ -106,6 +107,26 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
   常量 `voice_core::engine::DEFAULT_VOICE`）。理由：af_heart 在 140 wpm 附近有起始伪影（双 ASR 听成 “And”），
   am_michael 是 10 条 IELTS prompt 的主力已验证音色。需要女声时显式传 `--voice`。
   注意：GOP 基线音色同步改了 → **2026-11-25 前后的 Δ 不可严格横比**。
+
+## 雅思真人素材入库（2026-11-26，N9 首次打通）
+
+`bank ingest-audio` 补上了“只有一段真人录音、没有 LRC/字幕”这条路：
+
+```bash
+voice-cli bank ingest-audio <mp3> --lesson 2023-12-08 [--corpus ielts] [--book IELTS]     [--min-agree 0.7] [--max-sec 12] [--dry-run]
+```
+
+流程：解码 → VAD 段 → **段内按真实停顿再切**（不用 ASR 词时间戳，CTC 会漂）→ 每片跑双引擎
+（SenseVoice 出文本、whisper 独立复核）→ 一致率 <0.7 进 quarantine → 写 16 kHz 切片 + 索引
+（`ref_audio=native`、`text_source=asr`、`quality.asr` 记一致率）。`--dry-run` 会打印逐句预览。
+
+已入库：`ielts/2023-12-08/001–014`（**14 句**，来源 `ielts_2023_12_08_b9380f3a….mp3`，44.1 kHz 真人）。
+首句 `Right, Judy,` 只有 2 个词（<3）被拒；`bank show` 会显示 `text_source: asr`。
+
+**这段音频的性质（别搞错）**：它是 **IELTS 听力风格的导师独白**（"Right, Judy, this week is your
+turn to bring us up to date on your dissertation…"），**不是那 10 条口语 prompt 的朗读**，
+所以它补不上“prompt 缺真人音”那一项。另外实测语速 **≈214 wpm**（257 词 / 72.2 s 语音），
+高于雅思 130–160 —— 当“快速听力挑战”可以，当“标准语速材料”要先用 ffmpeg 降到 ~0.75×。
 
 ## 参考音与基线（2026-11-25 修正：TTS 不再当“标准”）
 
@@ -219,10 +240,10 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 - 修掉那 1 处编译错误；`cargo fmt --all` 全仓格式化；清掉全部 36 条 clippy 警告
   （26 条 collapsible_if 自动修，4 条手工：needless_range_loop / field_reassign ×2 / too_many_arguments 加注）。
 - `tools/check.ps1`：`fmt --check` → `clippy --all-targets -D warnings` → `test`，
-  可选 `-Cases` 跑录音回归。本地实测：**138 单测 + 9 用例全绿**（2026-11-25）。
+  可选 `-Cases` 跑录音回归。本地实测：**141 单测 + 9 用例全绿**（2026-11-25）。
 - `.github/workflows/ci.yml`：windows-latest 上跑同一套脚本，先 `fetch_deps.ps1` 取原生库。
   **GitHub Actions 已跑绿**：`530e668`（2026-11-24）/ `3cf8736`（2026-11-25），
-  `windows-latest` 上 `fmt → clippy -D warnings → test`（138 单测）全过。
+  `windows-latest` 上 `fmt → clippy -D warnings → test`（141 单测）全过。
   仍缺的是**合成 fixture**（D21）：CI 里跑不了带音频的 decode/flow 用例。
 - `rust-toolchain.toml` + `Cargo.toml` 的 `rust-version = "1.99"`（实测版本；edition 2024 的理论下限 1.85 未验证）。
 

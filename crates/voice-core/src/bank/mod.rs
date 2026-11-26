@@ -6,6 +6,8 @@
 //! - 素材**只读**：生成后不再修改（重复 ingest 默认跳过，`--overwrite` 才覆盖）；
 //! - 索引是唯一真相：`bank/index.jsonl`，一行一个素材。
 
+pub mod subtitle;
+
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -913,6 +915,9 @@ pub struct AudioIngestOptions {
     pub end_sec: Option<f32>,
     /// 最多入库几句（0/None = 不限）
     pub max_chunks: Option<usize>,
+    /// 字幕文件（SRT / WebVTT）。给了就用**字幕文本**当答案键（`text_source=srt`），
+    /// ASR 只用来验证时间轴对不对。
+    pub srt: Option<PathBuf>,
     pub dry_run: bool,
 }
 
@@ -927,6 +932,7 @@ impl Default for AudioIngestOptions {
             start_sec: 0.0,
             end_sec: None,
             max_chunks: None,
+            srt: None,
             dry_run: false,
         }
     }
@@ -1103,10 +1109,40 @@ pub fn ingest_audio(
 
     // 以 VAD 停顿为切分基础：时间来自音频（可靠），文本来自该片的 ASR（双引擎复核）。
     // 不用 ASR 词时间戳切句 —— CTC 时间戳会漂（D09），按它切片会切出半句/静音。
+    // 有字幕 → 句子单元来自字幕（文本权威、时间权威）；否则 VAD + 停顿切
+    let subtitle_cues: Option<Vec<subtitle::Cue>> = match &opt.srt {
+        Some(p) => {
+            let raw = std::fs::read_to_string(p)
+                .with_context(|| format!("读字幕失败: {}", p.display()))?;
+            let cues = subtitle::parse(&raw);
+            if cues.is_empty() {
+                bail!("字幕里没有可用 cue: {}", p.display());
+            }
+            let merged = subtitle::merge_cues(&cues, opt.max_sec);
+            let kept: Vec<subtitle::Cue> = merged
+                .into_iter()
+                .filter(|c| c.t0 < end && c.t1 > off)
+                .collect();
+            if kept.is_empty() {
+                bail!("字幕与 --start/--end 没有重叠");
+            }
+            Some(kept)
+        }
+        None => None,
+    };
     let segments = merge_segments(&engines.vad.segments(window), 0.35);
     let mut sents: Vec<(f32, f32, String)> = Vec::new();
+    if let Some(cues) = &subtitle_cues {
+        for c in cues {
+            // 相对窗口的时间（后面统一加回 off）
+            sents.push((c.t0 - off, c.t1 - off, c.text.clone()));
+        }
+    }
     for (a, b) in &segments {
         let (a, b) = (*a, *b);
+        if subtitle_cues.is_some() {
+            break; // 用字幕切句时，VAD 段只用来兜底，不再追加
+        }
         if b - a < 0.6 {
             continue; // 太短：咳嗽/噪声
         }
@@ -1145,7 +1181,7 @@ pub fn ingest_audio(
     let mut kept: Vec<BankEntry> = Vec::new();
     let mut agree_sum = 0.0f32;
 
-    for (i, (seg_t0, seg_t1, _)) in sents.iter().enumerate() {
+    for (i, (seg_t0, seg_t1, sub_text)) in sents.iter().enumerate() {
         // 原始句序（只用于 quarantine 记录）；入库序号在 kept 时重新连续编号
         let src_seq = (i + 1) as u32;
         let seq = kept.len() as u32 + 1;
@@ -1173,7 +1209,13 @@ pub fn ingest_audio(
                 continue;
             }
         };
-        let text = sv.text.trim().to_string();
+        // 有字幕 → 用字幕文本当答案键（文本权威）；没有字幕才用 ASR 文本（text_source=asr）
+        let from_srt = !sub_text.trim().is_empty();
+        let text = if from_srt {
+            sub_text.trim().to_string()
+        } else {
+            sv.text.trim().to_string()
+        };
         if text.is_empty() {
             rejects.push(Rejection {
                 seq: src_seq,
@@ -1257,13 +1299,17 @@ pub fn ingest_audio(
             ref_slow: None,
             quality: Quality {
                 line_sim: crate::round_to(agree, 3),
-                asr: format!("sense-voice split; whisper agree {agree:.2}; source=asr"),
+                asr: format!(
+                    "{}; whisper agree {agree:.2}; source={}",
+                    if from_srt { "srt" } else { "sense-voice split" },
+                    if from_srt { "srt" } else { "asr" }
+                ),
                 band_limited: decoded.info.band_limited,
                 lrc_fit_scale: 1.0,
                 speech_ratio: 1.0,
             },
             tags: tags_for(&text),
-            text_source: "asr".into(),
+            text_source: if from_srt { "srt" } else { "asr" }.into(),
         });
     }
 
@@ -1283,7 +1329,11 @@ pub fn ingest_audio(
             "kept": kept_n,
             "rejected": rejected_n,
             "mean_agreement": crate::round_to(if kept_n > 0 { agree_sum / kept_n as f32 } else { 0.0 }, 3),
-            "text_source": "asr（sense-voice 切句 + whisper 复核；非书本原文）",
+            "text_source": if subtitle_cues.is_some() {
+                "srt（字幕文本权威；whisper 复核时间轴）"
+            } else {
+                "asr（sense-voice 切句 + whisper 复核；非书本原文）"
+            },
             "ingested": chrono::Local::now().to_rfc3339(),
         });
         std::fs::write(

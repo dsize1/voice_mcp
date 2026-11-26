@@ -113,8 +113,12 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 `bank ingest-audio` 补上了“只有一段真人录音、没有 LRC/字幕”这条路：
 
 ```bash
-voice-cli bank ingest-audio <mp3> --lesson 2023-12-08 [--corpus ielts] [--book IELTS]     [--min-agree 0.7] [--max-sec 12] [--start 20 --end 110] [--max-chunks 20] [--dry-run]
+voice-cli bank ingest-audio <mp3> --lesson 2023-12-08 [--corpus ielts] [--book IELTS]     [--srt <subtitle.srt>] [--min-agree 0.7] [--max-sec 12]     [--start 20 --end 110] [--max-chunks 20] [--dry-run]
 ```
+
+**有字幕就用字幕**（`--srt`，或把 `S01E01.srt` 放音频旁边自动找）：文本与时间都取字幕
+（`text_source=srt`），ASR 只做时间轴复核（一致率 <0.7 的 cue 进 quarantine）。
+没有字幕才退回 ASR 派生（`text_source=asr`）。
 
 `--start/--end/--max-chunks` 用来只取“某一集里的某个片段”（长音频/不想全量入库时）。
 
@@ -141,9 +145,16 @@ turn to bring us up to date on your dissertation…"），**不是那 10 条口�
 | `Mdy puddles.` / `puals` | muddy puddles / puddles |
 | `HaAll right, run along you too.`（被拒） | All right… |
 
+**加字幕之后（2026-11-26 实测）**：把 `S01E01.srt` 放到音频旁边再跑同一段
+→ `text_source=srt`，入库 7 句全部是正确拼写（`Peppa` / `muddy puddles`），
+字幕与音频错位的那条 cue 被一致率闸门拦下（拒 1）。**所以字幕是佩奇这类素材的关键路径。**
+
 - **能用**：native 音频（真人、清楚、~130–150 wpm、level 1–2）、`ref_audio=native`、可做听力/跟读/韵律参考。
 - **不能用**：`text_source=asr` 的文本当听写答案键（专有名词 + 卡通童声 + 背景音，双引擎也一起错）。
-- 要当“标准文本”，必须有 **SRT/LRC**：给我字幕就加 `--srt` 路径（文本+时间都来自字幕）。
+- 要当“标准文本”，必须有 **SRT/VTT**：`--srt` 已实现（放同名文件会自动发现）。
+- **语速提醒**：实测佩奇 ≈180–200 wpm、那条雅思录音 ≈214 wpm，都**高于**雅思 130–160
+  —— 两个 bilibili 源都像是被变速上传过（×1.25–1.4）。要标准语速材料，需先用 ffmpeg
+  `-filter:a atempo=0.8`（本机暂无 ffmpeg）降速后再入库。
 - 版权：仅本地个人学习，不入 git（`bank/` 在 `D:/voice_data`）；入库会写 `ATTRIBUTION.md`。
 
 ## 参考音与基线（2026-11-25 修正：TTS 不再当“标准”）
@@ -258,10 +269,10 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 - 修掉那 1 处编译错误；`cargo fmt --all` 全仓格式化；清掉全部 36 条 clippy 警告
   （26 条 collapsible_if 自动修，4 条手工：needless_range_loop / field_reassign ×2 / too_many_arguments 加注）。
 - `tools/check.ps1`：`fmt --check` → `clippy --all-targets -D warnings` → `test`，
-  可选 `-Cases` 跑录音回归。本地实测：**142 单测 + 9 用例全绿**（2026-11-25）。
+  可选 `-Cases` 跑录音回归。本地实测：**147 单测 + 9 用例全绿**（2026-11-25）。
 - `.github/workflows/ci.yml`：windows-latest 上跑同一套脚本，先 `fetch_deps.ps1` 取原生库。
   **GitHub Actions 已跑绿**：`530e668`（2026-11-24）/ `3cf8736`（2026-11-25），
-  `windows-latest` 上 `fmt → clippy -D warnings → test`（142 单测）全过。
+  `windows-latest` 上 `fmt → clippy -D warnings → test`（147 单测）全过。
   仍缺的是**合成 fixture**（D21）：CI 里跑不了带音频的 decode/flow 用例。
 - `rust-toolchain.toml` + `Cargo.toml` 的 `rust-version = "1.99"`（实测版本；edition 2024 的理论下限 1.85 未验证）。
 

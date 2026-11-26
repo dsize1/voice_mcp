@@ -344,6 +344,9 @@ enum BankCmd {
         /// 最多入库几句
         #[arg(long)]
         max_chunks: Option<usize>,
+        /// 字幕文件（SRT/VTT）：给了就用字幕文本当答案键（text_source=srt）
+        #[arg(long)]
+        srt: Option<String>,
         /// 只算，不写文件（会打印逐句预览）
         #[arg(long)]
         dry_run: bool,
@@ -468,6 +471,7 @@ fn main() -> Result<()> {
                 start,
                 end,
                 max_chunks,
+                srt,
                 dry_run,
             } => bank_ingest_audio(
                 &cfg,
@@ -480,6 +484,7 @@ fn main() -> Result<()> {
                 start,
                 end,
                 max_chunks,
+                srt.as_deref(),
                 dry_run,
             ),
             BankCmd::Migrate => {
@@ -2078,8 +2083,28 @@ fn bank_ingest_audio(
     start: f32,
     end: Option<f32>,
     max_chunks: Option<usize>,
+    srt: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
+    // 没显式给 --srt 时，自动找同名 .srt / .vtt（放一起就能用）
+    let srt_path: Option<std::path::PathBuf> = match srt {
+        Some(p) => Some(std::path::PathBuf::from(p)),
+        None => {
+            let a = std::path::Path::new(audio);
+            let stem = a.with_extension("");
+            ["srt", "vtt", "SRT", "VTT"]
+                .iter()
+                .map(|ext| stem.with_extension(ext))
+                .find(|p| p.is_file())
+        }
+    };
+    let has_srt = srt_path.is_some();
+    if let Some(p) = &srt_path {
+        eprintln!(
+            "[bank ingest-audio] 字幕：{}（答案键来自字幕）",
+            p.display()
+        );
+    }
     let engines = Engines::load(cfg.clone())?;
     let opt = voice_core::bank::AudioIngestOptions {
         corpus: corpus.to_string(),
@@ -2090,6 +2115,7 @@ fn bank_ingest_audio(
         start_sec: start,
         end_sec: end,
         max_chunks,
+        srt: srt_path,
         dry_run,
     };
     let r =
@@ -2102,7 +2128,7 @@ fn bank_ingest_audio(
             "rejected": r.rejected,
             "source_sr": r.source_sr,
             "band_limited": r.band_limited,
-            "text_source": "asr（双引擎复核，非书本原文）",
+            "text_source": if has_srt { "srt" } else { "asr" },
             "entries": r.entries,
             "preview": r.preview.iter().map(|(id, text, dur)| serde_json::json!({
                 "id": id, "dur": round3(*dur), "text": text

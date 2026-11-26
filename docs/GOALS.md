@@ -53,7 +53,7 @@
 
 | ID | 目标 | 状态 | 验收 | 依赖 / 阻塞 |
 |---|---|---|---|---|
-| **N9** | 雅思素材入库（先 1 本 / Part 1） | 🟡 | 至少 200 条 IELTS 可练素材。**已打通无字幕通道**：`bank ingest-audio`（VAD 切句 + 双引擎验证 + `text_source=asr`），首个真人音频 14 句入库 | 仍缺整本题库音频；语速 214 wpm 需降速 |
+| **N9** | 雅思素材入库（先 1 本 / Part 1） | 🟡 | 至少 200 条 IELTS 可练素材。**两条通道都打通**：`bank ingest-audio` —— 有字幕用 `--srt`（`text_source=srt`，可当答案键），无字幕走 VAD 切句 + 双引擎验证（`text_source=asr`，只当听力/跟读音）。已入库：雅思听力真人 14 句 + 佩奇 S01E01 片段 7 句 | 仍缺整本题库音频；语速 214 wpm 需降速 |
 | **N10** | 外部录音（手机/系统录音机）可用性 | 🟡 | 3 条录音双引擎一致率 ≥0.8，能出词级结论 | 与 N2 联动 |
 | **N11** | TTS 参考音验证（D51）：OOV 预检 + 双 ASR/音素/WPM + 基线自检 | ✅ | `tts-verify` 3/3；OOV 0；`gop_baseline_valid` 生效；**`bank refs` 批量接入**；**10/10 IELTS prompt verified 3/3（含音素）** | 无 |
 | **N12** | Day 9 听力改用 `chunks-listening-verified/` 并更新答案键/训练记录 | ✅ | `day-9.md` 材料表 + `chunks-recall(.md/-key.md)` + 会话记录全部指向 verified；原文件未动；复测口径已写清（只有 s5 = 168 wpm 越界） | — |

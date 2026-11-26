@@ -37,6 +37,7 @@
 | `baseline_tts` | bool | | 用 TTS 合成参考文本再跑一遍同一套 GOP，作为**对照基线**（区分"用户读错"与"模型分辨不出"） |
 | `with_prosody` | bool | | 同时跑韵律：F0 轮廓 / 句末升降 / 平调 / 音域 / 重音候选 / 节奏 |
 | `reference_audio` | string | | 参考音路径（TTS/真人示范）。提供时**自动开启韵律**，并返回 F0 形状 DTW 对比 |
+| `bank_id` | string | | 素材库 id（如 `nce2/02/003`）：自动填 `reference`；`ref_audio=native` 时用**真人原声切片**当 GOP 基线与韵律参考（**优先于 TTS**） |
 | `scene` | string | | 场景标签（仅外部文件新建会话时生效；本机 take 沿用原前缀） |
 
 **留证位置（重要）**：`path` 指向本机 `sessions/<date>/<id>/takes/` 下的文件时，
@@ -340,14 +341,29 @@ $VOICE_HOME (默认 D:/voice_data)
 - 实测梯度（TTS + 噪声）：名义 30/20/12/8/4 dB → 测得 30.1/23.8/16.9/14.0/11.3 dB，
   最后两档 ASR 仍全对、只有 4 dB 档被拦截 —— 说明该闸门卡在"ASR 开始失效"的位置
 
-## GOP 对照基线（`baseline_tts`）
+## GOP 对照基线（`baseline_tts` / `bank_id`）
 
-`with_gop=true, baseline_tts=true` 时返回 `gop_baseline`（TTS 标准发音的 GOP 结果，字段为 `version` + 全量 `words[]`）
-和 `gop_baseline_valid`（TTS 音频 ASR 回读是否与参考文本一致）。
+**基线优先级（2026-11-25 修正，D52）**：
 
-- `gop_baseline_valid=true`：可以算 `用户 − 基线`；
-- `false`：**禁止**使用 Δ，`limitations` 会说明回读不一致（D51）；
-- 字段缺失：本次没有生成基线（未请求 / 无 GOP / 合成失败）。
+| 情况 | 基线 | `gop_baseline_source` |
+|---|---|---|
+| 传了 `bank_id` 且该素材是 `ref_audio=native` | 素材库的**真人原声切片** | `native` |
+| 只有 `baseline_tts=true`（或 `ref_audio=tts` 的 prompt） | TTS 合成（默认 am_michael / 140 wpm） | `tts` |
+| 都没传 | 无基线 | 字段缺失 |
+
+返回字段：
+
+| 字段 | 含义 |
+|---|---|
+| `gop_baseline` | 基线的 GOP 结果（`version` + 全量 `words[]`） |
+| `gop_baseline_valid` | 自检是否可用：① 参考音回读词序列必须与文本一致；② **基线自身音素不能读坏**（最差词级 GOP ≥ −1.5） |
+| `gop_baseline_source` | `native` / `tts` |
+
+- `valid=true`：可以算 `用户 − 基线`；
+- `valid=false`：**禁止** Δ，`limitations` 写明是内容不一致还是音素读坏（D51/D52）；
+- **`source=tts` 不得用于“语调/重音是否地道”的结论**：合成音的语调不是人标准，
+  只能说“与这段合成示范的差异”；只有 `source=native` 才能说“和真人原声的差异”。
+- 旧实现（2026-11-25 之前）一律用 TTS 当基线且只做内容自检 → 音素读坏但词读对的基线会被当标准。
 
 动机：GOP 绝对值带模型偏好。实测同一个音素 CTC 模型读 `their` 也只有 −0.36，
 所以"用户 −基线"才是可解释的量。
@@ -380,7 +396,7 @@ af_heart 在 140 wpm 附近有起始伪影，会让基线自检误判；改后 �
   "stress_top": [{"word": "management.", "t0": 20.97, "t1": 21.81, "dur": 0.84,
                   "f0_peak_st": 6.22, "f0_mean_st": -0.54, "dur_z": 2.98,
                   "energy_z": -0.92, "salience": 1.62}],
-  "reference": {"f0_median_hz": 205.8, "dtw_cost_st": 0.11, "points": 50}
+  "reference": {"source": "native", "f0_median_hz": 205.8, "dtw_cost_st": 0.11, "points": 50}
 }}
 ```
 
@@ -394,6 +410,9 @@ af_heart 在 140 wpm 附近有起始伪影，会让基线自检误判；改后 �
 - `stress_top` 是**重音候选排序**：`salience = 0.5*dur_z + 0.3*(f0_peak_st/6) + 0.2*energy_z`。
   词时长来自 ASR（±0.5 s 量级），只能当"大概第几个词"；**不是"你重音放错了"的判决**。
 - `energy_z` 在蓝牙 AGC 设备上不可信（D36），只作第 3 特征；反馈中不要拿它说"重音太轻"。
+- `reference.source` 是参考音来源：`native`（真人原声，`bank_id` 自动带来）、`tts`
+  （`synthesize` 产出的 `.ref_norm/.ref_slow`，按文件名推断）、`unknown`（外部文件）。
+  **`tts` 参考只能说“与这段合成示范的形状差多少”，不能说“语调不对”**（D52）。
 - `reference.dtw_cost_st` 是**时间归一化后**的半音形状 DTW 平均代价（越小越像）。
   用户与参考各自减掉自己的中位数，所以音高/性别/参考音时长差异都被消掉。
 - `degraded=true`、`snr_db < 13`、浊音帧不足 → 不返回 `prosody`，`limitations` 说明原因。

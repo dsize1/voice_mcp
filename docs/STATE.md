@@ -49,7 +49,8 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe doctor --load     # 12 项自检
 ./target/release/voice-cli.exe mic --secs 3      # 麦克风能力 + 底噪 + 阈值建议
 ./target/release/voice-cli.exe rec --max-sec 20 --stt --lang en
-./target/release/voice-cli.exe assess <audio|last> --reference "原句" --with-gop   # 词级+音素级 GOP + TTS 基线
+./target/release/voice-cli.exe assess <audio|last> --reference "原句" --with-gop   # 词级+音素级 GOP + 基线（无 bank-id 时用 TTS）
+./target/release/voice-cli.exe assess <audio|last> --bank-id nce2/02/003 --with-gop # 素材库：参考文本+真人原声切片当基线（推荐）
 ./target/release/voice-cli.exe assess <audio|last> --with-prosody --reference-audio <示范.wav>  # 韵律 + DTW
 ./target/release/voice-cli.exe gop <audio> --text "原句"                          # 只跑 GOP（看 heard/confusion）
 ./target/release/voice-cli.exe bank plan --minutes 15 --limit 8                   # 定向训练计划（含 60 s 自由说槽位）
@@ -106,13 +107,34 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
   am_michael 是 10 条 IELTS prompt 的主力已验证音色。需要女声时显式传 `--voice`。
   注意：GOP 基线音色同步改了 → **2026-11-25 前后的 Δ 不可严格横比**。
 
+## 参考音与基线（2026-11-25 修正：TTS 不再当“标准”）
+
+**之前的错**：跟读评测的 GOP 基线一律用 TTS 合成音，韵律 DTW 的参考音也大多是
+`synthesize` 产出的 `.ref_norm/.ref_slow`。问题有三层：
+
+1. TTS 自己会读错（审计：country/thank/tokyo 回读不一致），旧实现只做**内容**自检 → 词对就算过；
+2. TTS 与 G2P 共用同一套音素变体（D46），同形异音词（live/read）基线跟着错，无法自救；
+3. 合成音的语调不是人标准，拿它判“语调/重音不地道”没有依据。
+
+**现在的口径（D52）**：
+
+| 场景 | 基线/参考 | 标记 |
+|---|---|---|
+| 有 `bank_id` 且 `ref_audio=native`（NCE 4 997 条） | 素材库**真人原声切片** | `gop_baseline_source=native`、`prosody.reference.source=native` |
+| 只有 prompt（`ref_audio=tts`，10 条）或普通跟读句 | TTS（am_michael 140 wpm） | `…=tts`，**不得判“语调”** |
+| 外部参考音（自己传路径） | 原样使用 | `unknown`（除非它是 `.ref_norm/.ref_slow`） |
+
+- 基线自检加了一条**音素**闸门：最差词级 GOP < −1.5 → `gop_baseline_valid=false`（只做内容自检会漏掉“词对但音读坏”）。
+- CLI：`assess <录音> --bank-id <id> --with-gop`；MCP：`assess(bank_id=…, with_gop=true)`；`bank drill`/`bank plan` 会打印这条用法。
+- **历史数据**：2026-11-25 之前 `metrics.json` 里的 Δ 都是 TTS 基线算的，**不可与新结果横比**。
+
 ## 已知债务（详见 ADR-0008）
 
 S1 级已全部偿还。剩余主要项：
 D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D11 时间戳与阈值（韵律已上线，D12 已还）
 D15 全局锁串行 · D18 DLL 手工复制 · D21 CI 里的合成 fixture（**D20 已还：Actions 已绿**；仍缺音频 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
 D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）· D46 G2P 同形异音词只取首变体（live/read）· D48 readiness 未自动评估 · D50 韵律 12 条标注验收未做
-D04 whisper 端到端音频回归仍缺（routing + 3 个 fixture 单测已补）
+D04 whisper 端到端音频回归仍缺（routing + 3 个 fixture 单测已补）· **D52 TTS 当基线（部分偿还）**：真人原声优先 + 音素自检已做；残留是 IELTS prompt 无真人音 + 历史 Δ 需重跑
 
 已还（2026-11-25）：**D47**（短语音 SNR 豁免）· **D49**（双引擎文本闸门 `text_agreement`）· **D51**（`bank refs` 批量验证 + 10/10 prompt 3/3 + 起始伪影检测）
 
@@ -195,10 +217,10 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 - 修掉那 1 处编译错误；`cargo fmt --all` 全仓格式化；清掉全部 36 条 clippy 警告
   （26 条 collapsible_if 自动修，4 条手工：needless_range_loop / field_reassign ×2 / too_many_arguments 加注）。
 - `tools/check.ps1`：`fmt --check` → `clippy --all-targets -D warnings` → `test`，
-  可选 `-Cases` 跑录音回归。本地实测：**136 单测 + 9 用例全绿**（2026-11-25）。
+  可选 `-Cases` 跑录音回归。本地实测：**138 单测 + 9 用例全绿**（2026-11-25）。
 - `.github/workflows/ci.yml`：windows-latest 上跑同一套脚本，先 `fetch_deps.ps1` 取原生库。
   **GitHub Actions 已跑绿**：`530e668`（2026-11-24）/ `3cf8736`（2026-11-25），
-  `windows-latest` 上 `fmt → clippy -D warnings → test`（136 单测）全过。
+  `windows-latest` 上 `fmt → clippy -D warnings → test`（138 单测）全过。
   仍缺的是**合成 fixture**（D21）：CI 里跑不了带音频的 decode/flow 用例。
 - `rust-toolchain.toml` + `Cargo.toml` 的 `rust-version = "1.99"`（实测版本；edition 2024 的理论下限 1.85 未验证）。
 

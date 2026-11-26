@@ -70,6 +70,10 @@ pub struct Rhythm {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReferenceProsody {
+    /// 参考音来源：`native`（真人原声/真人示范）或 `tts`（合成）。
+    /// **TTS 参考只能说明"和合成音的 F0 形状差多少"，不能当"语调对不对"的人标准。**
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub f0_median_hz: f32,
     /// 时间归一化后 F0（半音）序列的 DTW 平均代价，越小越像。
     pub dtw_cost_st: f32,
@@ -277,6 +281,7 @@ pub fn compare(user: &Prosody, reference: &Prosody) -> ReferenceProsody {
     let a = resample(user.series(), DTW_POINTS);
     let b = resample(reference.series(), DTW_POINTS);
     ReferenceProsody {
+        source: None,
         f0_median_hz: reference.f0_median_hz,
         dtw_cost_st: crate::round_to(dtw(&a, &b), 2),
         points: DTW_POINTS,

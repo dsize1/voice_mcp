@@ -114,10 +114,14 @@ pub struct Assessment {
     /// TTS 标准发音的 GOP 基线（`baseline_tts=true` 才有），用于和用户分数对比。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop_baseline: Option<crate::gop::GopResult>,
-    /// TTS 基线自检：ASR 回读是否与参考文本一致。
-    /// `false` 时**禁止**使用 `gop_baseline` 做 Δ 对比。
+    /// 基线自检是否可用：参考音（真人或 TTS）自己读出来的词必须与参考文本一致，
+    /// 且音素层面不能明显读坏。`false` 时**禁止**使用 `gop_baseline` 做 Δ 对比。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop_baseline_valid: Option<bool>,
+    /// 基线来源：`native`（真人原声，优先）或 `tts`（合成，兜底）。
+    /// **`tts` 基线不能用来判"语调/重音是否地道"**，只能说"与合成示范的差异"。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gop_baseline_source: Option<String>,
     /// 音素级 GOP（`with_gop=true` 才有）。只能当排序/趋势，不能当判决。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop: Option<crate::gop::GopResult>,
@@ -172,9 +176,88 @@ pub struct AssessRequest<'a> {
     pub baseline_tts: bool,
     /// 是否跑韵律分析（F0/句末升降/平调/重音候选）
     pub with_prosody: bool,
+    /// **真人参考音**（原生素材切片、真人示范）。给了就不合成 TTS：
+    /// 它同时充当 GOP 基线与韵律 F0 参考（`gop_baseline_source="native"`）。
+    ///
+    /// 为什么不默认用 TTS：TTS 自己会读错（audit：country/thank/tokyo 回读不一致）、
+    /// 与 G2P 共用同一套音素变体（同形异音词无法自救，D46），而且合成音的语调不是人标准。
+    pub baseline_audio: Option<&'a str>,
     /// 参考音路径（TTS 示范/真人示范），用于 F0 形状 DTW 对比。
     /// 提供时自动开启韵律分析（不必再传 `with_prosody`）。
     pub reference_audio: Option<&'a str>,
+}
+
+/// 参考音来源推断（启发式，仅用于标签）：
+/// `synthesize` 产出的文件命名是 `*.ref_norm.wav` / `*.ref_slow.wav`；
+/// 素材库原生切片是 `*.ref.wav`。推断不出来就写 `unknown`，不要冒充 native。
+fn guess_ref_source(path: &str) -> &'static str {
+    let p = path.replace('\\', "/");
+    if p.contains(".ref_norm") || p.contains(".ref_slow") {
+        "tts"
+    } else {
+        "unknown"
+    }
+}
+
+/// 用一段“参考音”（真人原声优先，TTS 兜底）给同一段文本打 GOP 基线，并自检。
+///
+/// 自检两条（任何一条不过 → `valid=Some(false)`，禁止用于 Δ）：
+/// 1. **内容**：回读词序列必须与参考文本一致；
+/// 2. **音素**：词级 mean-GOP 最小值不能低于 −1.5（实测 TTS 把 `That's`/`export` 读坏时是 −3 ~ −6）。
+///
+/// 第 2 条是新加的：旧实现只看第 1 条，所以“读出来词对了但音读坏了”的基线会被当成标准。
+fn baseline_gop(
+    engines: &Engines,
+    samples: &[f32],
+    sr: u32,
+    text: &str,
+) -> (Option<crate::gop::GopResult>, Option<bool>, Vec<String>) {
+    let mut notes = Vec::new();
+    let pcm = if sr == crate::INTERNAL_SR {
+        samples.to_vec()
+    } else {
+        crate::audio::resample::resample(samples, sr, crate::INTERNAL_SR)
+    };
+    // 1) 内容自检
+    let want = normalize::words(text);
+    match engines
+        .asr
+        .transcribe(&pcm, crate::INTERNAL_SR, "en", Some("sense-voice"))
+    {
+        Ok(t) if normalize::words(&t.text) == want => {}
+        Ok(t) => {
+            notes.push(format!(
+                "基线自检失败：回读为「{}」，与参考文本不一致；该基线不能用于 Δ 对比（D51）",
+                t.text
+            ));
+            return (None, Some(false), notes);
+        }
+        Err(e) => {
+            notes.push(format!("基线自检失败（ASR 不可用）：{e}"));
+            return (None, Some(false), notes);
+        }
+    }
+    // 2) 音素自检 + 打分
+    match crate::gop::with_engine(|e| crate::gop::score_text(&mut e.model, &pcm, text, &e.g2p)) {
+        Ok(b) => {
+            let min = b
+                .words
+                .iter()
+                .map(|w| w.gop_mean)
+                .fold(f32::INFINITY, f32::min);
+            if min.is_finite() && min < -1.5 {
+                notes.push(format!(
+                    "基线音素自检失败：该参考音里有词被读坏（最差词级 GOP {min:.2} < −1.5）；             这条基线不能当标准，请换真人参考音或换音色"
+                ));
+                return (Some(b), Some(false), notes);
+            }
+            (Some(b), Some(true), notes)
+        }
+        Err(e) => {
+            notes.push(format!("基线 GOP 失败：{e}"));
+            (None, Some(false), notes)
+        }
+    }
 }
 
 /// 一次完成：ASR → 语流指标 → 词级差异。
@@ -222,60 +305,53 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
             "信噪比过低（{snr_db} dB < {SNR_MIN_DB} dB），跳过音素级 GOP"
         ));
     }
-    // TTS 对照基线：同一段参考文本用标准发音再跑一遍 GOP（失败不影响主流程）
+    // 对照基线（失败不影响主流程）：
+    //   1) 有真人参考音（`baseline_audio`）→ 用它，**不合成 TTS**；
+    //   2) 否则 `baseline_tts=true` → 用 TTS 合成，标 `source=tts`。
     let mut gop_baseline = None;
     let mut gop_baseline_valid = None;
-    if req.baseline_tts
-        && gop.is_some()
+    let mut gop_baseline_source: Option<String> = None;
+    if gop.is_some()
         && let Some(text) = req.reference
     {
-        let sid = engines.tts.resolve_sid(
-            &std::env::var("VOICE_GOP_BASELINE_VOICE")
-                .unwrap_or_else(|_| crate::engine::DEFAULT_VOICE.to_string()),
-        );
-        match engines
-            .tts
-            .synthesize_at_wpm(text, sid, engines.cfg.tts_wpm)
-        {
-            Ok(syn) => {
-                let pcm = crate::audio::resample::resample(
-                    &syn.samples,
-                    syn.sample_rate,
-                    crate::INTERNAL_SR,
-                );
-                // 先自检：TTS 自己读出来的词必须与参考文本一致，否则基线不可信
-                let want = normalize::words(text);
-                match engines
-                    .asr
-                    .transcribe(&pcm, crate::INTERNAL_SR, "en", Some("sense-voice"))
-                {
-                    Ok(t) if normalize::words(&t.text) == want => {
-                        gop_baseline_valid = Some(true);
-                    }
-                    Ok(t) => {
-                        gop_baseline_valid = Some(false);
-                        limitations.push(format!(
-                            "TTS 基线自检失败：回读为「{}」，与参考文本不一致；该基线不能用于 Δ 对比（D51）",
-                            t.text
-                        ));
-                    }
-                    Err(e) => {
-                        gop_baseline_valid = Some(false);
-                        limitations.push(format!("TTS 基线自检失败（ASR）：{e}"));
-                    }
-                }
-                if gop_baseline_valid != Some(false) {
-                    match crate::gop::with_engine(|e| {
-                        crate::gop::score_text(&mut e.model, &pcm, text, &e.g2p)
-                    }) {
-                        Ok(b) => gop_baseline = Some(b),
-                        Err(e) => limitations.push(format!("TTS 基线 GOP 失败：{e}")),
-                    }
+        let native = req
+            .baseline_audio
+            .map(|p| crate::audio::load_16k(p).map(|d| (d.samples, d.sample_rate, p.to_string())));
+        match native {
+            Some(Ok((samples, sr, path))) => {
+                gop_baseline_source = Some("native".into());
+                let (b, valid, mut notes) = baseline_gop(engines, &samples, sr, text);
+                limitations.append(&mut notes);
+                gop_baseline = b;
+                gop_baseline_valid = valid;
+                if valid == Some(false) {
+                    limitations.push(format!(
+                        "真人基线自检失败（{path}）：参考音与文本不一致或音素读坏，该基线不能用于 Δ 对比"
+                    ));
                 }
             }
-            Err(e) => {
-                gop_baseline_valid = Some(false);
-                limitations.push(format!("TTS 基线合成失败：{e}"));
+            Some(Err(e)) => limitations.push(format!("真人参考音读取失败（回落到 TTS 基线）：{e}")),
+            None => {}
+        }
+        if gop_baseline_valid.is_none() && req.baseline_tts {
+            let sid = engines.tts.resolve_sid(
+                &std::env::var("VOICE_GOP_BASELINE_VOICE")
+                    .unwrap_or_else(|_| crate::engine::DEFAULT_VOICE.to_string()),
+            );
+            let target = engines.cfg.tts_wpm;
+            match engines.tts.synthesize_at_wpm(text, sid, target) {
+                Ok(syn) => {
+                    gop_baseline_source = Some("tts".into());
+                    let (b, valid, mut notes) =
+                        baseline_gop(engines, &syn.samples, syn.sample_rate, text);
+                    limitations.append(&mut notes);
+                    gop_baseline = b;
+                    gop_baseline_valid = valid;
+                }
+                Err(e) => {
+                    gop_baseline_valid = Some(false);
+                    limitations.push(format!("TTS 基线合成失败：{e}"));
+                }
             }
         }
     }
@@ -389,16 +465,33 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
 
     // 韵律：与 GOP 相互独立（不需要参考文本），但低 SNR/削波会让 F0 不可信
     let mut prosody = None;
-    if req.with_prosody || req.reference_audio.is_some() {
+    // 参考音优先用显式 `reference_audio`，否则回落到真人 `baseline_audio`（不合成 TTS）
+    let prosody_ref = req.reference_audio.or(req.baseline_audio);
+    let prosody_ref_native = match (prosody_ref, req.baseline_audio) {
+        (Some(r), Some(b)) => r == b,
+        _ => false,
+    };
+    if req.with_prosody || prosody_ref.is_some() {
         if degraded {
             limitations.push("音频质量未过闸门（degraded），跳过韵律分析".into());
         } else {
             match prosody::analyze(req.samples, req.sample_rate, &transcript.words) {
                 Some(mut p) => {
-                    if let Some(path) = req.reference_audio {
+                    if let Some(path) = prosody_ref {
                         match crate::audio::load_16k(path) {
                             Ok(d) => match prosody::analyze(&d.samples, d.sample_rate, &[]) {
-                                Some(r) => p.reference = Some(prosody::compare(&p, &r)),
+                                Some(r) => {
+                                    let mut cmp = prosody::compare(&p, &r);
+                                    cmp.source = Some(
+                                        if prosody_ref_native {
+                                            "native"
+                                        } else {
+                                            guess_ref_source(path)
+                                        }
+                                        .into(),
+                                    );
+                                    p.reference = Some(cmp);
+                                }
                                 None => limitations
                                     .push("参考音中找不到稳定浊音帧，无法做 F0 形状对比".into()),
                             },
@@ -431,6 +524,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         snr_db,
         gop_baseline,
         gop_baseline_valid,
+        gop_baseline_source,
         gop,
         prosody,
         limitations,
@@ -441,6 +535,23 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------------- D52：参考音来源标签 ----------------
+
+    #[test]
+    fn ref_source_labels_synthetic_refs() {
+        assert_eq!(
+            guess_ref_source(r"D:\voice_data\sessions\x\001_tts.ref_norm.wav"),
+            "tts"
+        );
+        assert_eq!(guess_ref_source("sessions/x/001_a.ref_slow.wav"), "tts");
+        // 素材库原生切片：*.ref.wav，不能误标成 tts
+        assert_eq!(
+            guess_ref_source("D:/voice_data/bank/nce2/02/003.ref.wav"),
+            "unknown"
+        );
+        assert_eq!(guess_ref_source("/tmp/whatever.wav"), "unknown");
+    }
 
     // ---------------- D49：双引擎文本闸门 ----------------
 

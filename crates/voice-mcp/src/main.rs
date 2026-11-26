@@ -143,6 +143,10 @@ struct AssessParams {
     /// 参考音（示范音）路径；提供时自动开启韵律，并返回 F0 形状 DTW 对比
     #[serde(default)]
     reference_audio: Option<String>,
+    /// 素材库 id（如 `nce2/02/003`）：自动填参考文本；`ref_audio=native` 时用**真人原声切片**
+    /// 当 GOP 基线与韵律参考（优先于 TTS 合成）
+    #[serde(default)]
+    bank_id: Option<String>,
     /// 强制引擎 sense-voice | whisper
     #[serde(default)]
     engine: Option<String>,
@@ -658,6 +662,23 @@ impl VoiceServer {
             };
 
             let lang = p.lang.clone().unwrap_or_else(|| "auto".into());
+            // 素材库参考：有真人原声就用它当基线/韵律参考（TTS 只作兜底）
+            let bank_ref = match p.bank_id.as_deref() {
+                Some(id) => match voice_core::bank::reference_for(
+                    std::path::Path::new(&app.cfg.data_dir),
+                    id,
+                )? {
+                    Some(r) => Some(r),
+                    None => return Err(anyhow::anyhow!("素材库里没有 id={id}（先跑 bank list）")),
+                },
+                None => None,
+            };
+            let reference_owned = p
+                .reference
+                .clone()
+                .or_else(|| bank_ref.as_ref().map(|r| r.text.clone()));
+            let baseline_audio = bank_ref.as_ref().and_then(|r| r.native_audio.clone());
+            let baseline_tts = p.baseline_tts && baseline_audio.is_none();
             let assessment = app.with_engines(|e| {
                 voice_core::assess::assess(
                     e,
@@ -666,11 +687,12 @@ impl VoiceServer {
                         sample_rate: decoded.sample_rate,
                         lang: &lang,
                         engine: p.engine.as_deref(),
-                        reference: p.reference.as_deref(),
+                        reference: reference_owned.as_deref(),
                         source_sr: Some(decoded.info.source_sr),
                         with_gop: p.with_gop,
-                        baseline_tts: p.baseline_tts,
+                        baseline_tts,
                         with_prosody: p.with_prosody,
+                        baseline_audio: baseline_audio.as_deref(),
                         reference_audio: p.reference_audio.as_deref(),
                     },
                 )
@@ -811,6 +833,8 @@ impl VoiceServer {
                 "gop": gop_json,
                 "prosody": assessment.prosody.as_ref(),
                 "gop_baseline_valid": assessment.gop_baseline_valid,
+                "gop_baseline_source": assessment.gop_baseline_source,
+                "text_agreement": assessment.text_agreement,
                 "gop_baseline": assessment.gop_baseline.as_ref().map(|g| serde_json::json!({
                     "version": g.version,
                     "words": g.words.iter().map(|w| serde_json::json!({

@@ -1,6 +1,6 @@
 # ADR-0008: 技术欠债登记（Debt Register）
 
-- 状态：Accepted（活文档，每还一条就更新；最后更新 **2026-11-25**：D12/D19/D20/D39/D45/D47/D49/D51 已还，D04 部分偿还；未还：D46/D48/D50 + D06/D09/D11/D15/D18/D21/D29/D35/D36/D38/D40/D41/D44）
+- 状态：Accepted（活文档，每还一条就更新；最后更新 **2026-11-25**：D12/D19/D20/D39/D45/D47/D49/D51 已还，D04/D52 部分偿还；未还：D46/D48/D50 + D06/D09/D11/D15/D18/D21/D29/D35/D36/D38/D40/D41/D44）
 - 日期：2026-11-19
 - 相关：ADR-0001（运行时路线）、ADR-0006（评测边界）、ADR-0007（韵律与 GOP）
 
@@ -55,6 +55,7 @@
 | D49 | 声学闸门通过 ≠ 文本可用 | **已还（2026-11-25）**：`assess.text_agreement`（词级 LCS 一致率 `2·|LCS|/(|a|+|b|)`）。给了 `reference` 且非中文时用另一个引擎复核，`<0.7` → `degraded=true` + limitation（只出 flow/prosody）；第二引擎不可用只记 limitation。3 个单测 + 9 条录音回归零误杀（clean case agreement=1.0） | ~~S2~~ ✅已还 | – | – |
 | D50 | 韵律的 12 条人工标注验收未做（升降/平/重音一致率 ≥80%）；短句窗口与 `unreliable` 已加，但无真值标定 | ADR-0007 验收项；目前只有 10 单测 + 少量真机 | S2 | 下一次语调专项训练 | 0.5d + 标注 2h |
 | D51 | TTS 参考音未验证就当基准 | **已还（2026-11-24/25）**：OOV 预检 + 项目 overlay + `tts-verify`（双 ASR/音素/WPM/3 次）+ `gop_baseline_valid`；**`bank refs` 把同一套验证接进批量材料生成**（失败自动换目标语速 → 换音色，只有 verified 落盘）；10/10 IELTS prompt verified 3/3（含音素）。另修：WPM 改按语音跨度、语速校正保留最优候选、`onset_gap_ms` 起始伪影检测。见 `docs/audit/tts-2026-11-24.md` §12 | ~~S1~~ ✅已还 | – | – |
+| D52 | **TTS 产出被当成“标准/基线”**：① `assess(baseline_tts=true)` 的 GOP 基线一律是合成音，且只做**内容**回读自检（词对就算过），音素读坏的基线会被当标准；② 韵律 DTW 的参考音大量是 `synthesize` 产出的 `.ref_norm/.ref_slow`，等于拿合成音的语调当人标准；③ `bank` 里的 `ref_audio=tts` 只在 plan 文本里提一句，代码不区分；④ 素材库 4 997 条 NCE 明明带**真人原声切片**，却没人用它当基线 | 2026-11-25 复盘 TTS 审计：TTS 自己会读错（country/thank/tokyo 回读不一致）、与 G2P 共用同一套音素变体（同形异音无法自救，D46）、合成语调不是人标准 | S1 | 任何“比标准示范低 X 分”的结论（已发生） | **部分偿还（2026-11-25）**：`assess(bank_id=…)` 真人原声优先（`gop_baseline_source=native`），韵律 `reference.source` 标注 native/tts/unknown，基线**加音素自检**（最差词级 GOP < −1.5 → invalid），CLI `--bank-id` + MCP `bank_id` + SKILL 口径。残留：IELTS prompt（10 条）没有真人音；历史 `metrics.json` 里的 Δ 是 TTS 基线算的，**不可与新结果横比**，需重跑 |
 
 ## 三、工程韧性
 
@@ -65,7 +66,7 @@
 | D17 | 引擎加载**失败不缓存**：每次调用都会重试并重新付出加载代价（whisper 1.6 s） | `With_engines` 只缓存成功 | S3 | 出现一次引擎加载失败 | 0.5d |
 | D18 | 原生 DLL 需**手工** `cp .cache/sherpa/lib/*.dll target/release/`，忘掉就启动即崩（Windows loader 报错，没有友好提示） | README 快速开始第 3 步 | S2 | 第二次有人在这台机器上构建 | 0.5d：`build.rs` 或 cargo xtask 自动复制 |
 | D19 | 无 `rust-toolchain.toml`、无 MSRV 声明 | **已还**：`rust-toolchain.toml`（stable + rustfmt/clippy）+ `Cargo.toml` `rust-version = "1.99"`（实测版本；edition 2024 理论下限 1.85 未验证） | ~~S3~~ ✅已还 | – | – |
-| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | **已还（2026-11-25）**：`tools/check.ps1` + `.github/workflows/ci.yml`；GitHub Actions 在 `windows-latest` 上绿两次（`530e668` 2026-11-24、`3cf8736` 2026-11-25，run 45643953511），136 单测 + clippy `-D warnings` + fmt 全过。残留：CI 里没有音频 fixture（另记 D21） | ~~S2~~ ✅已还 | – | – |
+| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | **已还（2026-11-25）**：`tools/check.ps1` + `.github/workflows/ci.yml`；GitHub Actions 在 `windows-latest` 上绿两次（`530e668` 2026-11-24、`3cf8736` 2026-11-25，run 45643953511），138 单测 + clippy `-D warnings` + fmt 全过。残留：CI 里没有音频 fixture（另记 D21） | ~~S2~~ ✅已还 | – | – |
 | D45 | **没有门禁导致 HEAD 编译失败无人发现**：`{peak_dbfs:.1f}` 在 `4f57a36` 引入后陪着 3 个提交 | `cargo build --release` 报 `unknown format trait f` | ~~S1~~ ✅已还 | – | – |
 | D21 | 回归用例 | **部分偿还**：`cases/*.json` 只存断言（音频留本机，`VOICE_CASES_DIR` 指过去），`voice-cli cases` 一条命令跑全部；已覆盖 16k/48k/TTS/自由说/漏词 5 个场景。仍缺：没有**合成** fixture（正弦/噪声），CI 里无法无音频跑 decode/flow | S2 | 接 CI 前 | 2h |
 | D22 | `assess` 的 MCP 版与 CLI `assess_cmd` **逻辑重复**，两处维护 | 两个文件各 ~80 行 | S3 | 参数再变一次时 | 2h：抽到 `voice-core::pipeline` |
@@ -153,6 +154,7 @@
 | TTS 材料未验证就当基准（D51） | `tts-verify` + `bank refs` 批量接入（换语速/换音色回退）；10/10 IELTS prompt 3/3（含音素） |
 | TTS 语速口径：按总时长算导致 140→128、校正震荡 | WPM 改按语音跨度；校正保留最优候选；新增起始伪影 `onset_gap_ms` 检测与规避 |
 | 会话目录同秒相撞（并行 `tts-verify` 覆盖 report） | `Store::new_session` 撞了就加 `-2` 序号 + 单测 |
+| TTS 当基线/标准（D52，部分） | 真人原声优先基线 + 音素自检 + 参考音来源标签（`native`/`tts`/`unknown`） |
 
 ## 八、维护约定
 

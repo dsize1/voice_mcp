@@ -26,7 +26,7 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 |---|---|
 | `mcp__voice__status` | 自检：`mic` 是否为 null、模型是否齐全 |
 | `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`play=true` 服务端出声；默认 140 wpm，`slow_too=true` 产出 slow(110)+norm(140) 两个文件；显式 `speed` 才按倍率 |
-| `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"`；`with_gop=true` 额外给音素级排序（见 4.1）；`with_prosody=true` 或 `reference_audio=<示范音>` 给 F0/升降/重音候选（见 4.2） |
+| `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"`；**`bank_id` 给素材库 id 时用真人原声切片当基线**（无则回退 TTS）；`with_gop=true` 额外给音素级排序（见 4.1）；`with_prosody=true` 或 `reference_audio=<示范音>` 给 F0/升降/重音候选（见 4.2） |
 | `mcp__voice__record` | 麦克风录音（静音自动停）。`mic` 为 null 时不可用 |
 | `voice-cli bank …` | **素材库（CLI，非 MCP）**：`pick/show/drill`。`pick` 按 focus tags + level 从 3 368 条里取 1–3 条 |
 
@@ -229,9 +229,18 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 
 音素级精确率的天花板只有 0.45（错读率 7.5% ⇒ FP=10% 时数学上限），所以**不要指望音素级能下结论**。
 
-**先和 TTS 基线比，再谈绝对分数**（`assess(with_gop=true, baseline_tts=true)` 会同时返回
+**先和基线比，再谈绝对分数**（`assess(with_gop=true, baseline_tts=true)` 会同时返回
 `gop_baseline.words`）。原因：GOP 的绝对值带模型偏好 —— 实测 TTS 自己读 `their` 也只有 −0.36，
 如果不看基线就会冤枉你。
+
+**基线优先级：真人原声 > TTS 合成**（2026-11-25 修正）。
+
+- 能拿到 `bank_id` 就用 **`assess(bank_id="nce1/001/003", with_gop=true)`**：素材库的原生切片
+  （`ref_audio=native`）会当基线，`gop_baseline_source="native"`；
+- 只有 `ref_audio=tts`（雅思 prompt）或普通跟读句时才退回合成音，此时 `gop_baseline_source="tts"`；
+- **`source=tts` 时不许说“语调/重音不地道”**，只能说“与合成示范的差异”——合成音的语调不是人标准，
+  它的 Δ 只代表“和这个音色的读法差多少”；
+- `gop_baseline_valid=false` → 不做任何 Δ（内容回读不一致，或基线自身音素读坏）。
 
 | 判据 | 结论 |
 |---|---|
@@ -282,7 +291,7 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 | `final_delta_st` / `final_direction` | 末段相对首段的升降 | "句末升了 X 个半音 / 降了 X 个半音"；**先确认句型**再解读 |
 | `final_slope_st_per_s` | 末 30% 的斜率 | 只在用户问"升得够不够快"时给 |
 | `stress_top[]` | 重音**候选**（词级） | 仅当 `dur_z>1` 且 `f0_peak_st>3` 才提："大概第 N 个词听起来最突出" |
-| `reference.dtw_cost_st` | 与示范的 F0 形状差异 | "<1 很接近；1–3 局部不同；>3 轮廓差别大"——只说差异，不说好坏 |
+| `reference.dtw_cost_st` | 与示范的 F0 形状差异（**先看 `reference.source`**） | `native`：可以说"和真人原声的轮廓差异"；`tts`/`unknown`：只能说"和这段示范音的差异"，**不能说"语调不对"** |
 | `rhythm.stress_ratio` / `word_duration_cv` | 词时长对比 | 只作纵向趋势，不单独下结论 |
 
 硬规则：
@@ -293,6 +302,8 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
    句末升降**先看句型**：一般疑问句应 rise、陈述句/特殊疑问句通常 fall；但只报数字，不套"你错了"。
    例："末段降了 3.9 个半音——陈述句这样是正常的" / "一般疑问句这里只升了 0.4 个半音，可以再抬一点"。
 4. `stress_top` 是排序不是判决；词时长来自 ASR（±0.5 s），位置说"第几个词"，**不报秒数**。
+4.1 `prosody.reference.source` 是参考音的来源标签：`native`（真人原声切片，`bank_id` 会带来）／
+   `tts`（合成音）／`unknown`。**只有 `native` 才能把差异说成"和人声的差异"**；`tts` 只作"与这段示范音的形状差多少"。
 5. `energy_z` 不要用来说"重音太轻/太响"：蓝牙 AGC 会让能量维度失真（ADR-0008 D36）。
 6. 无词级时间戳时只有句级指标（`stress_top` 为空），只谈句末升降/平直/音域。
 7. 一次仍然只挑 **1 条**最高优先级的韵律问题（与第 4 节一致），且必须给"再示范一次 + 重读对比"。
@@ -362,6 +373,6 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 
 1. 用 2 行总结：本轮练了什么、进步在哪、下次练什么。
 2. 更新 `learner.json` 与 `session.md`。
-3. 布置具体作业：**3 句话**（附 `bank_id` 或示范音路径），要求用户明天跟读 5 遍。
+3. 布置具体作业：**3 句话**（附 `bank_id` 或示范音路径），要求用户明天跟读 5 遍（评测时把 `bank_id` 一起传，基线才是真人原声）。
    作业句必须来自本轮出错的地方、`drill_queue` 或本轮 `bank pick` 的命中项，不要随机。
 4. 如果用户连续 3 次没来，下次先问"要不要把单次时长降到 5 分钟"。

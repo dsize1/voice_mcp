@@ -15,9 +15,9 @@
 | 就绪等级 | **L2+**（跟读稳定，半自由未满） |
 | 自由说 | **关闭**（`readiness.free_speech_enabled=false`）；L3 后做 30–45 s 提纲，L4 才做 60 s 无稿 |
 | 素材库 | **5 007 条**（NCE 4 997 + IELTS prompt 10），可直接练 3 378 |
-| 诊断能力 | 词级 diff + flow + 词级 GOP（TTS 基线/混淆对）+ 韵律（F0/升降/平调/重音候选/DTW） |
+| 诊断能力 | 词级 diff + flow + 词级 GOP（**真人原声优先**基线/混淆对）+ 韵律（F0/升降/平调/重音候选/DTW，参考音标 native/tts） |
 | TTS | 默认 **am_michael（男声）+ 140 wpm**（130–160），slow=110；WPM 按**语音跨度**；起始伪影检测 + 自动换速度/换音色；OOV 预检 + `tts-verify` + `bank refs` 批量验证；verified 听力集/10 条 prompt 见 STATE |
-| 债务 | D01–D51 已登记；**2026-11-25 还 D47/D49/D51，D04 部分偿还** |
+| 债务 | D01–D52 已登记；**2026-11-25 还 D20/D47/D49/D51，D04/D52 部分偿还** |
 | 近期训练 | 计划 **7/7 项**完成；`/θ/` 词首/词尾修正；144 wpm 下 `/θ/`、`/v/` 守住 |
 | 本地提交 | 2026-11-25 已推送（本轮 6 个 commit 全部推送） |
 
@@ -39,6 +39,7 @@
 |---|---|---|---|---|
 | **N4** | D46：G2P 同形异音（live/read/use） | ⏳ | `I live` 的 live 不再误低；补 3 条回归 | 无 |
 | **N5** | D50：韵律 12 条人工标注验收 | ⏳ | 升降/平/重音一致率 ≥80% | 人工标注 2 h |
+| **N13** | D52：TTS 不再当“标准/基线”（真人原声优先） | 🟡 | `assess(bank_id)` → `gop_baseline_source=native`、`prosody.reference.source` 标注；基线加音素自检。残留：IELTS prompt 无真人音、历史 Δ 需重跑 | D46 |
 
 ### C. 让训练循环自动
 
@@ -131,6 +132,7 @@
 | 2026-11-25 | 默认音色改为 **am_michael（男声）**（MCP/CLI/GOP 基线三处统一，`DEFAULT_VOICE` 常量 + 单测） | `080e8aa` |
 | 2026-11-25 | MCP 端换新二进制（杀子进程 → 重建 → Pi 自动重连），`synthesize` 实测返回 `am_michael`/`speech_duration`/`onset_gap_ms` | `97d7793` |
 | 2026-11-25 | CI 首跑确认绿（D20 部分偿还→偿还）：run [45643953511](https://github.com/dsize1/voice_mcp/actions/runs/45643953511) | 本次推送 |
+| 2026-11-25 | D52：TTS 不再当基线 —— `bank_id` 用真人原声切片当 GOP 基线/韵律参考，基线加音素自检，来源打标 | 本次提交 |
 
 ---
 

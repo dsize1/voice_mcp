@@ -444,6 +444,41 @@ pub fn normalize_entry(e: &mut BankEntry) {
     }
 }
 
+/// 一条素材的评测参考（`assess --bank-id` 用）。
+///
+/// **为什么要这个**：以前跟读评测的“基线”一律是 TTS 合成音 —— 合成音自己会读错、
+/// 和 G2P 共用同一套音素变体、语调也不是人标准。素材库里的 4 997 条 NCE 素材
+/// 带**真人原声切片**（`src`），它才是该说的参考；TTS 只作兜底。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BankReference {
+    pub id: String,
+    pub text: String,
+    /// 真人原声切片（`ref_audio == "native"` 且文件存在）。没有就是 `None`（只能用 TTS）。
+    pub native_audio: Option<String>,
+    /// `native` | `tts`
+    pub ref_audio: String,
+}
+
+/// 按 id 取评测参考；找不到该 id 时返回 `None`。
+pub fn reference_for(home: &Path, id: &str) -> Result<Option<BankReference>> {
+    let idx = read_index(home)?;
+    let Some(e) = idx.into_iter().find(|e| e.id == id) else {
+        return Ok(None);
+    };
+    let path = home.join(&e.src);
+    let native_audio = if e.ref_audio == "native" && !e.src.is_empty() && path.is_file() {
+        Some(path.to_string_lossy().to_string())
+    } else {
+        None
+    };
+    Ok(Some(BankReference {
+        id: e.id,
+        text: e.text,
+        native_audio,
+        ref_audio: e.ref_audio,
+    }))
+}
+
 pub fn read_index(home: &Path) -> Result<Vec<BankEntry>> {
     let p = index_path(home);
     if !p.is_file() {
@@ -1351,6 +1386,58 @@ mod tests {
             },
             tags: tags.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn reference_for_prefers_native_slice_and_falls_back_to_tts() {
+        let tmp = std::env::temp_dir().join(format!("voice_bank_ref_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("bank/nce2/01")).unwrap();
+
+        // 原生素材：src 存在 → native_audio = Some(src)
+        let mut native = mk_entry("nce2/01/001", 2, &[]);
+        native.src = "bank/nce2/01/001.ref.wav".into();
+        native.text = "Excuse me!".into();
+        std::fs::write(tmp.join(&native.src), b"RIFF").unwrap();
+
+        // prompt 素材（ref_audio=tts）：即使 src 为空也不给 native_audio
+        let mut prompt = mk_entry("ielts/custom/p1-x", 2, &[]);
+        prompt.corpus = "ielts".into();
+        prompt.kind = "prompt".into();
+        prompt.ref_audio = "tts".into();
+        prompt.src = String::new();
+        prompt.text = "Where is your hometown?".into();
+
+        let body = [&native, &prompt]
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        std::fs::write(
+            index_path(&tmp),
+            format!(
+                "{body}
+"
+            ),
+        )
+        .unwrap();
+
+        let r = reference_for(&tmp, "nce2/01/001").unwrap().expect("应找到");
+        assert_eq!(r.text, "Excuse me!");
+        assert_eq!(r.ref_audio, "native");
+        assert!(r.native_audio.is_some(), "原生切片应作为基线参考");
+
+        let r = reference_for(&tmp, "ielts/custom/p1-x")
+            .unwrap()
+            .expect("应找到");
+        assert!(r.native_audio.is_none(), "TTS 素材不能假装有真人参考");
+        assert_eq!(r.ref_audio, "tts");
+
+        assert!(reference_for(&tmp, "nope").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

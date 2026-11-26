@@ -78,6 +78,10 @@ enum Cmd {
         /// 参考音（示范音）路径；提供时自动开启韵律并做 F0 形状 DTW 对比
         #[arg(long)]
         reference_audio: Option<String>,
+        /// 素材库 id：自动填参考文本；`ref_audio=native` 时用**真人原声切片**当 GOP 基线
+        /// 与韵律参考（不再合成 TTS）
+        #[arg(long)]
+        bank_id: Option<String>,
         #[arg(long, default_value = "assess")]
         scene: String,
     },
@@ -560,6 +564,7 @@ fn main() -> Result<()> {
             with_gop,
             with_prosody,
             reference_audio,
+            bank_id,
             scene,
         } => assess_cmd(
             &cfg,
@@ -570,6 +575,7 @@ fn main() -> Result<()> {
             with_gop,
             with_prosody,
             reference_audio.as_deref(),
+            bank_id.as_deref(),
             &scene,
         ),
         Cmd::Watch { dir, lang } => watch(&cfg, dir.as_deref(), &lang),
@@ -922,6 +928,7 @@ fn lesson(
             with_gop: false,
             baseline_tts: false,
             with_prosody: false,
+            baseline_audio: None,
             reference_audio: None,
         },
     )?;
@@ -1119,6 +1126,7 @@ fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
                 with_gop: false,
                 baseline_tts: false,
                 with_prosody: false,
+                baseline_audio: None,
                 reference_audio: None,
                 source_sr: Some(decoded.info.source_sr),
             },
@@ -1327,8 +1335,27 @@ fn assess_cmd(
     with_gop: bool,
     with_prosody: bool,
     reference_audio: Option<&str>,
+    bank_id: Option<&str>,
     scene: &str,
 ) -> Result<()> {
+    // 素材库参考：文本来自索引；有真人原声切片就当基线/韵律参考（TTS 只作兜底）
+    let bank_ref = match bank_id {
+        Some(id) => match voice_core::bank::reference_for(Path::new(&cfg.data_dir), id)? {
+            Some(r) => Some(r),
+            None => return Err(anyhow::anyhow!("素材库里没有 id={id}（先跑 bank list）")),
+        },
+        None => None,
+    };
+    let reference = reference.or(bank_ref.as_ref().map(|r| r.text.as_str()));
+    let baseline_audio_owned = bank_ref.as_ref().and_then(|r| r.native_audio.clone());
+    if let Some(r) = &bank_ref
+        && r.native_audio.is_none()
+    {
+        eprintln!(
+            "[assess] {} 是 {} 素材（无真人原声）→ 基线只能用 TTS，结论按“与合成示范的差异”解读",
+            r.id, r.ref_audio
+        );
+    }
     let store = Store::open(&cfg.data_dir)?;
     let src = resolve_path(&store, path)?;
     // 与 MCP assess 一致：源在 sessions/ 内就地写回，不复制、不新建会话
@@ -1369,8 +1396,9 @@ fn assess_cmd(
             reference,
             source_sr: Some(decoded.info.source_sr),
             with_gop,
-            baseline_tts: with_gop, // CLI assess 默认开启对照基线
+            baseline_tts: with_gop && baseline_audio_owned.is_none(), // 有真人参考就不合成 TTS
             with_prosody,
+            baseline_audio: baseline_audio_owned.as_deref(),
             reference_audio,
         },
     )?;
@@ -2425,6 +2453,7 @@ fn bank_drill(cfg: &Config, id: &str, quiet: bool) -> Result<()> {
             "（无原生音频 → 用 synthesize 生成示范音；kind={} ref_audio={}）",
             e.kind, e.ref_audio
         );
+        println!("（评测基线只能用 TTS：不能说“语调/重音不地道”，只能说“与合成示范的差异”）");
         return Ok(());
     }
     println!("{}", e.text);
@@ -2454,6 +2483,12 @@ fn bank_drill(cfg: &Config, id: &str, quiet: bool) -> Result<()> {
     );
     if !quiet {
         play::play_wav(&src)?;
+    }
+    if e.ref_audio == "native" {
+        println!(
+            "真人原声参考：{} → 评测用它当基线：assess <你的录音> --bank-id {} --with-gop",
+            e.src, e.id
+        );
     }
     Ok(())
 }

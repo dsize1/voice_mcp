@@ -908,6 +908,11 @@ pub struct AudioIngestOptions {
     pub min_agree: f32,
     /// 单句最长时长（超过就按时间硬切）
     pub max_sec: f32,
+    /// 只处理这段区间（秒）：只想取“某一集里的某个片段”时用
+    pub start_sec: f32,
+    pub end_sec: Option<f32>,
+    /// 最多入库几句（0/None = 不限）
+    pub max_chunks: Option<usize>,
     pub dry_run: bool,
 }
 
@@ -919,6 +924,9 @@ impl Default for AudioIngestOptions {
             lesson: String::new(),
             min_agree: 0.7,
             max_sec: 12.0,
+            start_sec: 0.0,
+            end_sec: None,
+            max_chunks: None,
             dry_run: false,
         }
     }
@@ -1078,11 +1086,24 @@ pub fn ingest_audio(
 ) -> Result<AudioIngest> {
     let decoded = audio::load_16k(audio_path)?;
     let sr = decoded.sample_rate;
-    let duration = decoded.samples.len() as f32 / sr as f32;
+    let full_duration = decoded.samples.len() as f32 / sr as f32;
+    // 只取某个片段时先裁掉两端（`--start/--end`），后面的时间戳再加回偏移
+    let off = opt.start_sec.clamp(0.0, full_duration);
+    let end = opt
+        .end_sec
+        .unwrap_or(full_duration)
+        .clamp(off, full_duration);
+    let i0 = (off * sr as f32) as usize;
+    let i1 = ((end * sr as f32) as usize).min(decoded.samples.len());
+    let window: &[f32] = &decoded.samples[i0..i1];
+    let duration = end - off;
+    if duration < 1.0 {
+        bail!("片段太短（{duration:.2}s）");
+    }
 
     // 以 VAD 停顿为切分基础：时间来自音频（可靠），文本来自该片的 ASR（双引擎复核）。
     // 不用 ASR 词时间戳切句 —— CTC 时间戳会漂（D09），按它切片会切出半句/静音。
-    let segments = merge_segments(&engines.vad.segments(&decoded.samples), 0.35);
+    let segments = merge_segments(&engines.vad.segments(window), 0.35);
     let mut sents: Vec<(f32, f32, String)> = Vec::new();
     for (a, b) in &segments {
         let (a, b) = (*a, *b);
@@ -1090,7 +1111,7 @@ pub fn ingest_audio(
             continue; // 太短：咳嗽/噪声
         }
         // 段内再按真实停顿切细（≥0.25 s 的静音），超长无停顿就硬切
-        for (pa, pb) in split_on_pauses(&decoded.samples, sr, (a, b), 0.35, opt.max_sec) {
+        for (pa, pb) in split_on_pauses(window, sr, (a, b), 0.35, opt.max_sec) {
             if pb - pa >= 0.8 {
                 sents.push((pa, pb, String::new()));
             }
@@ -1128,15 +1149,15 @@ pub fn ingest_audio(
         // 原始句序（只用于 quarantine 记录）；入库序号在 kept 时重新连续编号
         let src_seq = (i + 1) as u32;
         let seq = kept.len() as u32 + 1;
-        // 切片两侧留一点余量，避免切掉词头词尾；仍限制在原音频内
+        // 切片两侧留一点余量，避免切掉词头词尾；仍限制在窗口内
         let a = (seg_t0 - 0.10).max(0.0);
         let b = (seg_t1 + 0.30).min(duration);
-        let i0 = (a * sr as f32) as usize;
-        let i1 = ((b * sr as f32) as usize).min(decoded.samples.len());
-        if i1 <= i0 {
+        let j0 = (a * sr as f32) as usize;
+        let j1 = ((b * sr as f32) as usize).min(window.len());
+        if j1 <= j0 {
             continue;
         }
-        let slice = &decoded.samples[i0..i1];
+        let slice = &window[j0..j1];
         let dur = slice.len() as f32 / sr as f32;
 
         // 该片的“假设文本”用 SenseVoice（它对这段音频更准），whisper 独立听同一片复核；
@@ -1187,6 +1208,12 @@ pub fn ingest_audio(
             });
             continue;
         }
+        if let Some(limit) = opt.max_chunks
+            && limit > 0
+            && kept.len() >= limit
+        {
+            break;
+        }
         let words = want.len();
         if words < WORDS_MIN {
             rejects.push(Rejection {
@@ -1220,8 +1247,8 @@ pub fn ingest_audio(
             seq,
             text: text.clone(),
             zh: String::new(),
-            t0: crate::round_to(*seg_t0, 2),
-            t1: crate::round_to(*seg_t1, 2),
+            t0: crate::round_to(seg_t0 + off, 2),
+            t1: crate::round_to(seg_t1 + off, 2),
             dur: crate::round_to(dur, 2),
             words,
             wpm: crate::round_to(wpm, 1),
@@ -1251,6 +1278,7 @@ pub fn ingest_audio(
             "source_sr": decoded.info.source_sr,
             "band_limited": decoded.info.band_limited,
             "duration": crate::round_to(duration, 2),
+            "window": [crate::round_to(off, 2), crate::round_to(end, 2)],
             "sentences": sents.len(),
             "kept": kept_n,
             "rejected": rejected_n,

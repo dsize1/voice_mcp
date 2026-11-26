@@ -336,7 +336,15 @@ enum BankCmd {
         /// 单句最长秒数（超过硬切，默认 12）
         #[arg(long, default_value_t = 12.0)]
         max_sec: f32,
-        /// 只算，不写文件
+        /// 只处理这段区间（秒）：只想取某一集里的某个片段时用
+        #[arg(long, default_value_t = 0.0)]
+        start: f32,
+        #[arg(long)]
+        end: Option<f32>,
+        /// 最多入库几句
+        #[arg(long)]
+        max_chunks: Option<usize>,
+        /// 只算，不写文件（会打印逐句预览）
         #[arg(long)]
         dry_run: bool,
     },
@@ -457,6 +465,9 @@ fn main() -> Result<()> {
                 lesson,
                 min_agree,
                 max_sec,
+                start,
+                end,
+                max_chunks,
                 dry_run,
             } => bank_ingest_audio(
                 &cfg,
@@ -466,6 +477,9 @@ fn main() -> Result<()> {
                 lesson.as_deref(),
                 min_agree,
                 max_sec,
+                start,
+                end,
+                max_chunks,
                 dry_run,
             ),
             BankCmd::Migrate => {
@@ -2061,6 +2075,9 @@ fn bank_ingest_audio(
     lesson: Option<&str>,
     min_agree: f32,
     max_sec: f32,
+    start: f32,
+    end: Option<f32>,
+    max_chunks: Option<usize>,
     dry_run: bool,
 ) -> Result<()> {
     let engines = Engines::load(cfg.clone())?;
@@ -2070,6 +2087,9 @@ fn bank_ingest_audio(
         lesson: lesson.unwrap_or_default().to_string(),
         min_agree,
         max_sec,
+        start_sec: start,
+        end_sec: end,
+        max_chunks,
         dry_run,
     };
     let r =

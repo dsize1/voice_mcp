@@ -236,6 +236,20 @@ impl Asr {
             }
         };
 
+        // 语言守卫：SenseVoice 是按 `language=auto` 加载的，**per-call `lang` 不生效**；
+        // 英文素材偶尔会被解成中文/日文（实测佩奇音频出现「大抖。」「人と命ね。」）。
+        // 明确要 en/zh 却拿到另一种语言时，换另一个引擎再听一次；仍不对就标 degraded。
+        if matches!(lang_lc.as_str(), "en" | "zh") && wrong_lang(&t.text, &lang_lc) {
+            let alt = match primary {
+                AsrKind::Whisper => AsrKind::SenseVoice,
+                AsrKind::SenseVoice => AsrKind::Whisper,
+            };
+            match attempt(alt) {
+                Ok(t2) if !wrong_lang(&t2.text, &lang_lc) => t = t2,
+                _ => t.degraded = true,
+            }
+        }
+
         // auto 时按文本内容判定语言
         if matches!(lang_lc.as_str(), "" | "auto") {
             t.lang = detect_lang(&t.text);
@@ -262,6 +276,26 @@ pub fn route_engine(lang: &str, en_engine: &str, forced: Option<AsrKind>) -> Asr
         "mixed" => AsrKind::Whisper,
         "en" => AsrKind::parse(en_engine).unwrap_or(AsrKind::SenseVoice),
         _ => AsrKind::SenseVoice,
+    }
+}
+
+/// 结果语言与请求的语言是否矛盾（语言守卫用）。
+///
+/// 只要请求了 `en`，出现中文/日文/纯标点都算矛盾（`mixed` 也算，因为英文素材里
+/// 出现 CJK 基本是解码跑偏）；请求 `zh` 时英文化（`en`）算矛盾，`mixed` 不算。
+pub fn wrong_lang(text: &str, want: &str) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    if letters == 0 {
+        return true; // 只有标点/数字 → 这次等于没听出词
+    }
+    match (detect_lang(text).as_str(), want) {
+        ("en", "en") | ("zh", "zh") => false,
+        ("mixed", "en") => true,
+        ("mixed", "zh") => false,
+        _ => true,
     }
 }
 
@@ -473,6 +507,23 @@ mod tests {
         assert_eq!(ws.len(), 2);
         assert_eq!(ws[0].w, "pronunciation");
         assert!((ws[0].t1 - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wrong_lang_guards_requested_language() {
+        assert!(!wrong_lang("It is raining today.", "en"));
+        assert!(!wrong_lang("你好，今天下雨。", "zh"));
+        // 英文素材解码成中日文 → 矛盾（实测佩奇音频出现过「大抖。」「人と命ね。」）
+        assert!(wrong_lang("大抖。", "en"));
+        assert!(wrong_lang("人と命ね。", "en"));
+        // 混说里带 CJK → 对 en 算矛盾（要退回另一个引擎再听）
+        assert!(wrong_lang("I mean 就是那样", "en"));
+        // 中文请求里的 mixed 不算矛盾
+        assert!(!wrong_lang("I mean 就是那样", "zh"));
+        // 只有标点/数字 → 等于没听出词
+        assert!(wrong_lang(".", "en"));
+        assert!(wrong_lang("123", "en"));
+        assert!(!wrong_lang("", "en"));
     }
 
     #[test]

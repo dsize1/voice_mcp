@@ -57,6 +57,8 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe bank plan --minutes 15 --limit 8 --no-free-speech # 强制省略自由说槽位
 ./target/release/voice-cli.exe bank plan --minutes 15 --limit 8 --free-speech    # 强制包含（试一次）
 ./target/release/voice-cli.exe bank pick --tag theta_to_s --level 2 --limit 3     # 按 tag 权重取材
+./target/release/voice-cli.exe bank pick --exclude-corpus nce --limit 5           # 排除某语料（可重复）
+./target/release/voice-cli.exe bank plan --exclude-corpus ielts --dry-run         # 计划里排除某语料
 ./target/release/voice-cli.exe bank drill nce1/019/003                            # 播原生音频
 ./target/release/voice-cli.exe lesson <mp3> --lrc <lrc> --verbose
 ./target/release/voice-cli.exe tts-audit --manifest <jsonl> --out <report.jsonl>  # 只读审计 TTS 资产
@@ -107,6 +109,15 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
   常量 `voice_core::engine::DEFAULT_VOICE`）。理由：af_heart 在 140 wpm 附近有起始伪影（双 ASR 听成 “And”），
   am_michael 是 10 条 IELTS prompt 的主力已验证音色。需要女声时显式传 `--voice`。
   注意：GOP 基线音色同步改了 → **2026-11-25 前后的 Δ 不可严格横比**。
+
+## 语料排除（`--exclude-corpus`，2026-11-26）
+
+`bank pick` / `bank plan` 默认**排除** `peppa`（儿童动画：可听、但词汇层太低、卡通语调、
+文本常是 ASR 派生，不是雅思训练素材）。规则：
+
+- 不指定 `--corpus` → 自动追加 `default_exclude_corpora()`（当前只有 `peppa`）；
+- 指定 `--corpus peppa` → 以用户为准，不再默认排除；
+- 追加自定义排除：`--exclude-corpus <name>`（可重复）。
 
 ## 雅思真人素材入库（2026-11-26，N9 首次打通）
 
@@ -269,10 +280,10 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 - 修掉那 1 处编译错误；`cargo fmt --all` 全仓格式化；清掉全部 36 条 clippy 警告
   （26 条 collapsible_if 自动修，4 条手工：needless_range_loop / field_reassign ×2 / too_many_arguments 加注）。
 - `tools/check.ps1`：`fmt --check` → `clippy --all-targets -D warnings` → `test`，
-  可选 `-Cases` 跑录音回归。本地实测：**147 单测 + 9 用例全绿**（2026-11-25）。
+  可选 `-Cases` 跑录音回归。本地实测：**148 单测 + 9 用例全绿**（2026-11-25）。
 - `.github/workflows/ci.yml`：windows-latest 上跑同一套脚本，先 `fetch_deps.ps1` 取原生库。
   **GitHub Actions 已跑绿**：`530e668`（2026-11-24）/ `3cf8736`（2026-11-25），
-  `windows-latest` 上 `fmt → clippy -D warnings → test`（147 单测）全过。
+  `windows-latest` 上 `fmt → clippy -D warnings → test`（148 单测）全过。
   仍缺的是**合成 fixture**（D21）：CI 里跑不了带音频的 decode/flow 用例。
 - `rust-toolchain.toml` + `Cargo.toml` 的 `rust-version = "1.99"`（实测版本；edition 2024 的理论下限 1.85 未验证）。
 

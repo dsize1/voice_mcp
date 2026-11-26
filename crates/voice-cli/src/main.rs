@@ -264,6 +264,9 @@ enum BankCmd {
         seed: Option<u64>,
         #[arg(long)]
         corpus: Option<String>,
+        /// 排除某个语料集合，可重复（不指定 --corpus 时默认排除 peppa）
+        #[arg(long = "exclude-corpus")]
+        exclude_corpus: Vec<String>,
         /// 雅思 Part（自由说题面优先匹配）
         #[arg(long)]
         part: Option<u8>,
@@ -316,6 +319,9 @@ enum BankCmd {
         /// 连导语/片段一起给（默认排除）
         #[arg(long)]
         allow_noise: bool,
+        /// 排除某个语料集合，可重复（默认排除 peppa 这类非训练素材）
+        #[arg(long = "exclude-corpus")]
+        exclude_corpus: Vec<String>,
     },
     /// 单文件真人音频入库（无 LRC）：自动切句 + 双引擎验证文本 + 质量门槛
     IngestAudio {
@@ -513,6 +519,7 @@ fn main() -> Result<()> {
                 level,
                 seed,
                 corpus,
+                exclude_corpus,
                 part,
                 dry_run,
                 json,
@@ -526,6 +533,7 @@ fn main() -> Result<()> {
                 level,
                 seed,
                 corpus,
+                exclude_corpus,
                 part,
                 dry_run,
                 json,
@@ -550,6 +558,7 @@ fn main() -> Result<()> {
                 seed,
                 allow_noise,
                 no_weighted,
+                exclude_corpus,
             } => bank_pick(
                 &cfg,
                 BankPickArgs {
@@ -565,6 +574,7 @@ fn main() -> Result<()> {
                     seed,
                     allow_noise,
                     weighted: !no_weighted,
+                    exclude_corpora: exclude_corpus,
                 },
             ),
             BankCmd::Retag => {
@@ -2647,10 +2657,12 @@ struct BankPickArgs {
     seed: Option<u64>,
     allow_noise: bool,
     weighted: bool,
+    exclude_corpora: Vec<String>,
 }
 
 fn bank_pick(cfg: &Config, a: BankPickArgs) -> Result<()> {
     let home = Path::new(&cfg.data_dir);
+    let explicit_corpus = a.corpus.is_some();
     let q = voice_core::bank::PickQuery {
         corpus: a.corpus,
         part: a.part,
@@ -2663,6 +2675,18 @@ fn bank_pick(cfg: &Config, a: BankPickArgs) -> Result<()> {
             Vec::new()
         } else {
             voice_core::bank::PickQuery::default().exclude_tags
+        },
+        exclude_corpora: if explicit_corpus {
+            // 显式点了语料（如 --corpus peppa）就尊重它，不再默认排除
+            a.exclude_corpora
+        } else {
+            let mut v = a.exclude_corpora.clone();
+            for c in voice_core::bank::default_exclude_corpora() {
+                if !v.iter().any(|x| x.eq_ignore_ascii_case(&c)) {
+                    v.push(c);
+                }
+            }
+            v
         },
         limit: a.limit,
         offset: a.offset,
@@ -2708,6 +2732,7 @@ fn bank_plan(
     level: Option<u8>,
     seed: Option<u64>,
     corpus: Option<String>,
+    exclude_corpus: Vec<String>,
     part: Option<u8>,
     dry_run: bool,
     json: bool,
@@ -2721,11 +2746,21 @@ fn bank_plan(
     let learner: voice_core::plan::Learner = serde_json::from_str(&text)
         .with_context(|| format!("{} 不是合法的 learner.json", learner_path.display()))?;
     let entries = voice_core::bank::read_index(Path::new(&cfg.data_dir))?;
+    // 默认排除非训练语料（peppa 这类）；显式 --corpus 时以用户为准
+    let mut exclude_corpora = exclude_corpus;
+    if corpus.is_none() {
+        for c in voice_core::bank::default_exclude_corpora() {
+            if !exclude_corpora.iter().any(|x| x.eq_ignore_ascii_case(&c)) {
+                exclude_corpora.push(c);
+            }
+        }
+    }
     let req = voice_core::plan::PlanRequest {
         minutes,
         limit,
         level,
         seed,
+        exclude_corpora,
         corpus,
         part,
         include_free_speech,

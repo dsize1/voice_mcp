@@ -67,7 +67,7 @@
 | D17 | 引擎加载**失败不缓存**：每次调用都会重试并重新付出加载代价（whisper 1.6 s） | `With_engines` 只缓存成功 | S3 | 出现一次引擎加载失败 | 0.5d |
 | D18 | 原生 DLL 需**手工** `cp .cache/sherpa/lib/*.dll target/release/`，忘掉就启动即崩（Windows loader 报错，没有友好提示） | README 快速开始第 3 步 | S2 | 第二次有人在这台机器上构建 | 0.5d：`build.rs` 或 cargo xtask 自动复制 |
 | D19 | 无 `rust-toolchain.toml`、无 MSRV 声明 | **已还**：`rust-toolchain.toml`（stable + rustfmt/clippy）+ `Cargo.toml` `rust-version = "1.99"`（实测版本；edition 2024 理论下限 1.85 未验证） | ~~S3~~ ✅已还 | – | – |
-| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | **已还（2026-11-25）**：`tools/check.ps1` + `.github/workflows/ci.yml`；GitHub Actions 在 `windows-latest` 上绿两次（`530e668` 2026-11-24、`3cf8736` 2026-11-25，run 45643953511），147 单测 + clippy `-D warnings` + fmt 全过。残留：CI 里没有音频 fixture（另记 D21） | ~~S2~~ ✅已还 | – | – |
+| D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | **已还（2026-11-25）**：`tools/check.ps1` + `.github/workflows/ci.yml`；GitHub Actions 在 `windows-latest` 上绿两次（`530e668` 2026-11-24、`3cf8736` 2026-11-25，run 45643953511），148 单测 + clippy `-D warnings` + fmt 全过。残留：CI 里没有音频 fixture（另记 D21） | ~~S2~~ ✅已还 | – | – |
 | D45 | **没有门禁导致 HEAD 编译失败无人发现**：`{peak_dbfs:.1f}` 在 `4f57a36` 引入后陪着 3 个提交 | `cargo build --release` 报 `unknown format trait f` | ~~S1~~ ✅已还 | – | – |
 | D21 | 回归用例 | **部分偿还**：`cases/*.json` 只存断言（音频留本机，`VOICE_CASES_DIR` 指过去），`voice-cli cases` 一条命令跑全部；已覆盖 16k/48k/TTS/自由说/漏词 5 个场景。仍缺：没有**合成** fixture（正弦/噪声），CI 里无法无音频跑 decode/flow | S2 | 接 CI 前 | 2h |
 | D22 | `assess` 的 MCP 版与 CLI `assess_cmd` **逻辑重复**，两处维护 | 两个文件各 ~80 行 | S3 | 参数再变一次时 | 2h：抽到 `voice-core::pipeline` |
@@ -179,5 +179,5 @@
 | **新增 D44** | `bank` 的 tag 是关键词启发式，召回偏低（`theta_to_s` 只命中 237/4 997）；已用 so762 统计数据做权重，但覆盖仍靠人工维护变体表 |
 | **新增 D45** | 无门禁 → HEAD 编译失败 3 个提交无人发现；**已还**（`check.ps1` + CI，Actions 已绿） |
 | D19 / D39 | **已还**：toolchain+MSRV；`start_timeout_sec` 可配置 |
-| D20 | **已还（2026-11-25）**：GitHub Actions 在 `windows-latest` 上绿（147 单测 + clippy -D warnings + fmt） |
+| D20 | **已还（2026-11-25）**：GitHub Actions 在 `windows-latest` 上绿（148 单测 + clippy -D warnings + fmt） |
 | D11 / ADR-0007 触发条件 | **已满足**：`learner.json` history 14 条（含 2026-11-23 自由说） → 停顿/语速阈值校准与韵律分析可以开始 |

@@ -70,6 +70,8 @@ pub struct PlanRequest {
     pub level: Option<u8>,
     pub seed: Option<u64>,
     pub corpus: Option<String>,
+    /// 排除这些语料（`bank plan` 默认排除 `peppa` 这类非训练素材）
+    pub exclude_corpora: Vec<String>,
     pub part: Option<u8>,
     /// 是否保留 60 s 无稿自由说槽位（默认 true；用户要求不做时置 false）
     /// None → 按 learner.readiness.free_speech_enabled 自动决定
@@ -84,6 +86,7 @@ impl Default for PlanRequest {
             level: None,
             seed: None,
             corpus: None,
+            exclude_corpora: Vec::new(),
             part: None,
             include_free_speech: None,
         }
@@ -221,6 +224,7 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
             level: Some(level),
             tags: vec![tag.clone()],
             corpus: req.corpus.clone(),
+            exclude_corpora: req.exclude_corpora.clone(),
             kind: Some("read_aloud".into()),
             part: req.part,
             limit: 12,
@@ -257,6 +261,7 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
                     Vec::new()
                 },
                 corpus: req.corpus.clone(),
+                exclude_corpora: req.exclude_corpora.clone(),
                 kind: Some("read_aloud".into()),
                 part: req.part,
                 weighted,

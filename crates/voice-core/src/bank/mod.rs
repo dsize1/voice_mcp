@@ -1629,6 +1629,17 @@ pub fn retag(home: &Path) -> Result<usize> {
 
 // ---------------------------------------------------------------- 取材（P4.5）
 
+/// 默认**不进训练计划**的语料集合。
+///
+/// `peppa`（儿童动画）是可听的真人素材，但不是雅思训练材料：
+/// 词汇层太低、语调是卡通夸张、文本还常是 ASR 派生。允许显式 `--corpus peppa` 覆盖。
+pub const NON_TRAINING_CORPORA: [&str; 1] = ["peppa"];
+
+/// 计划/取材默认要排除的语料（调用方在用户**没有**显式指定 `--corpus` 时使用）。
+pub fn default_exclude_corpora() -> Vec<String> {
+    NON_TRAINING_CORPORA.iter().map(|s| s.to_string()).collect()
+}
+
 /// 取材查询：Skill 用 focus 的 tags + 难度从 3 000+ 条里挑 1–3 条练。
 #[derive(Debug, Clone)]
 pub struct PickQuery {
@@ -1643,6 +1654,8 @@ pub struct PickQuery {
     pub book: Option<String>,
     /// 默认排除这些标签（导语/片段不该拿来练）
     pub exclude_tags: Vec<String>,
+    /// 排除这些语料集合（如 `peppa` 儿童动画：可听不可当雅思训练素材）
+    pub exclude_corpora: Vec<String>,
     pub limit: usize,
     pub offset: usize,
     /// true（默认）→ 按 tag 权重之和排序；false → 退回"命中几个 tag"
@@ -1666,6 +1679,7 @@ impl Default for PickQuery {
                 "instruction".into(),
                 "fragment".into(),
             ],
+            exclude_corpora: Vec::new(),
             limit: 5,
             offset: 0,
             weighted: true,
@@ -1705,6 +1719,12 @@ pub fn pick_from(entries: &[BankEntry], q: &PickQuery) -> Vec<BankEntry> {
         }
         if let Some(c) = &q.corpus
             && !e.corpus.eq_ignore_ascii_case(c)
+        {
+            continue;
+        }
+        if q.exclude_corpora
+            .iter()
+            .any(|c| e.corpus.eq_ignore_ascii_case(c))
         {
             continue;
         }
@@ -1929,6 +1949,42 @@ mod tests {
         let parts = split_on_pauses(&s, sr as u32, (0.0, 5.0), 0.25, 2.0);
         assert!(parts.len() >= 3, "超长无停顿应硬切: {parts:?}");
         assert!(parts.iter().all(|(a, b)| b - a <= 2.01), "{parts:?}");
+    }
+
+    #[test]
+    fn pick_excludes_non_training_corpora() {
+        let mut nce = mk_entry("nce2/01/010", 2, &["theta_to_s"]);
+        nce.text = "This is a normal drill.".into();
+        let mut peppa = mk_entry("peppa/s01e01/001", 2, &["theta_to_s"]);
+        peppa.corpus = "peppa".into();
+        peppa.book = "Peppa".into();
+        peppa.text = "I am Peppa Pig.".into();
+        let entries = vec![nce, peppa];
+
+        // 显式排除 peppa → 只剩 nce
+        let q = PickQuery {
+            exclude_corpora: default_exclude_corpora(),
+            ..Default::default()
+        };
+        let got = pick_from(&entries, &q);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].corpus, "nce");
+
+        // 显式选 peppa（--corpus peppa）→ 只出 peppa（调用方此时不追加默认排除）
+        let q = PickQuery {
+            corpus: Some("peppa".into()),
+            ..Default::default()
+        };
+        let got = pick_from(&entries, &q);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].corpus, "peppa");
+
+        // 不排除时两条都在
+        let q = PickQuery {
+            limit: 10,
+            ..Default::default()
+        };
+        assert_eq!(pick_from(&entries, &q).len(), 2);
     }
 
     #[test]

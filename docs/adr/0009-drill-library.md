@@ -188,7 +188,7 @@ top tags   eth_to_z 3 290 · s_ending 2 472 · linking_missing 2 338 · fragment
 实现取舍（与原 ADR 的差异）：
 
 > **2026-11-22 后续**：库里新增 10 条 IELTS prompt（`corpus=ielts`、`kind=prompt`、`ref_audio=tts`），
-> 当前 `bank stats`：**entries 5 007 / quarantine 1 221 / 7.1 h**，可直接练 3 378。
+> 当前 `bank stats`：**entries 5 028 / quarantine 1 234 / 7.18 h**（2026-11-26；NCE 4 997 + IELTS prompt 10 + IELTS 听力真人 14 + Peppa 7），可直接练 3 378。
 > 上文 4 997 是 NCE 全量快照，保留作为历史证据。
 
 - **`--from-url` 未实现**：项目不引外部二进制，也不引 TLS 依赖；网络拉取交给外部脚本

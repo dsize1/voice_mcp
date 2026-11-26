@@ -98,8 +98,9 @@ description: 英语口语陪练与纠音教练（目标雅思 7 分）。当用�
 
 ### 1.5 素材库怎么用（P4.5）
 
-素材库在 `$VOICE_HOME/bank/`（默认 `D:/voice_data/bank`），共 **5 007 条**
-（NCE 4 997 + IELTS prompt 10），其中可直接练的 **3 378 条**（已排除导语/片段）。**不要读 `index.jsonl`**（2 MB，直接读会占满上下文），
+素材库在 `$VOICE_HOME/bank/`（默认 `D:/voice_data/bank`），共 **5 028 条**
+（NCE 4 997 + IELTS prompt 10 + 真人音频 21），其中可直接练的 **3 378 条**（已排除导语/片段与 `peppa`）。
+**不要读 `index.jsonl`**（2 MB，直接读会占满上下文），
 一律用 CLI：
 
 **每轮训练先跑计划（推荐）**：
@@ -146,6 +147,15 @@ voice-cli bank drill <id>       # 播原声 + 打印句子/中文/level/tags
 
 `kind=prompt` 的素材**没有原生音频**（`ref_audio=tts`）：示范音用 `synthesize` 生成，
 不要对用户说"跟读原声"；`kind=read_aloud` 才先播原声（`bank drill`）。
+
+**素材文本的来源要看 `text_source`**（`bank show` 可见）：
+
+| text_source | 能不能当"答案键"（判听写/拼写对错） |
+|---|---|
+| `lrc` / `book` / `srt` | ✅ 可以 |
+| `asr` | ❌ 不可以 —— 文本是识别出来的，本身可能有错（实测 `Peppa→Pepper`、`muddy→Mdy`）；只能当听力/跟读提示，不要拿它判用户拼错 |
+
+`bank pick` / `bank plan` **默认排除** `peppa`（儿童动画）这类非训练语料；要练它必须显式 `--corpus peppa`。
 
 **能力边界（不要越界）**：
 

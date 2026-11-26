@@ -1,12 +1,12 @@
 # 目标与进度（近期 / 远期）
 
-> 更新：2026-11-25 · 状态图例：✅ 完成 · 🟡 进行中 · ⛔ 阻塞 · ⏳ 未开始 · 🅿️ 挂起
+> 更新：2026-11-26 · 状态图例：✅ 完成 · 🟡 进行中 · ⛔ 阻塞 · ⏳ 未开始 · 🅿️ 挂起
 >
 > 相关：[STATE.md](STATE.md)（交接）· [levels.md](levels.md)（等级与自由说 gate）·
 > [ADR-0008](adr/0008-technical-debt.md)（技术债务）· [ADR-0009](adr/0009-drill-library.md)（素材库）·
 > [ADR-0010](adr/0010-free-speech-pseudo-gop.md)（Route A，挂起）
 
-## 0. 当前快照（2026-11-24）
+## 0. 当前快照（2026-11-26）
 
 | 项 | 值 |
 |---|---|
@@ -14,12 +14,12 @@
 | 英语水平 | band **6.0**（区间 5.5–6.5），CEFR 近似 **B2**；**跟读/朗读下界**，非官方成绩 |
 | 就绪等级 | **L2+**（跟读稳定，半自由未满） |
 | 自由说 | **关闭**（`readiness.free_speech_enabled=false`）；L3 后做 30–45 s 提纲，L4 才做 60 s 无稿 |
-| 素材库 | **5 022 条**（NCE 4 997 + IELTS prompt 10 + IELTS 听力真人 14），text_source 区分 lrc/book/asr |
+| 素材库 | **5 028 条**（NCE 4 997 + IELTS prompt 10 + IELTS 听力真人 14 + Peppa 7），`text_source` 区分 lrc/book/srt/asr；`peppa` 默认不进训练计划 |
 | 诊断能力 | 词级 diff + flow + 词级 GOP（**真人原声优先**基线/混淆对）+ 韵律（F0/升降/平调/重音候选/DTW，参考音标 native/tts） |
 | TTS | 默认 **am_michael（男声）+ 140 wpm**（130–160），slow=110；WPM 按**语音跨度**；起始伪影检测 + 自动换速度/换音色；OOV 预检 + `tts-verify` + `bank refs` 批量验证；verified 听力集/10 条 prompt 见 STATE |
-| 债务 | D01–D52 已登记；**2026-11-25 还 D20/D47/D49/D51，D04/D52 部分偿还** |
+| 债务 | D01–D53 已登记；**已还 D20/D47/D49/D51；D04/D52/D53 部分偿还** |
 | 近期训练 | 计划 **7/7 项**完成；`/θ/` 词首/词尾修正；144 wpm 下 `/θ/`、`/v/` 守住 |
-| 本地提交 | 2026-11-25 已推送（本轮 6 个 commit 全部推送） |
+| 本地提交 | 2026-11-26 已推送（本轮 12 个 commit 全部推送；CI 每次绿） |
 
 ---
 
@@ -53,7 +53,7 @@
 
 | ID | 目标 | 状态 | 验收 | 依赖 / 阻塞 |
 |---|---|---|---|---|
-| **N9** | 雅思素材入库（先 1 本 / Part 1） | 🟡 | 至少 200 条 IELTS 可练素材。**两条通道都打通**：`bank ingest-audio` —— 有字幕用 `--srt`（`text_source=srt`，可当答案键），无字幕走 VAD 切句 + 双引擎验证（`text_source=asr`，只当听力/跟读音）。已入库：雅思听力真人 14 句 + 佩奇 S01E01 片段 7 句 | 仍缺整本题库音频；语速 214 wpm 需降速 |
+| **N9** | 雅思素材入库（先 1 本 / Part 1） | 🟡 | 至少 200 条 IELTS 可练素材。**两条通道都打通**：`bank ingest-audio` —— 有字幕用 `--srt`（`text_source=srt`，可当答案键），无字幕走 VAD 切句 + 双引擎验证（`text_source=asr`，只当听力/跟读音）；`bank pick/plan` 默认排除 `peppa` 等非训练语料。已入库：雅思听力真人 14 句 + Peppa S01E01 片段 7 句 | 仍缺整本题库音频；两个源都 ~180–214 wpm（未降速，按条件记） |
 | **N10** | 外部录音（手机/系统录音机）可用性 | 🟡 | 3 条录音双引擎一致率 ≥0.8，能出词级结论 | 与 N2 联动 |
 | **N11** | TTS 参考音验证（D51）：OOV 预检 + 双 ASR/音素/WPM + 基线自检 | ✅ | `tts-verify` 3/3；OOV 0；`gop_baseline_valid` 生效；**`bank refs` 批量接入**；**10/10 IELTS prompt verified 3/3（含音素）** | 无 |
 | **N12** | Day 9 听力改用 `chunks-listening-verified/` 并更新答案键/训练记录 | ✅ | `day-9.md` 材料表 + `chunks-recall(.md/-key.md)` + 会话记录全部指向 verified；原文件未动；复测口径已写清（只有 s5 = 168 wpm 越界） | — |
@@ -133,7 +133,10 @@
 | 2026-11-25 | MCP 端换新二进制（杀子进程 → 重建 → Pi 自动重连），`synthesize` 实测返回 `am_michael`/`speech_duration`/`onset_gap_ms` | `97d7793` |
 | 2026-11-25 | CI 首跑确认绿（D20 部分偿还→偿还）：run [45643953511](https://github.com/dsize1/voice_mcp/actions/runs/45643953511) | 本次推送 |
 | 2026-11-25 | D52：TTS 不再当基线 —— `bank_id` 用真人原声切片当 GOP 基线/韵律参考，基线加音素自检，来源打标 | `e784cee` |
-| 2026-11-26 | N9 首次打通：`bank ingest-audio`（VAD 切句 + 段内停顿切分 + 双引擎验证 + `text_source=asr`）；雅思听力真人 14 句入库 | 本次提交 |
+| 2026-11-26 | N9 首次打通：`bank ingest-audio`（VAD 切句 + 段内停顿切分 + 双引擎验证 + `text_source=asr`）；雅思听力真人 14 句入库 | `1016fd1` |
+| 2026-11-26 | `bank ingest-audio --start/--end/--max-chunks`；修 D53（SenseVoice `lang` 不生效 → 语言守卫） | `029c309` |
+| 2026-11-26 | `bank ingest-audio --srt`（SRT/VTT 解析 + 碎 cue 合并；字幕当答案键）；Peppa 7 句入库 | `9c008d1` |
+| 2026-11-26 | `bank pick/plan --exclude-corpus` + 默认排除 `peppa`（避免儿童动画混进雅思计划） | `68c6b55` |
 
 ---
 

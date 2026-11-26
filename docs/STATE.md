@@ -1,14 +1,15 @@
 # 当前状态与下一步（交接用）
 
-> 写于 2026-11-19，最后更新 2026-11-25（TTS 语速口径/伪影规避/批量验证 + 默认男声 + D47/D49 + MCP 换二进制）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
+> 写于 2026-11-19，最后更新 **2026-11-26**（真人素材入库 `bank ingest-audio`（含 `--srt`）+ 语料排除 + D52/D53）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
 > 再读这一页、README / CONTRACT / ADR。
 
 ## 一句话现状
 
-**P3 闭环 + P4 素材库（NCE 4 997 + IELTS prompt 10 = 5 007 条）+ 音素级 GOP（词级口径）+ 韵律分析均已上线并在真机验证。**
-`crates` 10 400+ 行 Rust，**136 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
-已由 `tools/check.ps1` 与 GitHub Actions 守住（ADR-0008 D45）。
-下一步：雅思素材入库 + 按 `error_stats` 做定向训练。
+**P3 闭环 + P4 素材库（5 028 条：NCE 4 997 / IELTS prompt 10 / IELTS 听力真人 14 / Peppa 7）+ 音素级 GOP + 韵律分析均已上线并在真机验证。**
+评测侧的“参考音”已从 TTS 改为**真人原声优先**（D52）；真人素材有两条入库通道（有字幕 `--srt` / 无字幕 ASR 双引擎复核）。
+`crates` 11k+ 行 Rust，**148 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
+已由 `tools/check.ps1` 与 GitHub Actions 守住（D20/D45）。
+下一步：N1 whisper 端到端回归、N6/N7 readiness 自动评估 + plan 去重。
 
 ## 已实测的关键数字（别再猜）
 
@@ -26,7 +27,7 @@
 | **MDD 微调（6ep/8L）** | 词级 AUROC 0.883→0.887、音素级 0.690→0.769；训练 65 s/epoch（RTX 5070 Ti cu128） |
 | **混淆对信号（TH→s）** | 命中精确率 0.50、召回 0.67（仅 TH 系列可对用户说） |
 | **韵律（YIN，纯 Rust）** | 51.8 s 真人：F0 中位 116.3 Hz、起伏 3.31 st、音域 12.61 st、句末 −0.38 st→flat；TTS 同文本 DTW 0.11 st |
-| 素材库 | **5 007 条 / 7.1 h**（NCE 4 997 + IELTS prompt 10），quarantine 1 221，可直接练 3 378 |
+| 素材库 | **5 028 条 / 7.18 h**（NCE 4 997 + IELTS prompt 10 + IELTS 听力真人 14 + Peppa 7），quarantine 1 234；`peppa` 默认不进训练计划 |
 | 素材库 ingest | 276 课 ≈ 10.5 min；`bank stats` 是唯一权威计数 |
 
 ## 环境
@@ -197,26 +198,28 @@ S1 级已全部偿还。剩余主要项：
 D04 whisper 路径无回归 · D06 音色表未人耳校准 · D09/D11 时间戳与阈值（韵律已上线，D12 已还）
 D15 全局锁串行 · D18 DLL 手工复制 · D21 CI 里的合成 fixture（**D20 已还：Actions 已绿**；仍缺音频 fixture）· D29 Skill 分发 · D35 蓝牙端点选择 · D36 AGC 强导致能量维度不可用于重音 · D38 分块边界可能切词
 D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）· D46 G2P 同形异音词只取首变体（live/read）· D48 readiness 未自动评估 · D50 韵律 12 条标注验收未做
-D04 whisper 端到端音频回归仍缺（routing + 3 个 fixture 单测已补）· **D52 TTS 当基线（部分偿还）**：真人原声优先 + 音素自检已做；残留是 IELTS prompt 无真人音 + 历史 Δ 需重跑
+D04 whisper 端到端音频回归仍缺（routing + 3 个 fixture 单测已补）· **D52 TTS 当基线（部分偿还）**：真人原声优先 + 音素自检已做；残留是 IELTS prompt 无真人音 + 历史 Δ 需重跑 · **D53 SenseVoice `lang` 不生效（部分偿还）**：语言守卫（请求 en/zh 却拿到另一种语言 → 换引擎重听）；彻底修需按语言分别加载识别器
 
-已还（2026-11-25）：**D47**（短语音 SNR 豁免）· **D49**（双引擎文本闸门 `text_agreement`）· **D51**（`bank refs` 批量验证 + 10/10 prompt 3/3 + 起始伪影检测）
+已还（2026-11-25）：**D47**（短语音 SNR 豁免）· **D49**（双引擎文本闸门 `text_agreement`）· **D51**（`bank refs` 批量验证 + 10/10 prompt 3/3 + 起始伪影检测）· **D20**（CI 首跑已绿）
+新增通道（2026-11-26）：`bank ingest-audio`（`--srt` 优先 / 无字幕 ASR 双引擎）、`bank pick/plan --exclude-corpus`
 
 已还：D19 rust-toolchain/MSRV · D39 `record.start_timeout_sec` · D45 构建门禁。（D18 只缓解：`check.ps1` 把 DLL 目录加进 PATH。）
 
 ## 下一批工作（用户已确认顺序）
 
 1. ~~**P3 真机训练闭环**~~（2026-11-21 完成）
-2. ~~**P4 跟读素材库**~~（2026-11-22 全量完成）：`bank ingest/list/show/drill/stats/retag`，NCE1–4 共 276 课 → 4 997 条（另加 10 条 IELTS prompt，当前 5 007）
+2. ~~**P4 跟读素材库**~~（2026-11-22 全量完成）：`bank ingest/list/show/drill/stats/retag`，NCE1–4 共 276 课 → 4 997 条（现 5 028：另加 IELTS prompt 10 + 真人音频 21）
 3. ~~补一次自由说 30–60 s~~（2026-11-23 完成；**2026-11-24 改为 readiness gate**：L2+ 关闭，L3/L4 达标后开启）
 4. ~~韵律分析（F0 / 句末升降 / 平调 / 重音候选 / DTW）~~（**完成** 2026-11-23，见下节）
 5. **Route A（无参考自由说伪 GOP）**：已立 [ADR-0010](adr/0010-free-speech-pseudo-gop.md)，
    **Proposed / Deferred**，不在当前迭代；触发条件见 ADR。
-6. **回到原定路线**：素材库定向训练（`bank plan`）→ 雅思素材入库（缺源音频）→ 按 `error_stats` 组卷
+6. **回到原定路线**：素材库定向训练（`bank plan`）→ 雅思素材入库（**通道已通**：`bank ingest-audio --srt`，仍缺整本题库音频）→ 按 `error_stats` 组卷
+7. **2026-11-26 之后**：N1（whisper 端到端回归）→ N6/N7（readiness 自动评估 + plan 去重）→ N4（D46 同形异音）
 
 ## GOP / 诊断层现状（2026-11-22）
 
 **能力**：`assess(with_gop=true)` 返回
-`gop.words_worst[]`（词级，对外）、`gop.worst[]`（音素级，仅排序）、`gop_baseline`（TTS 标准发音对照）、
+`gop.words_worst[]`（词级，对外）、`gop.worst[]`（音素级，仅排序）、`gop_baseline`（对照基线，**真人原声优先 / TTS 兜底**，见 D52）、
 `gop.worst[].confusion`（混淆对，如 `TH→s`，`confusion_reportable` 当前仅 TH 为 true）。
 
 **硬规则（SKILL 4.0/4.1 已固化）**：
@@ -280,7 +283,7 @@ L4 之前该触发条件不会成立；A 仅保留为未来选项。
 - 修掉那 1 处编译错误；`cargo fmt --all` 全仓格式化；清掉全部 36 条 clippy 警告
   （26 条 collapsible_if 自动修，4 条手工：needless_range_loop / field_reassign ×2 / too_many_arguments 加注）。
 - `tools/check.ps1`：`fmt --check` → `clippy --all-targets -D warnings` → `test`，
-  可选 `-Cases` 跑录音回归。本地实测：**148 单测 + 9 用例全绿**（2026-11-25）。
+  可选 `-Cases` 跑录音回归。本地实测：**148 单测 + 9 用例全绿**（2026-11-26）。
 - `.github/workflows/ci.yml`：windows-latest 上跑同一套脚本，先 `fetch_deps.ps1` 取原生库。
   **GitHub Actions 已跑绿**：`530e668`（2026-11-24）/ `3cf8736`（2026-11-25），
   `windows-latest` 上 `fmt → clippy -D warnings → test`（148 单测）全过。

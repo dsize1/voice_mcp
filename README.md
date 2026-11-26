@@ -77,10 +77,11 @@ Pi 里的 LLM **听不到音频**，它只能看到文本和数字。所以：
 | **音素级 GOP（词级口径）** | ✅ | 音素 CTC（wav2vec2-espeak ONNX）+ CTC-Viterbi + 说话人内归一化；so762 词级 AUROC 0.887 |
 | **TTS 对照基线** | ✅ | 同一参考文本用标准发音跑一遍 GOP，区分"用户读错"与"模型分辨不出" |
 | **混淆对信号**（θ→s 等） | ✅ | 仅 TH 系列达到可用精度（P 0.50 / R 0.67），其余只作内部标记 |
-| **跟读素材库** | ✅ | NCE1–4 共 4 997 条逐句切片 + 10 条 IELTS prompt（共 5 007 条，7.1 h），tag 权重来自真实错读率统计 |
+| **跟读素材库** | ✅ | NCE1–4 共 4 997 条逐句切片 + 10 条 IELTS prompt + 真人音频（现 5 028 条，7.18 h），tag 权重来自真实错读率统计 |
 | **音频质量闸门** | ✅ | SNR<13 dB / peak<−30 dBFS / 削波>0.1% → `degraded`，不出诊断结论；短语音（<3 s、peak ≥−25）按 D47 豁免 |
 | **文本可用性闸门** | ✅ | 双引擎词级一致率 <0.7 → `degraded`，只出语流/韵律，不出词级/音素级结论（D49） |
 | **TTS 示范音验证** | ✅ | OOV 预检 + 双 ASR/音素/WPM/起始伪影；`bank refs` 批量生成、逐条 3/3 `verified` 才落盘（D51） |
+| **真人素材入库** | ✅ | `bank ingest-audio`：有 SRT/VTT 用字幕当答案键（`text_source=srt`），无字幕走 VAD 切句 + 双引擎验证（`text_source=asr`）；`bank pick/plan` 默认排除 `peppa` 等非训练语料 |
 | **定向训练计划** | ✅ | `bank plan`：drill_queue → error_stats/focus tags → 同难度补足；固定含 60 s 自由说槽位 |
 | **韵律分析**（F0 轮廓/句末升降/平调/音域/重音候选/DTW） | ✅ | 纯 Rust（YIN）；`assess(with_prosody=true)` 或 `reference_audio`，只给数值不下结论 |
 | 流式 / HTTP 模式 / 热键听写 | ⏳ P4 | – |
@@ -296,7 +297,8 @@ voice-cli stt <path|last> [--lang en] [--plain]# 转写（留证）
 voice-cli say "text" [--voice am_michael] [--speed <倍率>] [--slow-too] [--play] # 默认 140 wpm / 男声
 voice-cli tts-verify "text" [--voice am_michael] [--runs 3] [--no-phones]      # TTS 参考音验证（双 ASR/音素/WPM/起始伪影）
 voice-cli bank refs [ids...] --kind prompt --runs 3 --out DIR                   # 批量生成示范音并逐条验证（verified 才落盘）
-voice-cli bank ingest-audio <mp3> --lesson <label> [--srt s.srt] [--dry-run]    # 单文件真人音频入库（有字幕用字幕，无字幕走 VAD + 双引擎验证）
+voice-cli bank ingest-audio <mp3> --lesson <label> [--srt s.srt] [--start 20 --end 110]  # 单文件真人音频入库（字幕优先，否则 VAD 切句 + 双引擎验证）
+voice-cli bank pick --exclude-corpus peppa --limit 5                            # 取材（默认已排除 peppa 等非训练语料）
 voice-cli tts-audit --manifest <jsonl> --out <report.jsonl> [--no-phones]    # 只读审计现有 TTS 资产
 voice-cli play <path>
 voice-cli assess <path|last> [--reference "原句"] [--with-gop]   # 评测（含词级 GOP + TTS 基线）
@@ -453,7 +455,7 @@ D:/voice_data/
 | [0005](docs/adr/0005-deps-and-model-acquisition.md) | 依赖与模型获取策略（GitHub 不可用时的替代通路） |
 | [0006](docs/adr/0006-assessment-scope.md) | 评测层能力边界（三态推断、为什么不能硬猜） |
 | [0007](docs/adr/0007-prosody-and-gop.md) | 韵律分析与音素级 GOP（**两者都已上线**，纯 Rust；见 [docs/phoneme-gop.md](docs/phoneme-gop.md) / [docs/mdd.md](docs/mdd.md)） |
-| [0009](docs/adr/0009-drill-library.md) | 跟读素材库：NCE1–4 逐句切片、质量门槛、难度分级（**Accepted，5 007 条已入库**） |
+| [0009](docs/adr/0009-drill-library.md) | 跟读素材库：NCE1–4 逐句切片、质量门槛、难度分级（**Accepted，5 028 条已入库**） |
 | [0010](docs/adr/0010-free-speech-pseudo-gop.md) | **Route A：无参考自由说的伪参考 GOP**（立项，Deferred；含可行性实测与 Go/No-Go） |
 | [0008](docs/adr/0008-technical-debt.md) | **技术欠债登记**：51 条债、严重度、触发偿付条件、偿付顺序 |
 

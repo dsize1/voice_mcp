@@ -178,5 +178,5 @@
 | **新增 D44** | `bank` 的 tag 是关键词启发式，召回偏低（`theta_to_s` 只命中 237/4 997）；已用 so762 统计数据做权重，但覆盖仍靠人工维护变体表 |
 | **新增 D45** | 无门禁 → HEAD 编译失败 3 个提交无人发现；**已还**（`check.ps1` + CI，Actions 已绿） |
 | D19 / D39 | **已还**：toolchain+MSRV；`start_timeout_sec` 可配置 |
-| D20 | **已还（2026-11-25）**：GitHub Actions 在 `windows-latest` 上绿（136 单测 + clippy -D warnings + fmt） |
+| D20 | **已还（2026-11-25）**：GitHub Actions 在 `windows-latest` 上绿（138 单测 + clippy -D warnings + fmt） |
 | D11 / ADR-0007 触发条件 | **已满足**：`learner.json` history 14 条（含 2026-11-23 自由说） → 停顿/语速阈值校准与韵律分析可以开始 |

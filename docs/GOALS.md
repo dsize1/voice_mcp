@@ -16,7 +16,7 @@
 | 自由说 | **关闭**（`readiness.free_speech_enabled=false`）；L3 后做 30–45 s 提纲，L4 才做 60 s 无稿 |
 | 素材库 | **5 028 条**（NCE 4 997 + IELTS prompt 10 + IELTS 听力真人 14 + Peppa 7），`text_source` 区分 lrc/book/srt/asr；`peppa` 默认不进训练计划 |
 | 诊断能力 | 词级 diff + flow + 词级 GOP（**真人原声优先**基线/混淆对）+ 韵律（F0/升降/平调/重音候选/DTW，参考音标 native/tts） |
-| TTS | 默认 **am_michael（男声）+ 140 wpm**（130–160），slow=110；WPM 按**语音跨度**；起始伪影检测 + 自动换速度/换音色；OOV 预检 + `tts-verify` + `bank refs` 批量验证；verified 听力集/10 条 prompt 见 STATE |
+| TTS | 默认 **am_michael（男声）+ 140 wpm**（130–160，D54 已收口：实测 136–146 全部在带内），slow=110；WPM 按**语音跨度**（单位＝英文词＋中文字）；起始伪影检测 + 换速度重试；**开放词表 G2P → `phoneme_codepoints`**（lexicon 仅覆盖层，未见词根走规则 LTS 并打标记），中英混说默认拒答；`tts-verify` + `bank refs` + `tts-regress`（漏词门禁）批量验证；verified 听力集/10 条 prompt 见 STATE |
 | 债务 | D01–D53 已登记；**已还 D20/D47/D49/D51；D04/D52/D53 部分偿还** |
 | 近期训练 | 计划 **7/7 项**完成；`/θ/` 词首/词尾修正；144 wpm 下 `/θ/`、`/v/` 守住 |
 | 本地提交 | 2026-11-26 已推送（本轮 12 个 commit 全部推送；CI 每次绿） |

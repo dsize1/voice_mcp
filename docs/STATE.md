@@ -16,7 +16,9 @@
 | 项 | 数值 |
 |---|---|
 | ASR SenseVoice int8 | 6 s 音频 82 ms（RTF 0.013）；81 s 音频分块后 2.3 s（RTF 0.028） |
-| TTS Kokoro 82M | RTF 0.21，24 kHz，54 音色；**默认 140 wpm**（130–160），slow=110；短文本/中文不按 WPM 校准；WPM 按**语音跨度**算 |
+| TTS Kokoro 82M | RTF 0.21，24 kHz，54 音色；**默认 140 wpm**（130–160），slow=110；短文本/中文不按 WPM 校准；WPM 按**语音跨度**算（单位＝英文词＋中文字） |
+| TTS 文本前端（2026-11-27） | 英文走**开放词表 G2P** → `phoneme_codepoints`（CMUdict + 形态规则 + 数字 + 规则 LTS 兜底），lexicon 降为**覆盖层**；未见词根走 LTS 并打 `lts_words` 标记；中文走 `lexicon-zh`；**中英混说默认拒答**；标识 `g2p-ipa/1.0[cmudict+overlay]+lexicon-zh` |
+| TTS 回归门禁 | `cargo test`（170，含 G2P/LTS/sidecar）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl`（13 条：漏词=词数减少、`expect=reject_mixed`、`expect=lts`、wpm 带内断言） |
 | 引擎冷启动 | 1.7 s（ASR 与 TTS 并行加载） |
 | `.m4a`/mp3 解码 | 纯 Rust（symphonia），6 s 音频 1.8 ms |
 | 麦克风（EDIFIER W820NB 蓝牙 HFP 端点） | 48 kHz 单声道 F32 可用；底噪 p50 −54.7 / p99 −46 dBFS（**偏高，AGC 强**） |
@@ -94,7 +96,13 @@ VOICE_CASES_DIR=/d/voice_data/cases_audio ./target/release/voice-cli.exe cases
 详见 [docs/levels.md](levels.md)。`bank plan` 默认按 `readiness.free_speech_enabled` 自动决定槽位。
 （`record` 的 8 s 起始等待已可通过 `start_timeout_sec` 调整，D39 已还。）
 
-## TTS 语速与伪影（2026-11-25 更新）
+## TTS 语速与伪影（2026-11-27 更新：D54 已收口）
+
+语速标定的候选排序已改为“**离 130–160 带宽的连续距离**优先，起始伪影次之”，并改成
+“只要还没进带宽就继续换速度”（上限 9 个候选）。复测 10 条判别句：136.1–145.6 wpm 全部在带内。
+旧结论（“140 wpm 承诺不可靠”）已失效。
+
+## TTS 语速与伪影（2026-11-25 旧记录）
 
 - **WPM 口径**：按语音跨度（峰值 −40 dB 界定的首末 10 ms 帧）算，不按文件总时长。
   旧口径目标 140 会量到 128（历史 s 集 wpm 也是旧口径，复测后 7/8 仍在 130–160，s5 = 168）。

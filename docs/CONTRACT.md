@@ -180,7 +180,11 @@ sessions/<date>/<hhmmss>_drill/takes/
   `files[].lts_words` 里列出这些词 —— 材料侧应据此人工复听或拒收；
   `VOICE_LTS=0` 可关闭兜底（退回 `ok:false` + 列出缺词）。给某词指定准确发音：
   `$VOICE_HOME/tts-lexicon.txt` 写 `word 音素…`。
-- 中文走 `lexicon-zh`（原路径）；中英混说**默认拒答**（单音色必然降调 + 拼接点停顿），
+- 中文默认走 `lexicon-zh`；可选 misaki-zh sidecar（`VOICE_G2P_CMD_ZH=python <repo>/tools/g2p_misaki.py`，
+  需 `pip install "misaki[zh]"`，首次调用要加载 jieba，建议 `VOICE_G2P_TIMEOUT_MS=8000`）——
+  此时中文也走 `phoneme_codepoints`，`files[].phonemes` 以 `⟨zh⟩` 前缀区分来源；
+  失败/空行自动回退 `lexicon-zh`。**中文示范音建议 `zf_xiaoni`**（`zf_xiaobei` 在码点路径明显劣化）。
+  中英混说**默认拒答**（单音色必然降调 + 拼接点停顿），
   内部实验：`VOICE_ALLOW_MIXED=1` / `voice-cli say --allow-mixed`。
 - 前端标识（审计/留证用）：`g2p-ipa/1.0[cmudict+overlay]+lexicon-zh`；`tts-audit` 每行带 `frontend` 字段，
   **跨版本 OOV/通过率曲线不可直接比较**。

@@ -181,6 +181,9 @@ pub struct TtsEngine {
     tokens: KokoroTokenMap,
     /// 是否允许中英混说（默认 false：产品契约“一段文本一种语言”，混说音质必然降级）
     allow_mixed: bool,
+    /// 可选的中文 G2P（misaki-zh sidecar，`VOICE_G2P_CMD_ZH`）。
+    /// 为 None 时中文走引擎 `lexicon-zh`（零外部依赖的默认路径）。
+    zh_g2p: Option<SidecarBackend>,
 }
 
 impl TtsEngine {
@@ -269,6 +272,20 @@ impl TtsEngine {
             ),
         };
         let tokens = KokoroTokenMap::load(&tokens)?;
+        // 可选中文前端：misaki-zh（Python sidecar）。默认不启用 —— 保持“零外部依赖”，
+        // 也避免 MCP 长驻进程带上一个 Python 子进程（D55 里已修好超时/熔断）。
+        let zh_g2p = match std::env::var("VOICE_G2P_CMD_ZH") {
+            Ok(cmd) if !cmd.trim().is_empty() => {
+                let mut it = cmd.split_whitespace();
+                let prog = it.next().unwrap_or_default().to_string();
+                Some(SidecarBackend::new(
+                    prog,
+                    it.map(str::to_string).collect(),
+                    "misaki-zh",
+                ))
+            }
+            _ => None,
+        };
         Ok(Self {
             tts,
             sample_rate,
@@ -278,6 +295,7 @@ impl TtsEngine {
             g2p,
             tokens,
             allow_mixed: cfg.allow_mixed,
+            zh_g2p,
         })
     }
 
@@ -340,16 +358,26 @@ impl TtsEngine {
         let mut gen_ms = 0.0f64;
         let mut phonemes: Vec<String> = Vec::new();
         let mut lts_words: Vec<String> = Vec::new();
-        let mut en_text_seen = false;
 
         for (is_cjk, seg) in &segs {
             if seg.trim().is_empty() {
                 continue;
             }
             if *is_cjk {
-                let (part, ms) = self.synth_raw(seg, sid, speed, None)?;
-                samples.extend(part);
-                gen_ms += ms;
+                match self.zh_codepoints(seg) {
+                    Some((cps, ipa)) => {
+                        let (part, ms) = self.synth_raw(seg, sid, speed, Some(cps))?;
+                        samples.extend(part);
+                        gen_ms += ms;
+                        phonemes.push(format!("⟨zh⟩{ipa}"));
+                    }
+                    // 没配中文 G2P，或该行没产出可用音素 → 回退引擎 lexicon-zh
+                    None => {
+                        let (part, ms) = self.synth_raw(seg, sid, speed, None)?;
+                        samples.extend(part);
+                        gen_ms += ms;
+                    }
+                }
             } else {
                 let (cps, ipa, lts) = self.english_codepoints(seg)?;
                 for w in lts {
@@ -357,7 +385,6 @@ impl TtsEngine {
                         lts_words.push(w);
                     }
                 }
-                en_text_seen = true;
                 let (part, ms) = self.synth_raw(seg, sid, speed, Some(cps))?;
                 samples.extend(part);
                 gen_ms += ms;
@@ -408,10 +435,12 @@ impl TtsEngine {
             speech_duration,
             onset_gap_ms,
             target_wpm: None,
-            phonemes: if en_text_seen {
-                Some(phonemes.join(g2p_ipa::SEGMENT_JOINER))
-            } else {
+            // 中文走 lexicon-zh 时没有音素串（phonemes 为空 → None）；
+            // 中文走 misaki-zh sidecar 时会有（⟨zh⟩ 前缀，便于留证区分来源）。
+            phonemes: if phonemes.is_empty() {
                 None
+            } else {
+                Some(phonemes.join(g2p_ipa::SEGMENT_JOINER))
             },
             lts_words,
             gen_ms,
@@ -439,6 +468,45 @@ impl TtsEngine {
             .ok_or_else(|| anyhow!("合成失败（文本语言与 lexicon 不匹配？）"))?;
         let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
         Ok((audio.samples().to_vec(), gen_ms))
+    }
+
+    /// 中文段 → 音素码点（misaki-zh sidecar）。`None` = 未启用或该段没产出可用音素。
+    ///
+    /// 只保留 Kokoro `tokens.txt` 认识的符号：misaki 会把标点（`。？！`）与英文短语
+    /// 原样留在串里，直接喂进去会触发字符集校验失败。
+    fn zh_codepoints(&self, seg: &str) -> Option<(Vec<Vec<i32>>, String)> {
+        let side = self.zh_g2p.as_ref()?;
+        // 直接拿"整行音素串"：misaki 按 jieba 分词输出，与原文逐词对齐没有意义
+        let ipa = match side.phonemes_for_text(seg) {
+            Ok(v) => v,
+            Err(e) => {
+                if std::env::var("VOICE_G2P_DEBUG").is_ok() {
+                    eprintln!("[zh-g2p] 失败，回退 lexicon-zh: {e:#}");
+                }
+                return None;
+            }
+        };
+        let clean: String = ipa.chars().filter(|c| self.tokens.has(*c)).collect();
+        if std::env::var("VOICE_G2P_DEBUG").is_ok() {
+            eprintln!(
+                "[zh-g2p] seg={seg:?} raw_len={} clean_len={} clean={:?}",
+                ipa.chars().count(),
+                clean.chars().count(),
+                clean
+            );
+        }
+        if clean.trim().is_empty() {
+            return None;
+        }
+        let cps: Vec<i32> = clean.chars().map(|c| c as i32).collect();
+        if std::env::var("VOICE_G2P_DEBUG").is_ok() {
+            eprintln!(
+                "[zh-g2p] cps({})={:?}",
+                cps.len(),
+                &cps[..cps.len().min(12)]
+            );
+        }
+        Some((vec![cps], clean))
     }
 
     /// 英文段 → 逐句音素码点 + LTS 兜底词（证据）。**不查引擎词表**；覆盖不了直接报错。

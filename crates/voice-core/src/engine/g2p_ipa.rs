@@ -827,6 +827,13 @@ impl SidecarBackend {
         Ok(lines)
     }
 
+    /// 整段文本 → 一行音素串（中文用：misaki 按 jieba 词输出，不保证与原文词数对齐，
+    /// 所以不能复用逐词对齐的 `phonemize`）。
+    pub fn phonemes_for_text(&self, text: &str) -> Result<String> {
+        let mut lines = self.run(&[text.to_string()])?;
+        Ok(lines.pop().unwrap_or_default())
+    }
+
     /// 带**一次重启重试**的调用 + 熔断（连续失败 3 次后快速失败，避免每个请求都等超时）。
     fn run(&self, sentences: &[String]) -> Result<Vec<String>> {
         use std::sync::atomic::Ordering;

@@ -149,10 +149,16 @@ pub fn confusion_reportable(hint: &str) -> bool {
 #[derive(Debug, Clone, Serialize)]
 pub struct WordScore {
     pub word: String,
+    /// 在参考文本 `words` 里的下标（D46 变体回填用；对外无意义）
+    #[serde(skip)]
+    pub word_idx: usize,
     /// 该词所有音素 GOP 的均值（越负越可疑）
     pub gop_mean: f32,
     pub t0_ms: u32,
     pub t1_ms: u32,
+    /// 选中的发音变体（仅当同形异音按音频换了变体时出现，ARPAbet 串；证据用）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
     /// 该词内最可疑的音素（解释用）
     pub worst_phone: String,
     pub worst_z: f32,
@@ -198,6 +204,8 @@ pub fn group_words(
             .unwrap_or((idxs[0], 0.0));
         out.push(WordScore {
             word: w.word.clone(),
+            word_idx: wi,
+            variant: None,
             gop_mean: crate::round_to(gop_mean, 2),
             t0_ms: aligned[idxs[0]].t0 as u32 * hop_ms,
             t1_ms: aligned[*idxs.last().unwrap()].t1 as u32 * hop_ms,
@@ -213,19 +221,36 @@ pub fn group_words(
     out
 }
 
-/// 端到端：16 kHz 音频 + 参考文本 → 每个音素的 GOP。
-pub fn score_text(
-    model: &mut PhonemeCtc,
-    samples: &[f32],
-    text: &str,
-    g2p: &G2p,
-) -> Result<GopResult> {
-    let logp = model.log_probs(samples)?;
-    let tp = g2p.text_to_phones(text);
-    let mut refs = Vec::with_capacity(tp.phones.len());
-    let mut word_of: Vec<usize> = Vec::with_capacity(tp.phones.len());
-    let mut unmapped = Vec::new();
-    for (wi, w) in tp.words.iter().enumerate() {
+/// 在给定帧区间内，用一组参考音素对齐并返回**平均 GOP**（越高越好）。
+///
+/// 单独抽出来是为了 D46（同形异音）：同一个词的多个变体各打一次分，取最高。
+/// 也让它能用合成 log-prob 做无模型单测。
+pub(crate) fn score_span(
+    log_probs: &[Vec<f32>],
+    t0: usize,
+    t1: usize,
+    refs: &[PhoneRef],
+    blank: usize,
+) -> Option<f32> {
+    if t1 <= t0 || refs.is_empty() || t1 > log_probs.len() {
+        return None;
+    }
+    let a = align(&log_probs[t0..t1], refs, blank)?;
+    if a.is_empty() {
+        return None;
+    }
+    Some(a.iter().map(|x| x.gop).sum::<f32>() / a.len() as f32)
+}
+
+/// 把「词 → 音素」列表转成对齐用的 `PhoneRef`，并记录每个音素属于哪个词。
+fn build_refs(
+    model: &PhonemeCtc,
+    words: &[g2p::WordPhones],
+    unmapped: &mut Vec<String>,
+) -> (Vec<PhoneRef>, Vec<usize>) {
+    let mut refs = Vec::new();
+    let mut word_of = Vec::new();
+    for (wi, w) in words.iter().enumerate() {
         for p in &w.phones {
             let cands = model.phones.candidates(p);
             if cands.is_empty() {
@@ -241,6 +266,85 @@ pub fn score_text(
             word_of.push(wi);
         }
     }
+    (refs, word_of)
+}
+
+/// D46：同形异音按音频选变体。
+///
+/// 返回每个词（按 `words` 下标）选中的变体与它的平均 GOP；`None` = 没换（主变体已最优）。
+fn pick_variants(
+    model: &PhonemeCtc,
+    log_probs: &[Vec<f32>],
+    g2p: &G2p,
+    words: &[g2p::WordPhones],
+    word_of: &[usize],
+    aligned: &[Aligned],
+) -> Vec<Option<(String, f32)>> {
+    let mut out: Vec<Option<(String, f32)>> = vec![None; words.len()];
+    // 每个词在对齐结果里的区间
+    let mut spans: Vec<(usize, usize)> = vec![(usize::MAX, 0); words.len()];
+    for (k, wi) in word_of.iter().enumerate() {
+        let (t0, t1) = (aligned[k].t0, aligned[k].t1);
+        let e = &mut spans[*wi];
+        e.0 = e.0.min(t0);
+        e.1 = e.1.max(t1);
+    }
+    for (wi, w) in words.iter().enumerate() {
+        let vars = g2p.word_variants(&w.word);
+        if vars.len() < 2 {
+            continue;
+        }
+        let (t0, t1) = spans[wi];
+        if t0 == usize::MAX || t1 <= t0 {
+            continue;
+        }
+        // 主变体分数：用整句对齐里该词的均值
+        let idxs: Vec<usize> = word_of
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| **x == wi)
+            .map(|(k, _)| k)
+            .collect();
+        if idxs.is_empty() {
+            continue;
+        }
+        let primary = idxs.iter().map(|k| aligned[*k].gop).sum::<f32>() / idxs.len() as f32;
+        let mut best: Option<(String, f32)> = None;
+        for v in &vars {
+            if v == &w.phones {
+                continue;
+            }
+            let mut unmapped = Vec::new();
+            let one = [g2p::WordPhones {
+                word: w.word.clone(),
+                phones: v.clone(),
+            }];
+            let (refs, _) = build_refs(model, &one, &mut unmapped);
+            if refs.is_empty() {
+                continue;
+            }
+            if let Some(g) = score_span(log_probs, t0, t1, &refs, model.phones.blank)
+                && g > best.as_ref().map(|b| b.1).unwrap_or(primary) + 0.05
+            {
+                best = Some((v.join(" "), g));
+            }
+        }
+        out[wi] = best;
+    }
+    out
+}
+
+/// 端到端：16 kHz 音频 + 参考文本 → 每个音素的 GOP。
+pub fn score_text(
+    model: &mut PhonemeCtc,
+    samples: &[f32],
+    text: &str,
+    g2p: &G2p,
+) -> Result<GopResult> {
+    let logp = model.log_probs(samples)?;
+    let tp = g2p.text_to_phones(text);
+    let mut unmapped = Vec::new();
+    let (refs, word_of) = build_refs(model, &tp.words, &mut unmapped);
     let aligned = align(&logp, &refs, model.phones.blank);
     let hop = model.hop_ms;
     match aligned {
@@ -273,7 +377,20 @@ pub fn score_text(
                     }
                 })
                 .collect();
-            let words = group_words(&tp.words, &word_of, &a, &z, hop);
+            let mut words = group_words(&tp.words, &word_of, &a, &z, hop);
+            // D46：同形异音（live/read/use/record…）按音频选变体，避免把读对的判成读错
+            let picks = pick_variants(model, &logp, g2p, &tp.words, &word_of, &a);
+            for w in words.iter_mut() {
+                if let Some(Some((variant, g))) = picks.get(w.word_idx) {
+                    w.variant = Some(variant.clone());
+                    w.gop_mean = crate::round_to(*g, 2);
+                }
+            }
+            words.sort_by(|a, b| {
+                a.gop_mean
+                    .partial_cmp(&b.gop_mean)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             Ok(GopResult {
                 version: GOP_VERSION.to_string(),
                 frames: logp.len(),
@@ -312,6 +429,55 @@ pub fn speaker_normalize(gops: &[f32]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D46 的核心机制：同一帧区间里，读出来的那个变体应当拿到更高的平均 GOP。
+    #[test]
+    fn score_span_prefers_the_variant_that_was_actually_spoken() {
+        // blank=0，音素 id 1..=4。第 2..10 帧是 id 1、2（"读出来的"），其余帧 blank
+        let n = 16usize;
+        let blank = 0usize;
+        let spoken = [1usize, 2usize];
+        let mut logp = vec![vec![-9.0f32; 5]; n];
+        for (t, row) in logp.iter_mut().enumerate() {
+            let win = (2..10).contains(&t);
+            if win {
+                let id = spoken[(t - 2) / 4];
+                row[id] = -0.1;
+                row[blank] = -3.0;
+            } else {
+                row[blank] = -0.1;
+            }
+        }
+        let matching = [
+            PhoneRef {
+                label: "L".into(),
+                cands: vec![1],
+            },
+            PhoneRef {
+                label: "AY".into(),
+                cands: vec![2],
+            },
+        ];
+        let wrong = [
+            PhoneRef {
+                label: "L".into(),
+                cands: vec![3],
+            },
+            PhoneRef {
+                label: "IH".into(),
+                cands: vec![4],
+            },
+        ];
+        let g_ok = score_span(&logp, 0, n, &matching, blank).expect("应对齐成功");
+        let g_bad = score_span(&logp, 0, n, &wrong, blank).expect("应对齐成功");
+        assert!(
+            g_ok > g_bad + 0.5,
+            "读出来的变体应显著更高: ok={g_ok} bad={g_bad}"
+        );
+        // 空区间/越界要安全返回 None
+        assert!(score_span(&logp, 5, 5, &matching, blank).is_none());
+        assert!(score_span(&logp, 0, n + 5, &matching, blank).is_none());
+    }
 
     #[test]
     fn normalization_is_robust_to_outliers() {

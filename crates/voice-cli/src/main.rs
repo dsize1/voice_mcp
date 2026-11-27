@@ -78,6 +78,9 @@ enum Cmd {
         /// 同时跑韵律分析（F0 轮廓 / 句末升降 / 平调 / 重音候选）
         #[arg(long)]
         with_prosody: bool,
+        /// 对疑似 ASR 漏听的功能词漏读跑 whisper 交叉复核（D37）
+        #[arg(long)]
+        cross_check: bool,
         /// 参考音（示范音）路径；提供时自动开启韵律并做 F0 形状 DTW 对比
         #[arg(long)]
         reference_audio: Option<String>,
@@ -664,6 +667,7 @@ fn main() -> Result<()> {
             engine,
             with_gop,
             with_prosody,
+            cross_check,
             reference_audio,
             bank_id,
             scene,
@@ -675,6 +679,7 @@ fn main() -> Result<()> {
             engine.as_deref(),
             with_gop,
             with_prosody,
+            cross_check,
             reference_audio.as_deref(),
             bank_id.as_deref(),
             &scene,
@@ -1040,6 +1045,7 @@ fn lesson(
             with_gop: false,
             baseline_tts: false,
             with_prosody: false,
+            cross_check: false,
             baseline_audio: None,
             reference_audio: None,
         },
@@ -1238,6 +1244,7 @@ fn run_cases(cfg: &Config, dir: &str, only: Option<&str>) -> Result<()> {
                 with_gop: false,
                 baseline_tts: false,
                 with_prosody: false,
+                cross_check: false,
                 baseline_audio: None,
                 reference_audio: None,
                 source_sr: Some(decoded.info.source_sr),
@@ -1446,6 +1453,7 @@ fn assess_cmd(
     engine: Option<&str>,
     with_gop: bool,
     with_prosody: bool,
+    cross_check: bool,
     reference_audio: Option<&str>,
     bank_id: Option<&str>,
     scene: &str,
@@ -1510,6 +1518,7 @@ fn assess_cmd(
             with_gop,
             baseline_tts: with_gop && baseline_audio_owned.is_none(), // 有真人参考就不合成 TTS
             with_prosody,
+            cross_check,
             baseline_audio: baseline_audio_owned.as_deref(),
             reference_audio,
         },

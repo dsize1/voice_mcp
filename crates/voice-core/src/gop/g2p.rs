@@ -65,6 +65,21 @@ impl G2p {
         self.dict.len()
     }
 
+    /// 一个词的全部发音变体（CMUdict 的 `word`、`word(2)`…）。第一个是主变体。
+    ///
+    /// 用途（D46）：同形异音（`live` /laɪv/ vs /lɪv/、`read` /riːd/ vs /rɛd/、
+    /// `use` /juːz/ vs /juːs/）在 GOP 里必须**按音频选变体**，否则会把读对的判成读错。
+    pub fn word_variants(&self, word: &str) -> Vec<Vec<String>> {
+        let w = normalize::tokens(word)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| word.to_string())
+            .replace('\u{2019}', "'")
+            .to_lowercase();
+        let w = w.trim_matches('\'').to_string();
+        self.dict.get(&w).cloned().unwrap_or_default()
+    }
+
     /// 文本 → 音素串。未命中的词进 `oov`，不猜、不丢进 phones。
     pub fn text_to_phones(&self, text: &str) -> TextPhones {
         let mut out = TextPhones::default();

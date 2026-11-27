@@ -36,6 +36,7 @@
 | `with_gop` | bool | | 同时跑音素级 GOP（需 `reference`；首次调用加载 1.2 GB 模型，约 1–2 s） |
 | `baseline_tts` | bool | | 用 TTS 合成参考文本再跑一遍同一套 GOP，作为**对照基线**（区分"用户读错"与"模型分辨不出"） |
 | `with_prosody` | bool | | 同时跑韵律：F0 轮廓 / 句末升降 / 平调 / 音域 / 重音候选 / 节奏 |
+| `cross_check` | bool | | **D37**：对「疑似 ASR 漏听」的短功能词（1–4 字母：is/the/of/we…）跑 whisper 交叉复核。听到 → 降为 `low` 并注明“不算漏读”；也没听到 → 升为 `high` 并清空 `hint`。多一次 ASR（+0.3–1 s）。结果写在 `issues[].cross_checked` / `other_engine_heard` |
 | `reference_audio` | string | | 参考音路径（TTS/真人示范）。提供时**自动开启韵律**，并返回 F0 形状 DTW 对比 |
 | `bank_id` | string | | 素材库 id（如 `nce2/02/003`）：自动填 `reference`；`ref_audio=native` 时用**真人原声切片**当 GOP 基线与韵律参考（**优先于 TTS**） |
 | `scene` | string | | 场景标签（仅外部文件新建会话时生效；本机 take 沿用原前缀） |
@@ -408,6 +409,13 @@ $VOICE_HOME (默认 D:/voice_data)
 规则：基线 < 0.30 的词直接不报；Δ ≤ −3 且基线 ≥ 4 才算"低于示范"；其余不报。
 声音可用 `VOICE_GOP_BASELINE_VOICE` 指定，**默认 `am_michael`**（2026-11-25 由 `af_heart` 改来：
 af_heart 在 140 wpm 附近有起始伪影，会让基线自检误判；改后 Δ 与旧记录不可严格横比）。
+
+## 同形异音（D46，默认生效）
+
+`live` /`read` /`use` /`record` /`tomorrow` 这类词在 CMUdict 里有多套发音。
+GOP 现在会**按音频选变体**：对每个多发音词，用它自己的帧区间把每个变体各对齐一次，
+取平均 GOP 最高的那个；换了变体时在 `gop.words[].variant` 里给出 ARPAbet 串（证据）。
+不再因为"恰好查了另一套发音"而把读对的判成读错。
 
 ## 韵律（`with_prosody=true` / `reference_audio`）
 

@@ -117,6 +117,12 @@ pub struct Issue {
     /// 原因推断：三态，`unclear` 时必须由上层追问或用音素级对齐确认
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<Hint>,
+    /// 是否跑过第二引擎（whisper）交叉复核（D37）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cross_checked: Option<bool>,
+    /// 第二引擎是否听到了这个词（仅在 `cross_checked=true` 时有意义）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_engine_heard: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -261,6 +267,8 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                     };
                     issues.push(Issue {
                         kind: IssueKind::Substitution,
+                        cross_checked: None,
+                        other_engine_heard: None,
                         reference: Some(r.clone()),
                         reference_surface: ref_surface.clone(),
                         said: Some(h.clone()),
@@ -309,6 +317,8 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                     };
                     issues.push(Issue {
                         kind: IssueKind::Omitted,
+                        cross_checked: None,
+                        other_engine_heard: None,
                         reference: Some(r.clone()),
                         reference_surface: ref_surface.clone(),
                         said: None,
@@ -337,6 +347,8 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                 i += 1;
                 issues.push(Issue {
                     kind: IssueKind::Extra,
+                    cross_checked: None,
+                    other_engine_heard: None,
                     reference: None,
                     reference_surface: None,
                     said: Some(h.clone()),

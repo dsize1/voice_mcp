@@ -140,6 +140,10 @@ struct AssessParams {
     /// 同时跑韵律分析：F0 轮廓 / 句末升降 / 平调 / 重音候选（只给数值，不下结论）
     #[serde(default)]
     with_prosody: bool,
+    /// 对「疑似 ASR 漏听」的功能词 omitted 跑 whisper 交叉复核（D37）。
+    /// 复核后：whisper 听到 → 降为 low（不算漏读）；也没听到 → 升为 high（请复听）
+    #[serde(default)]
+    cross_check: bool,
     /// 参考音（示范音）路径；提供时自动开启韵律，并返回 F0 形状 DTW 对比
     #[serde(default)]
     reference_audio: Option<String>,
@@ -690,6 +694,7 @@ impl VoiceServer {
                 voice_core::assess::assess(
                     e,
                     voice_core::AssessRequest {
+                        cross_check: p.cross_check,
                         samples: &decoded.samples,
                         sample_rate: decoded.sample_rate,
                         lang: &lang,

@@ -176,6 +176,8 @@ pub struct AssessRequest<'a> {
     pub baseline_tts: bool,
     /// 是否跑韵律分析（F0/句末升降/平调/重音候选）
     pub with_prosody: bool,
+    /// D37：对「疑似 ASR 漏听」的 omitted 项跑 whisper 交叉复核（多一次 ASR，约 +0.3–1 s）
+    pub cross_check: bool,
     /// **真人参考音**（原生素材切片、真人示范）。给了就不合成 TTS：
     /// 它同时充当 GOP 基线与韵律 F0 参考（`gop_baseline_source="native"`）。
     ///
@@ -260,6 +262,93 @@ fn baseline_gop(
     }
 }
 
+/// D37：对「疑似 ASR 漏听」的 omitted 项跑第二引擎（whisper）**交叉复核**。
+///
+/// 为什么必须做：短功能词（`is`/`the`/`of`…）被 CTC 解码吞掉很常见，
+/// 旧实现只按"它是不是短功能词"猜一个 `LikelyAsrMiss`，既不确认也不定罪。
+/// 复核后两种结论都可落地：
+/// - whisper 听到了 → 判为 **ASR 漏记**，降级为 low，明确不算漏读；
+/// - whisper 也没听到 → 更可能是真漏读，升级为 high，提示人工复听。
+///
+/// D37 的判定部分（纯函数，便于单测）：第二引擎听到没有 → (severity, hint, 附注)
+fn classify_cross_check(heard: bool) -> (Severity, Option<Hint>, &'static str) {
+    if heard {
+        (
+            Severity::Low,
+            Some(Hint::LikelyAsrMiss),
+            "｜whisper 交叉复核：**听到了该词** → 判为本引擎漏记，不算漏读（D37）",
+        )
+    } else {
+        (
+            Severity::High,
+            None,
+            "｜whisper 交叉复核：**也没听到** → 更可能是真的漏读，请让用户重读该短语确认（D37）",
+        )
+    }
+}
+
+fn cross_check_omissions(
+    engines: &Engines,
+    samples: &[f32],
+    sr: u32,
+    lang: &str,
+    reference: Option<&str>,
+    issues: &mut [Issue],
+) {
+    let targets: Vec<usize> = issues
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| {
+            matches!(i.kind, IssueKind::Omitted) && matches!(i.hint, Some(Hint::LikelyAsrMiss))
+        })
+        .map(|(k, _)| k)
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    let pcm = if sr == crate::INTERNAL_SR {
+        samples.to_vec()
+    } else {
+        crate::audio::resample::resample(samples, sr, crate::INTERNAL_SR)
+    };
+    // `auto`/`mixed` 下 whisper 可能按错误语言解码，复核就失去意义：
+    // 参考文本是纯 ASCII 时按 en 复核，否则沿用原 lang。
+    let cc_lang = if matches!(lang, "auto" | "mixed") {
+        if reference.is_some_and(|r| r.is_ascii()) {
+            "en"
+        } else {
+            lang
+        }
+    } else {
+        lang
+    };
+    let Ok(t) = engines
+        .asr
+        .transcribe(&pcm, crate::INTERNAL_SR, cc_lang, Some("whisper"))
+    else {
+        return;
+    };
+    let heard = normalize::words(&t.text);
+    for k in targets {
+        let Some(word) = issues[k].reference.clone() else {
+            continue;
+        };
+        let got = heard.contains(&word);
+        issues[k].cross_checked = Some(true);
+        issues[k].other_engine_heard = Some(got);
+        let (severity, hint, note) = classify_cross_check(got);
+        issues[k].severity = severity;
+        issues[k].hint = hint;
+        issues[k].note.push_str(note);
+        if std::env::var("VOICE_CROSSCHECK_DEBUG").is_ok() {
+            eprintln!(
+                "[cross-check] word={word:?} heard={got} cc_text={:?}",
+                t.text
+            );
+        }
+    }
+}
+
 /// 一次完成：ASR → 语流指标 → 词级差异。
 pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     // 必须走 transcribe_long：长音频直接喂离线模型会静默截断
@@ -270,10 +359,23 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         crate::audio::info(req.samples, req.sample_rate),
         req.source_sr,
     );
-    let text_diff = req
+    let mut text_diff = req
         .reference
         .map(|r| diff::compare(r, &transcript))
         .filter(|_| !transcript.words.is_empty() || !transcript.text.is_empty());
+    // D37：功能词 omitted 用第二引擎复核（"ASR 漏记" vs "真漏读"）
+    if req.cross_check
+        && let Some(td) = text_diff.as_mut()
+    {
+        cross_check_omissions(
+            engines,
+            req.samples,
+            req.sample_rate,
+            req.lang,
+            req.reference,
+            &mut td.issues,
+        );
+    }
 
     let band_limited = audio.band_limited;
     let snr_db = crate::round_to(crate::audio::snr_db(req.samples, req.sample_rate), 1);
@@ -534,6 +636,20 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
 
 #[cfg(test)]
 mod tests {
+
+    /// D37：第二引擎听到 → 降级为 low 且保留 `LikelyAsrMiss`；也没听到 → 升为 high 且清空 hint
+    #[test]
+    fn cross_check_classifies_both_directions() {
+        let (sev, hint, note) = classify_cross_check(true);
+        assert_eq!(sev, Severity::Low);
+        assert_eq!(hint, Some(Hint::LikelyAsrMiss));
+        assert!(note.contains("不算漏读"), "{note}");
+
+        let (sev, hint, note) = classify_cross_check(false);
+        assert_eq!(sev, Severity::High);
+        assert_eq!(hint, None);
+        assert!(note.contains("真的漏读"), "{note}");
+    }
     use super::*;
 
     // ---------------- D52：参考音来源标签 ----------------

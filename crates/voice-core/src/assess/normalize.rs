@@ -252,6 +252,25 @@ static CONTRACTIONS: &[(&str, &[&str])] = &[
     ("there's", &["there", "is"]),
     ("what's", &["what", "is"]),
     ("let's", &["let", "us"]),
+    ("we'll", &["we", "will"]),
+    ("they'll", &["they", "will"]),
+    ("he'll", &["he", "will"]),
+    ("she'll", &["she", "will"]),
+    ("it'll", &["it", "will"]),
+    ("that'll", &["that", "will"]),
+    ("there'll", &["there", "will"]),
+    ("you'd", &["you", "would"]),
+    ("we'd", &["we", "would"]),
+    ("they'd", &["they", "would"]),
+    ("he'd", &["he", "would"]),
+    ("she'd", &["she", "would"]),
+    ("it'd", &["it", "would"]),
+    ("who's", &["who", "is"]),
+    ("where's", &["where", "is"]),
+    ("here's", &["here", "is"]),
+    ("how's", &["how", "is"]),
+    ("when's", &["when", "is"]),
+    ("why's", &["why", "is"]),
     ("we're", &["we", "are"]),
     ("we've", &["we", "have"]),
     ("they're", &["they", "are"]),
@@ -297,6 +316,12 @@ mod tests {
             vec!["i", "am", "going", "to", "do", "it"]
         );
         assert_eq!(words("Don't stop"), vec!["do", "not", "stop"]);
+        // 2026-11-28 补：`we'll`/`they'll`/`he'd`/`where's` 之前漏了，
+        // 导致 "we'll" 与 ASR 的 "we will" 对不上（D37 交叉复核也因此误判）
+        assert_eq!(words("we'll start"), vec!["we", "will", "start"]);
+        assert_eq!(words("they'll go"), vec!["they", "will", "go"]);
+        assert_eq!(words("he'd know"), vec!["he", "would", "know"]);
+        assert_eq!(words("where's the log"), vec!["where", "is", "the", "log"]);
     }
 
     #[test]

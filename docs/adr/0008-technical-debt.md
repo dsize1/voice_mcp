@@ -49,7 +49,7 @@
 | D13 | 中文只做**字级** diff，无拼音层 | S2 | 有中文发音诊断需求时 | 2d（引入拼音对齐） |
 | D14 | `accuracy = 1-(S+D+I)/N_ref` 对长句不公平（分母大），且不区分错误类型权重 | S3 | 用户开始练长句/Part 2 时 | 0.5d：改用 WER + 关键错误加权 |
 | D41 | 英美拼写/发音变体表 `US_UK_VARIANTS` 需人工维护，只覆盖 50 对高频词；遇到表外变体仍会误报 | 训练中 `theatre/theater` 类误报 | S3 | 出现新的表外变体误报 | 0.5d/次：按真实误报补表，并加回归用例 |
-| D46 | **G2P 同形异音词只取 CMUdict 第一个变体**：`live` 首变体是 `L AY V`（形容词），`I live in…` 的动词 `/lɪv/` 会被判低；`read` 同样（首变体 `R EH D`） | 2026-11-24 自然句：`live` 词级 Δ−4.61，但 GOP 的 V 实为 /v/（5.79/6.42）；TTS 基线用同一错误变体，无法自救 | S2 | 下一次 GOP 标定 / Route A 实现前 | 0.5d：按变体逐一取 max-GOP，或按词性/上下文选变体；补 live/read/use 回归用例 |
+| D46 | G2P 同形异音（`live`/`read`/`use`/`record`/`tomorrow`…）只取第一变体 → 读对也可能被判错 | 长期存在；2026-11-28 收口 | S2 | 所有跟读/朗读评分 | **已还（2026-11-28）**：`Gop::word_variants()` + `score_span()`——对多发音词用它自己的帧区间把每个变体各对齐一次、取平均 GOP 最高者，换变体时写 `gop.words[].variant`（证据）。实测 `tomorrow` 自动选中 `T UW M AA R OW`。单测 `score_span_prefers_the_variant_that_was_actually_spoken`（合成 log-prob，无模型） |
 | D47 | 短语音（<2 s）SNR 估计误杀单词 drill | **已还（2026-11-25）**：`snr_verdict(snr, speech_duration, peak)` 纯函数 + 4 个单测。VAD 语音跨度 <3 s 且 peak ≥−25 dBFS → `SnrVerdict::LowButShort`：**不置 degraded、照跑 GOP**，只在 `limitations` 写明“SNR 会被低估”。历史失败样本（1.8 s word drill、SNR 12.6）已被覆盖 | ~~S2~~ ✅已还 | – | – |
 | D48 | **readiness/free-speech gate 只读 JSON 标志，未自动从 history 计算**：`readiness.stage`/`missing` 目前手动写，升/降级没有代码判定 | 2026-11-24 gate 上线；`plan` 只消费 `free_speech_enabled` | S2 | 下一次升/降级或第二个学习者 | 1d：`voice-core::readiness` 评估器 + CLI `learner readiness`，写回 history 证据 |
 | D49 | 声学闸门通过 ≠ 文本可用 | **已还（2026-11-25）**：`assess.text_agreement`（词级 LCS 一致率 `2·|LCS|/(|a|+|b|)`）。给了 `reference` 且非中文时用另一个引擎复核，`<0.7` → `degraded=true` + limitation（只出 flow/prosody）；第二引擎不可用只记 limitation。3 个单测 + 9 条录音回归零误杀（clean case agreement=1.0） | ~~S2~~ ✅已还 | – | – |
@@ -100,7 +100,7 @@
 | D33 | 项目级 `.pi/mcp.json`、`.pi/settings.json` 因未授信被忽略，与实际生效的全局配置存在**双份真相** | 每次 `pi mcp list` 都会提示 | S3 | 下次交接 | 1h：README 写清"哪个是权威" |
 | D38 | 分块边界仍可能切断词：超长连续朗读（无 VAD 停顿）会按 20 s 硬切，跨块的词会被拆成两条转写 | S3 | 出现长独白（Part 2）素材时 | 0.5d：块间加 0.3 s 重叠 + 末尾词去重 |
 | D39 | `record` 起始等待硬编码 8 s，真机上“人已经在说、工具报没检测到说话” | **已还**：`RecordOptions.start_timeout_sec` + CLI `--start-timeout` + MCP `start_timeout_sec`（默认仍 8，建议自由说 20） | ~~S2~~ ✅已还 | – | – |
-| D37 | 短功能词漏读目前只靠启发式（词长 ≤4 且在功能词表内）降级，没有真正做双引擎交叉验证 | S2 | 出现误判投诉或要提升英文精度 | 0.5d：`assess` 加 `cross_check=true`，对 omitted 的功能词跑 whisper 复核 |
+| D37 | 功能词 `omitted` 没有交叉验证：旧实现只按“是不是短功能词”猜一个 `LikelyAsrMiss`，既不确认也不定罪 | 2026-11-24 起 | S2 | 跟读评分的误报 | **已还（2026-11-28）**：`assess(cross_check=true)`——对疑似 ASR 漏听的 omitted 项跑 whisper 复核：听到 → `severity=low` + 注明“不算漏读”；也没听到 → `severity=high` + 清空 hint（提示复听）。证据字段 `issues[].cross_checked` / `other_engine_heard`；`auto/mixed` 下按 en 复核。**连带修掉一个真 bug**：`CONTRACTIONS` 表缺 `we'll`/`they'll`/`he'll`/`she'll`/`it'll`/`*'d`/`where's`/`how's` 等 20 条，导致 "we'll" 与 ASR 的 "we will" 对不上（既误报漏读，又让交叉复核失效）；已补齐 + 单测 |
 | D36 | 蓝牙耳机端点底噪高达 **p50 = −54.7 / p99 = −46.0 dBFS**（正常麦克风自噪约 −70 dBFS），说明设备侧 AGC/降噪在强推电平。后果：能量（intensity）维度不能用于重音判断，韵律只能靠时长 + 音高 | S2 | P2.5 韵律上线前必须定口径 | 0.5d（改为时长+音高为主，能量仅作参考并标注设备） |
 | D35 | 蓝牙耳机（A2DP 端点）在 WASAPI 下"可打开、回调在跑、数据是稀疏零值"；cpal 只枚举到该端点，无法选中未激活的 HFP 端点，只能靠文案引导用户去系统设置切换 | S2 | 有第二个蓝牙麦用户 | 1d（用 windows crate 直接走 WASAPI 端点枚举 + MMDevice 选择） |
 | D34 | 中文 TTS 回读出现 1 处字词偏差（`再练一次`→`你再连一次`），未确定是 TTS 声调/连读问题还是 ASR 误听；中文音色自然度也未经人耳确认 | 上表 D05 的实测输出 | S3 | 用户反馈"中文讲解听不清" | 1h：人工听 + 若确认是 TTS 则换 `lexicon-zh` 或改分段 |

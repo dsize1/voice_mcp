@@ -55,6 +55,9 @@ enum Cmd {
         play: bool,
         #[arg(long, default_value = "tts")]
         scene: String,
+        /// 放行中英混说（分段合成后拼接；音质降级，仅内部实验用）
+        #[arg(long)]
+        allow_mixed: bool,
     },
     /// 播放 wav 文件
     Play { path: String },
@@ -418,7 +421,7 @@ enum BankCmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let cfg = Config::load()?;
+    let mut cfg = Config::load()?;
     match cli.cmd {
         Cmd::Doctor { load } => doctor(&cfg, load),
         Cmd::Stt {
@@ -435,7 +438,14 @@ fn main() -> Result<()> {
             slow_too,
             play,
             scene,
-        } => say(&cfg, &text, voice.as_deref(), speed, slow_too, play, &scene),
+            allow_mixed,
+        } => {
+            if allow_mixed {
+                // 内部实验用：放行中英混说（产品入口 default 拒答）
+                cfg.allow_mixed = true;
+            }
+            say(&cfg, &text, voice.as_deref(), speed, slow_too, play, &scene)
+        }
         Cmd::Play { path } => {
             play::play_wav(&path)?;
             Ok(())
@@ -1820,6 +1830,24 @@ fn tts_regress(
             continue;
         }
         total += 1;
+
+        // 期望“必须被拒绝”的用例：中英混说默认拒答（产品契约：一段文本一种语言）
+        if expect == "reject_mixed" {
+            let ph = engines.tts.phonemize_preview(&intended);
+            let attempt = engines.tts.synthesize(&intended, sid, target);
+            let rejected = attempt.is_err();
+            let msg = attempt.err().map(|e| format!("{e:#}")).unwrap_or_default();
+            let ok = rejected && msg.contains("混说");
+            if !ok {
+                failed += 1;
+            }
+            rows.push(serde_json::json!({
+                "id": id, "ok": ok, "check": "reject_mixed", "text": intended,
+                "g2p_oov": ph.oov, "phoneme_ipa": ph.ipa(), "rejected": rejected,
+                "error": msg, "note": "混说必须被拒答（含英文段音素可用，但产品入口不出降级音频）",
+            }));
+            continue;
+        }
 
         // 期望“必须被拒绝”的用例（例如生造专名：G2P 无依据，就该报错而不是合成半句）
         if expect == "oov" {

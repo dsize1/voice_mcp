@@ -266,6 +266,27 @@ pub fn contains_cjk(text: &str) -> bool {
     text.chars().any(is_cjk)
 }
 
+/// 是否中英混说（同时含 CJK 段与非 CJK 段）。
+///
+/// 产品契约是“一段文本只允许一种语言”（ADR-0002）。混说在单音色下必然降级
+/// （`zf_xiaobei` 读英文、`am_michael` 读中文都跑调，拼接点还有 0.2–0.5 s 停顿），
+/// 所以默认**拒答**；内部实验用 `VOICE_ALLOW_MIXED=1` / `voice-cli say --allow-mixed` 放行。
+pub fn is_mixed(text: &str) -> bool {
+    let mut has_cjk = false;
+    let mut has_en = false;
+    for (cjk, seg) in split_segments(text) {
+        if seg.trim().is_empty() {
+            continue;
+        }
+        if cjk {
+            has_cjk = true;
+        } else {
+            has_en = true;
+        }
+    }
+    has_cjk && has_en
+}
+
 /// 中英混说时拼接多段音素的标记（只用于留证，不参与合成）。
 pub const SEGMENT_JOINER: &str = " | ";
 
@@ -1165,6 +1186,15 @@ mod tests {
         assert_eq!(split_segments("hello world").len(), 1);
         assert!(!split_segments("hello world")[0].0);
         assert!(split_segments("你好")[0].0);
+    }
+
+    #[test]
+    fn mixed_detection() {
+        assert!(is_mixed("这个 API 返回 404 error。"));
+        assert!(is_mixed("Sarah's laptop 上那个 build 失败了。"));
+        assert!(!is_mixed("The client's report is ready."));
+        assert!(!is_mixed("我们明天再查这个问题。"));
+        assert!(!is_mixed("404 error")); // 纯英文/数字不算混说
     }
 
     #[test]

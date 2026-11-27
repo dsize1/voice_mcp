@@ -48,6 +48,9 @@ pub struct Config {
     pub capture_sr: u32,
     /// 输入设备名子串（蓝牙耳机需指定 "Hands-Free"）；None = 系统默认
     pub mic: Option<String>,
+    /// 是否允许中英混说合成分段拼接（默认 false = 拒答；内部实验用）
+    #[serde(default)]
+    pub allow_mixed: bool,
 }
 
 impl Default for Config {
@@ -65,6 +68,7 @@ impl Default for Config {
             tts_lexicon: None,
             capture_sr: 48_000,
             mic: None,
+            allow_mixed: false,
             watch_dirs: default_watch_dirs(),
         }
     }
@@ -119,6 +123,9 @@ impl Config {
         }
         if let Some(v) = std::env::var_os("VOICE_TTS_LEXICON") {
             cfg.tts_lexicon = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("VOICE_ALLOW_MIXED") {
+            cfg.allow_mixed = matches!(v.trim(), "1" | "true" | "yes");
         }
         Ok(cfg)
     }

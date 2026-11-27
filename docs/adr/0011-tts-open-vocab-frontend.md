@@ -21,8 +21,11 @@
    覆盖不了就 `bail!`（宁可失败，不出缺词音频）。
 2. **引擎 lexicon 降为高优先级覆盖层**：`overlay(tts-lexicon.txt)` > `lexicon-us-en` > `lexicon-gb-en` > CMUdict > 形态规则 > 数字 > 报错。
    命中 lexicon 保音质（与声学模型训练分布一致），未命中由离线规则与 CMUdict 保覆盖。
-3. **中文仍走引擎 `lexicon-zh`**（Bopomofo 需要 jieba/pypinyin）；中英混说按语言**分段**合成后拼接，
-   中文段不进 G2P，英文段不进 lexicion。
+3. **中文仍走引擎 `lexicon-zh`**（Bopomofo 需要 jieba/pypinyin）。
+   中英混说**默认拒答**：单音色下另一语言必然跑调，且分段拼接处实测有 0.2–0.5 s 停顿与
+   +10…19 dB 电平跳变 → 产品入口不出已知降级的音频（契约见 ADR-0002“一段文本一种语言”）。
+   内部实验放行：`VOICE_ALLOW_MIXED=1` 或 `voice-cli say --allow-mixed`（此时按语言分段合成后拼接，
+   中文段不进 G2P、英文段不进词表）。
 4. 前端可替换：`G2pBackend` trait；`CmuBackend`（默认，零外部依赖）与 `SidecarBackend`
    （`VOICE_G2P_CMD='python -m misaki --ipa -'` 等外部开放词表 G2P）。
 5. 漏词纳入回归：`voice-cli tts-regress <corpus.jsonl>`（双 ASR 逐词比对，漏词退出码 2）+
@@ -45,9 +48,9 @@
    **结论：“140 wpm” 这个承诺目前不可靠**，见 ADR-0008 D54；修法是单独一轮做标定。
 2. **生造专名**（`Zorbly's`）现在**报错**而不是静默丢词；要真读出来需要 LTS 兜底
    （espeak-ng / piper_phonemize，`SidecarBackend` 已留口）。
-3. **中英混说**：Kokoro 没有双语音色（英文 voice 读中文、中文 voice 读英文都跑调），
-   混说的音质属 voice 选型问题；回归门禁只锁**结构**（英文段必须音素化、中文段不得漏进 G2P），
-   要判混说音质需接 misaki-zh。
+3. **中英混说（已改为默认拒答）**：检测到混说 → `bail!` 并提示拆成两次调用。
+   回归用例改为 `expect=reject_mixed`（必须拒答，且英文段音素仍可用）。
+   要真正支持混说需 misaki-zh 接管中文（两段走同一条 `phoneme_codepoints` 链路），见 D56。
 4. `tts-audit` 的 `oov` 列语义随前端改变（英文现在报 G2P 的 OOV）。
    已在每行与汇总加 `frontend` 字段（如 `g2p-ipa/1.0[cmudict+overlay]+lexicon-zh`），
    跨版本曲线不可直接比较。

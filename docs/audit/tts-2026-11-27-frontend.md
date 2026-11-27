@@ -123,6 +123,12 @@ voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55 --out report.jsonl
 
 **结论**：混说句的拼接点确有可闻的停顿（0.2–0.5 s）与电平跳变；纯英文路径没有新增异常。
 
+**处置（按听测清单的三分支）**：混说落在“拼接点不可懂”这一档 →
+**产品入口改为默认拒答**（`bail!` + 提示拆成两次调用），内部实验用
+`VOICE_ALLOW_MIXED=1` / `voice-cli say --allow-mixed` 放行；
+回归用例 `mx01/mx02` 改成 `expect=reject_mixed`（必须拒答，且英文段音素仍可用）。
+理由：英语教学材料本身不用混说，但 MCP 是产品入口，不该输出已知降级的音频。
+
 ### 6.3 数字读法（清单里的 404 项）
 
 已修：`read_number()` 按上下文分三种读法——

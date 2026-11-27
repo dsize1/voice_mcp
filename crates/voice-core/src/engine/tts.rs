@@ -173,6 +173,8 @@ pub struct TtsEngine {
     g2p: Box<dyn G2pBackend>,
     /// 音素字符 → Kokoro token id（换模型/换词表时的硬门）
     tokens: KokoroTokenMap,
+    /// 是否允许中英混说（默认 false：产品契约“一段文本一种语言”，混说音质必然降级）
+    allow_mixed: bool,
 }
 
 impl TtsEngine {
@@ -261,6 +263,7 @@ impl TtsEngine {
             lexicon_path: overlay,
             g2p,
             tokens,
+            allow_mixed: cfg.allow_mixed,
         })
     }
 
@@ -306,6 +309,14 @@ impl TtsEngine {
     pub fn synthesize(&self, text: &str, sid: i32, speed: f32) -> Result<Synthesized> {
         if text.trim().is_empty() {
             bail!("待合成文本为空");
+        }
+        // 中英混说：默认拒答（契约是“一段文本只允许一种语言”）。
+        // 单音色下另一语言必然跑调，拼接点还有 0.2–0.5 s 停顿 —— 产品入口不该
+        // 输出已知降级的音频。内部实验用 VOICE_ALLOW_MIXED=1 / `say --allow-mixed`。
+        if !self.allow_mixed && g2p_ipa::is_mixed(text) {
+            bail!(
+                "暂不支持中英混说合成（单音色下音质必然降级）。请拆成两次调用：英文一次、中文一次（契约见 ADR-0002）；内部实验可用 voice-cli say --allow-mixed"
+            );
         }
         // 分段：CJK 段走引擎中文词表；非 CJK 段走开放词表 G2P → phoneme_codepoints。
         // 中英混说（"这个 API 返回 404 error"）靠这一步才不会出现“整句都走中文词表

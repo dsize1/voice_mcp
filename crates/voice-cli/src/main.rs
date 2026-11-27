@@ -201,6 +201,27 @@ enum Cmd {
         #[arg(long)]
         no_phones: bool,
     },
+    /// 漏词回归门禁：语料逐句合成 → 双 ASR 回读 → **逐词必须一个不少**
+    ///
+    /// 防的是这一类事故：前端闭集/词表缺失导致某词被静默跳过，
+    /// 音频听起来“有点怪”但没人发现（2026-11-27 `client's` / `Where's`）。
+    /// 任何一句出现漏词或 G2P 未覆盖 → 退出码 2（可直接进 CI）。
+    TtsRegress {
+        /// JSONL 语料：每行 {"id": "...", "text": "..."}
+        corpus: String,
+        /// 目标 wpm（默认 config.tts_wpm / 140）
+        #[arg(long)]
+        wpm: Option<f32>,
+        /// 跳过音素级检查（更快）
+        #[arg(long)]
+        no_phones: bool,
+        /// 逐句报告输出路径（JSONL）
+        #[arg(long)]
+        out: Option<String>,
+        /// 固定倍率（隔离“语速标定”这个变量；漏词门禁建议用固定倍率跑）
+        #[arg(long)]
+        speed: Option<f32>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -662,6 +683,13 @@ fn main() -> Result<()> {
             wpm,
             no_phones,
         } => tts_verify(&cfg, &text, &voices, runs, wpm, no_phones),
+        Cmd::TtsRegress {
+            corpus,
+            wpm,
+            no_phones,
+            out,
+            speed,
+        } => tts_regress(&cfg, &corpus, wpm, speed, no_phones, out.as_deref()),
     }
 }
 
@@ -1678,6 +1706,295 @@ fn import_and_transcribe(
 // ------------------------------------------------------------------ tts-probe
 
 /// 只读审计现有 TTS 资产：一行 manifest → 一行 report。
+/// ---------------------------------------------------------------- 漏词回归（tts-regress）
+/// 比较用的词形归一化：小写、去标点、去所有格 `'s`。
+///
+/// 为什么去掉 `'s`：ASR 常把 `Apple's` 写成 `Apple`（书写差异），
+/// 但**真正漏词**时整个词根都会消失（`client's` → 连 `client` 都没有）。
+/// 去掉 `'s` 既容忍 ASR 的书写差异，又能抓住“整词被跳过”。
+fn gate_words(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in voice_core::assess::normalize::tokens(text) {
+        let w = raw.to_lowercase().replace('\u{2019}', "'");
+        let w = w.trim_matches('\'').to_string();
+        let w = match w.strip_suffix("'s") {
+            Some(b) => b.to_string(),
+            None => w,
+        };
+        let w = w.replace('\'', "");
+        if w.is_empty() {
+            continue;
+        }
+        // 数字按读法展开后再比：G2P 会把 `404` 读成 "four hundred four"，
+        // 不展开会把正常音频误判成漏词。
+        if w.chars().all(|c| c.is_ascii_digit())
+            && let Some(words) = voice_core::engine::g2p_ipa::number_to_words(&w)
+        {
+            out.extend(words.split_whitespace().map(str::to_string));
+            continue;
+        }
+        out.push(w);
+    }
+    out
+}
+
+fn lev_ratio(a: &str, b: &str) -> f32 {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    let d = prev[b.len()] as f32;
+    1.0 - d / a.len().max(b.len()) as f32
+}
+
+fn similar(a: &str, b: &str) -> bool {
+    a == b || (a.len() >= 3 && lev_ratio(a, b) >= 0.8)
+}
+
+/// 参考文本里“在回读中找不到对应词”的词。
+fn lost_words(reference: &str, heard: &str) -> Vec<String> {
+    let want = gate_words(reference);
+    let got = gate_words(heard);
+    want.into_iter()
+        .filter(|w| !got.iter().any(|g| similar(w, g)))
+        .collect()
+}
+
+fn tts_regress(
+    cfg: &Config,
+    corpus: &str,
+    wpm: Option<f32>,
+    speed: Option<f32>,
+    no_phones: bool,
+    out: Option<&str>,
+) -> Result<()> {
+    let engines = Engines::load(cfg.clone())?;
+    let sid = engines.tts.resolve_sid(voice_core::engine::DEFAULT_VOICE);
+    let target = wpm.unwrap_or(cfg.tts_wpm);
+    let text = std::fs::read_to_string(corpus).with_context(|| format!("读取 {corpus} 失败"))?;
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    let mut failed = 0usize;
+    let mut total = 0usize;
+
+    for (lineno, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let m: serde_json::Value = serde_json::from_str(line)
+            .with_context(|| format!("{corpus} 第 {} 行不是 JSON", lineno + 1))?;
+        let id = m["id"].as_str().unwrap_or("?").to_string();
+        let intended = m["text"].as_str().unwrap_or("").to_string();
+        let expect = m["expect"].as_str().unwrap_or("pass");
+        if intended.trim().is_empty() {
+            continue;
+        }
+        total += 1;
+
+        // 期望“必须被拒绝”的用例（例如生造专名：G2P 无依据，就该报错而不是合成半句）
+        if expect == "oov" {
+            let ph = engines.tts.phonemize_preview(&intended);
+            let ok = !ph.oov.is_empty();
+            if !ok {
+                failed += 1;
+            }
+            rows.push(serde_json::json!({
+                "id": id, "ok": ok, "text": intended, "expect": expect,
+                "g2p_oov": ph.oov, "note": "生造词必须报 OOV，不允许静默合成"
+            }));
+            continue;
+        }
+
+        // ① 前端证据：不合成也能判断“有没有词根本没拿到音素”
+        let ph = engines.tts.phonemize_preview(&intended);
+        let g2p_oov = ph.oov.clone();
+        let ipa = ph.ipa();
+
+        // ② 合成（走默认前端：开放词表 G2P → phoneme_codepoints）
+        // 固定倍率时不做 wpm 标定：门禁只判“内容有没有缺”，语速另算。
+        let s = match speed {
+            Some(sp) => engines.tts.synthesize(&intended, sid, sp)?,
+            None => engines.tts.synthesize_at_wpm(&intended, sid, target)?,
+        };
+        let pcm = voice_core::audio::resample::resample(
+            &s.samples,
+            s.sample_rate,
+            voice_core::INTERNAL_SR,
+        );
+
+        // ③ 双 ASR 回读（漏词口径：逐词比对）
+        let sv =
+            engines
+                .asr
+                .transcribe(&pcm, voice_core::INTERNAL_SR, "en", Some("sense-voice"))?;
+        let wh = engines
+            .asr
+            .transcribe(&pcm, voice_core::INTERNAL_SR, "en", Some("whisper"))?;
+        let check = m["check"].as_str().unwrap_or("full");
+        let en_only = |v: Vec<String>| -> Vec<String> {
+            v.into_iter()
+                .filter(|w| {
+                    // 非 CJK 词才算“英文段丢词”
+                    let mut any = false;
+                    for c in w.chars() {
+                        if c as u32 > 0x2FFF {
+                            any = true;
+                        }
+                    }
+                    !any
+                })
+                .collect()
+        };
+        let (lost_sv, lost_wh) = {
+            let a = lost_words(&intended, &sv.text);
+            let b = lost_words(&intended, &wh.text);
+            if check == "en_words" {
+                (en_only(a), en_only(b))
+            } else {
+                (a, b)
+            }
+        };
+
+        // ④ 音素级（可选）：音频本身是否读坏了
+        let phone_min = if no_phones {
+            None
+        } else {
+            let g = voice_core::gop::with_engine(|e| {
+                voice_core::gop::score_text(&mut e.model, &pcm, &intended, &e.g2p)
+            })?;
+            g.words
+                .iter()
+                .map(|w| w.gop_mean)
+                .fold(f32::INFINITY, f32::min)
+                .into()
+        };
+        let phone_bad = matches!(phone_min, Some(v) if v < -1.5);
+
+        // 判定口径：**两个引擎同时丢**才算 TTS 缺词；单引擎丢是 ASR 自己的毛病
+        // （实测 SenseVoice 会把 "client's report" 听成 "lions report Tan"）。
+        let both_lost: Vec<String> = lost_sv
+            .iter()
+            .filter(|w| lost_wh.contains(w))
+            .cloned()
+            .collect();
+        // 中英混说：Kokoro 没有双语 voice（英文 voice 读中文、中文 voice 读英文都会跑调），
+        // 所以混说用例只锁**英文段**不被吞/不被中文音素化，中文段音质不进门禁。
+        if check == "structure" {
+            // 中英混说：Kokoro 没有双语 voice（英文 voice 读中文 / 中文 voice 读英文都会跑调），
+            // 所以混说用例**只锁结构**：英文段必须拿到音素、中文段不得漏进 G2P、
+            // 整句合成不报错。音质属 voice 选型问题，不进门禁。
+            let ok = g2p_oov.is_empty() && s.phonemes.is_some();
+            if !ok {
+                failed += 1;
+            }
+            rows.push(serde_json::json!({
+                "id": id, "ok": ok, "check": check, "text": intended,
+                "phonemes": s.phonemes.clone(), "phoneme_ipa": ipa,
+                "g2p_oov": g2p_oov, "duration": (s.duration * 1000.0).round() / 1000.0,
+                "note": "混说：只验证英文段音素化与中文段隔离，不判音质",
+            }));
+            continue;
+        }
+
+        let must_missing: Vec<String> = if check == "en_words" {
+            let got = gate_words(&wh.text);
+            let joined: String = got.join("");
+            m["must_have"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter(|w| {
+                            let wl = w.to_lowercase();
+                            // ASR 可能把缩写拆成 "a p i"，用拼接串兜一层
+                            !got.iter().any(|g| similar(&wl, g)) && !joined.contains(&wl)
+                        })
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // 门禁只看“有没有丢词”。`phone_min_gop` 仅作报告：我们的 G2P 现在会沿用
+        // Kokoro lexicon 的发音惯例（`ði`、`ᵊ`、闪音 ɾ、次重音 ˌ），与 GOP 参考
+        // （CMUdict ARPAbet）不是同一套标注，负分不代表读错。
+        // `tolerance=count`：允许“词界被 ASR 重写”（`isn't ready`→`tizen ready`、
+        // `finished and`→`finished then`）——这类改写**不减少词数**；
+        // 真正的漏词必然让回读词数变少。用它把“音素流没有词间连接建模”这一已知弱点
+        // 与“整词消失”分开。
+        let tolerance = m["tolerance"].as_str().unwrap_or("strict");
+        let ref_n = gate_words(&intended).len();
+        let wh_n = gate_words(&wh.text).len();
+        let sv_n = gate_words(&sv.text).len();
+        let count_ok = tolerance == "count" && wh_n >= ref_n && sv_n + 1 >= ref_n;
+        let ok = g2p_oov.is_empty()
+            && s.phonemes.is_some()
+            && must_missing.is_empty()
+            && (both_lost.is_empty() || count_ok);
+        if !ok {
+            failed += 1;
+        }
+        rows.push(serde_json::json!({
+            "id": id,
+            "ok": ok,
+            "text": intended,
+            "phonemes": s.phonemes.clone(),
+            "phoneme_ipa": ipa,
+            "g2p_oov": g2p_oov,
+            "lost_sense": lost_sv,
+            "lost_whisper": lost_wh,
+            "lost_both": both_lost,
+            "asr_sense": sv.text,
+            "asr_whisper": wh.text,
+            "phone_min_gop": phone_min.map(|v: f32| (v * 100.0).round() / 100.0),
+            "phone_warn": phone_bad,
+            "check": check,
+            "tolerance": tolerance,
+            "words_ref": ref_n, "words_whisper": wh_n, "words_sense": sv_n,
+            "must_missing": must_missing,
+            "duration": (s.duration * 1000.0).round() / 1000.0,
+            "wpm": (s.wpm * 10.0).round() / 10.0,
+        }));
+    }
+
+    if let Some(p) = out {
+        let mut body = String::new();
+        for r in &rows {
+            body.push_str(&r.to_string());
+            body.push('\n');
+        }
+        std::fs::write(p, body).with_context(|| format!("写 {p} 失败"))?;
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "corpus": corpus,
+            "cases": total,
+            "pass": total - failed,
+            "fail": failed,
+            "verdict": if failed == 0 { "pass" } else { "fail" },
+            "rows": rows,
+        })
+    );
+    if failed > 0 {
+        eprintln!("漏词回归失败：{failed}/{total} 句（退出码 2）");
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
 fn tts_audit(cfg: &Config, manifest: &str, out: &str, no_phones: bool) -> Result<()> {
     let text = std::fs::read_to_string(manifest)
         .with_context(|| format!("读取 manifest 失败: {manifest}"))?;
@@ -1798,6 +2115,9 @@ fn tts_audit(cfg: &Config, manifest: &str, out: &str, no_phones: bool) -> Result
                 "duration": round3(duration), "words": words,
                 "wpm": round3(wpm),
                 "oov": oov,
+                // 前端版本标记：2026-11-27 起英文不再查引擎词表，
+                // OOV 列语义变了，曲线跨版本不可直接比较。
+                "frontend": engines.tts.frontend_id(),
                 "asr_sense": sense, "asr_whisper": whisper,
                 "sense_match": sense_ok, "whisper_match": whisper_ok,
                 "phone_min_gop": phone_min, "phone_suspect": phone_suspect,
@@ -1837,6 +2157,7 @@ fn tts_audit(cfg: &Config, manifest: &str, out: &str, no_phones: bool) -> Result
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
+            "frontend": engines.tts.frontend_id(),
             "assets": n,
             "pass": count("pass"), "review": count("review"),
             "reject": count("reject"), "unsupported": count("unsupported"),

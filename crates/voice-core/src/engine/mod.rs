@@ -1,10 +1,12 @@
 //! 引擎集合：启动时一次性加载并常驻（避免"首次调用极慢"）。
 
 pub mod asr;
+pub mod g2p_ipa;
 pub mod tts;
 pub mod vad;
 
 pub use asr::{Asr, AsrEngine, AsrKind, Transcript, Word};
+pub use g2p_ipa::{CmuBackend, G2pBackend, KokoroTokenMap, PhoneSource, Phonemized, WordPhones};
 pub use tts::{
     DEFAULT_VOICE, IELTS_WPM_DEFAULT, IELTS_WPM_MAX, IELTS_WPM_MIN, KOKORO_VOICES, SpeechTarget,
     Synthesized, TTS_SLOW_WPM, TtsEngine, VoiceInfo, count_words, demo_targets,

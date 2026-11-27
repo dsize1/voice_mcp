@@ -28,6 +28,11 @@ path = "src/bin/vad_probe.rs"
 name = "tts-kokoro"
 path = "src/bin/tts_kokoro.rs"
 
+# spike/piper-tts 线：开放词表 G2P + Kokoro/Piper 双引擎 A/B 探针
+[[bin]]
+name = "tts-ab"
+path = "src/bin/tts_ab.rs"
+
 [dependencies]
 voice-core = { path = "../voice-core" }
 anyhow.workspace = true

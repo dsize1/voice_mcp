@@ -165,20 +165,32 @@ sessions/<date>/<hhmmss>_drill/takes/
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `text` | string | ✅ | 待合成文本。**一段文本只能一种语言** |
+| `text` | string | ✅ | 待合成文本。**一段文本只能一种语言**：中英混说会被**拒答**（`ok:false`，提示拆成两次调用） |
 | `voice` | string | | 音色名（`am_michael`/`am_fenrir`/`bf_emma`/`af_heart`/`zf_xiaobei`…）或 sid 数字，**默认 `am_michael`（男声）** |
 | `speed` | number | | **显式倍率**（高级用法）；不传时按目标 **140 wpm**（雅思区间 130–160）自动校准。传了就以倍率为准 |
 | `play` | bool | | `true` 时由**服务端**播放（Pi 终端放不出声音，必须用这个） |
 | `slow_too` | bool | | 同时生成一对：`label=slow`(**110 wpm**) + `label=norm`(**140 wpm**)；显式 `speed` 时 slow 取 `speed×0.75` |
 | `scene` | string | | 场景标签 |
 
-**OOV 预检**：合成前会检查英文词是否在 lexicon 中；缺词直接 `ok:false`，错误里列出缺词并提示
-`$VOICE_HOME/tts-lexicon.txt`。不再静默丢词（sherpa-onnx 2.0.x 已移除 espeak-ng，只认 lexicon）。
+**文本前端（2026-11-27 起，ADR-0011）**：英文走**开放词表 G2P**（`cmudict+形态规则+数字`，
+项目 lexicon 只作**高优先级覆盖层**），音素经 `phoneme_codepoints` 注入，**不再查引擎 closed lexicon**
+（sherpa-onnx 2.0.x 已移除 espeak-ng，闭集词表会静默丢词，见 `docs/audit/tts-2026-11-27-frontend.md`）。
+
+- 覆盖不了（未见词根、生造专名）→ `ok:false` 并列出词，**不输出缺词音频**；
+  给该词补发音：`$VOICE_HOME/tts-lexicon.txt` 写 `word 音素…`。
+- 中文走 `lexicon-zh`（原路径）；中英混说**默认拒答**（单音色必然降调 + 拼接点停顿），
+  内部实验：`VOICE_ALLOW_MIXED=1` / `voice-cli say --allow-mixed`。
+- 前端标识（审计/留证用）：`g2p-ipa/1.0[cmudict+overlay]+lexicon-zh`；`tts-audit` 每行带 `frontend` 字段，
+  **跨版本 OOV/通过率曲线不可直接比较**。
 
 返回 `detail`：`voice` / `sid` / `sample_rate`(24000) /
-`files[]{label,speed,wpm,target_wpm,path,duration,speech_duration,onset_gap_ms,gen_ms,rtf}` / `session` / `prefix`
+`files[]{label,speed,wpm,target_wpm,path,duration,speech_duration,onset_gap_ms,gen_ms,rtf}` / `session` / `prefix` /
+`phonemes`（本次实际送进模型的音素串，留证/回归用；中文路径为 `null`）
 
-- `wpm` 按**语音跨度**算（去掉首尾静音），不再按文件总时长（后者系统性低估，目标 140 会量到 128）
+- `wpm` 按**语音跨度**算（去掉首尾静音），不再按文件总时长（后者系统性低估，目标 140 会量到 128）；
+  单位是“英文词 + 中文字”（混说句只数 ASCII 词会把 20.7 当 146，已修）
+- **已知（D54）**：语速校准的候选排序已改为“离目标带宽的连续距离优先”，实测 140 目标落在
+  124–143 wpm；个别短句仍可能掉到 130 下沿以下（如 `Apple's stock fell again.`）。**不要把 `target_wpm` 当保证**
 - `onset_gap_ms`：`null` 表示没有起始伪影；非 `null`（如 `40`）表示“先出一小段音 → 停顿 → 才进正文”，
   实测 af_heart 在某些速度点会被双 ASR 听成开头多一个 “And”。这种音频**不要直接当示范音/听力材料**
 

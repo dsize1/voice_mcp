@@ -33,7 +33,18 @@
 | `Sarah's laptop isn't working.` | 丢 `Sarah's`（−5.99） | ✅ |
 | `Zorbly's report is late.`（生造专名） | 丢 2 词 | 明确报 OOV（`expect=oov` 用例） |
 
-`tts-regress` 现状：**11/11 pass，退出码 0**。
+`tts-regress` 现状：**13/13 pass，退出码 0**（11 条英文判别句 + 2 条中英混说结构用例）。
+
+### 中英混说（新增边界）
+
+英文强制码点化、中文走 `lexicon-zh`，两套逻辑在同一个 `TtsEngine` 里，
+所以按语言**分段**合成再拼接（`g2p_ipa::split_segments`）：中文段不进 G2P，英文段不进词表。
+
+- 用例 `mx01`（`这个 API 返回 404 error，我们明天再查。`）、`mx02`（`Sarah's laptop 上那个 build 失败了。`）
+- 门禁口径 `check=structure`：只锁结构（英文段必须拿到音素、中文不得漏进 G2P、合成不报错）。
+- **为什么不判混说音质**：Kokoro 没有双语音色——英文 voice 读中文、中文 voice 读英文都会跑调
+  （实测 `zf_xiaobei` 读 `Sarah's laptop` → “exse laptop…”）。这是 voice 选型问题，
+  与本次前端改造无关；要判混说音质需接 misaki-zh。
 
 ## 三、踩出来的四条硬规则（都写进代码注释了）
 
@@ -80,5 +91,9 @@ voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55 --out report.jsonl
    要真正读出来需要 espeak/piper_phonemize 兜底（`SidecarBackend` 已留口）。
 4. **SenseVoice 噪声**：`client's report`→`lions report Tan`、`sarah's laptop` 整句重复，
    单引擎丢词不作为门禁失败依据（判定用“双引擎同错”）。
-5. **`tts-audit` 的 OOV 列语义变了**：英文现在报 G2P 的 OOV（生造词会 reject），
-   历史上依赖旧预检宽容规则的记录需要重跑才有可比性。
+5. **`tts-audit` 的 OOV 列语义变了**：英文现在报 G2P 的 OOV（生造词会 reject）。
+   **已加版本标记**：每行与汇总都有 `frontend` 字段
+   （`g2p-ipa/1.0[cmudict+overlay]+lexicon-zh`），跨版本曲线不可直接比较，
+   但不会再被误读成“OOV 暴增”。
+6. **Piper 已从评测计划移出**：v2.x 里 Piper 同样是 closed-lexicon 前端，
+   不能替代本次前端改造；`tts-ab --engine piper --mode g2p` 代码保留，可随时跑纯声学对比。

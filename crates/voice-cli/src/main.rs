@@ -1713,19 +1713,29 @@ fn import_and_transcribe(
 /// 但**真正漏词**时整个词根都会消失（`client's` → 连 `client` 都没有）。
 /// 去掉 `'s` 既容忍 ASR 的书写差异，又能抓住“整词被跳过”。
 fn gate_words(text: &str) -> Vec<String> {
-    voice_core::assess::normalize::tokens(text)
-        .into_iter()
-        .map(|w| {
-            let w = w.to_lowercase().replace('\u{2019}', "'");
-            let w = w.trim_matches('\'').to_string();
-            let w = match w.strip_suffix("'s") {
-                Some(b) => b.to_string(),
-                None => w,
-            };
-            w.replace('\'', "")
-        })
-        .filter(|w| !w.is_empty())
-        .collect()
+    let mut out: Vec<String> = Vec::new();
+    for raw in voice_core::assess::normalize::tokens(text) {
+        let w = raw.to_lowercase().replace('\u{2019}', "'");
+        let w = w.trim_matches('\'').to_string();
+        let w = match w.strip_suffix("'s") {
+            Some(b) => b.to_string(),
+            None => w,
+        };
+        let w = w.replace('\'', "");
+        if w.is_empty() {
+            continue;
+        }
+        // 数字按读法展开后再比：G2P 会把 `404` 读成 "four hundred four"，
+        // 不展开会把正常音频误判成漏词。
+        if w.chars().all(|c| c.is_ascii_digit())
+            && let Some(words) = voice_core::engine::g2p_ipa::number_to_words(&w)
+        {
+            out.extend(words.split_whitespace().map(str::to_string));
+            continue;
+        }
+        out.push(w);
+    }
+    out
 }
 
 fn lev_ratio(a: &str, b: &str) -> f32 {
@@ -1830,8 +1840,30 @@ fn tts_regress(
         let wh = engines
             .asr
             .transcribe(&pcm, voice_core::INTERNAL_SR, "en", Some("whisper"))?;
-        let lost_sv = lost_words(&intended, &sv.text);
-        let lost_wh = lost_words(&intended, &wh.text);
+        let check = m["check"].as_str().unwrap_or("full");
+        let en_only = |v: Vec<String>| -> Vec<String> {
+            v.into_iter()
+                .filter(|w| {
+                    // 非 CJK 词才算“英文段丢词”
+                    let mut any = false;
+                    for c in w.chars() {
+                        if c as u32 > 0x2FFF {
+                            any = true;
+                        }
+                    }
+                    !any
+                })
+                .collect()
+        };
+        let (lost_sv, lost_wh) = {
+            let a = lost_words(&intended, &sv.text);
+            let b = lost_words(&intended, &wh.text);
+            if check == "en_words" {
+                (en_only(a), en_only(b))
+            } else {
+                (a, b)
+            }
+        };
 
         // ④ 音素级（可选）：音频本身是否读坏了
         let phone_min = if no_phones {
@@ -1855,10 +1887,53 @@ fn tts_regress(
             .filter(|w| lost_wh.contains(w))
             .cloned()
             .collect();
+        // 中英混说：Kokoro 没有双语 voice（英文 voice 读中文、中文 voice 读英文都会跑调），
+        // 所以混说用例只锁**英文段**不被吞/不被中文音素化，中文段音质不进门禁。
+        if check == "structure" {
+            // 中英混说：Kokoro 没有双语 voice（英文 voice 读中文 / 中文 voice 读英文都会跑调），
+            // 所以混说用例**只锁结构**：英文段必须拿到音素、中文段不得漏进 G2P、
+            // 整句合成不报错。音质属 voice 选型问题，不进门禁。
+            let ok = g2p_oov.is_empty() && s.phonemes.is_some();
+            if !ok {
+                failed += 1;
+            }
+            rows.push(serde_json::json!({
+                "id": id, "ok": ok, "check": check, "text": intended,
+                "phonemes": s.phonemes.clone(), "phoneme_ipa": ipa,
+                "g2p_oov": g2p_oov, "duration": (s.duration * 1000.0).round() / 1000.0,
+                "note": "混说：只验证英文段音素化与中文段隔离，不判音质",
+            }));
+            continue;
+        }
+
+        let must_missing: Vec<String> = if check == "en_words" {
+            let got = gate_words(&wh.text);
+            let joined: String = got.join("");
+            m["must_have"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter(|w| {
+                            let wl = w.to_lowercase();
+                            // ASR 可能把缩写拆成 "a p i"，用拼接串兜一层
+                            !got.iter().any(|g| similar(&wl, g)) && !joined.contains(&wl)
+                        })
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         // 门禁只看“有没有丢词”。`phone_min_gop` 仅作报告：我们的 G2P 现在会沿用
         // Kokoro lexicon 的发音惯例（`ði`、`ᵊ`、闪音 ɾ、次重音 ˌ），与 GOP 参考
         // （CMUdict ARPAbet）不是同一套标注，负分不代表读错。
-        let ok = g2p_oov.is_empty() && both_lost.is_empty() && s.phonemes.is_some();
+        let ok = g2p_oov.is_empty()
+            && both_lost.is_empty()
+            && s.phonemes.is_some()
+            && must_missing.is_empty();
         if !ok {
             failed += 1;
         }
@@ -1876,6 +1951,8 @@ fn tts_regress(
             "asr_whisper": wh.text,
             "phone_min_gop": phone_min.map(|v: f32| (v * 100.0).round() / 100.0),
             "phone_warn": phone_bad,
+            "check": check,
+            "must_missing": must_missing,
             "duration": (s.duration * 1000.0).round() / 1000.0,
             "wpm": (s.wpm * 10.0).round() / 10.0,
         }));
@@ -2027,6 +2104,9 @@ fn tts_audit(cfg: &Config, manifest: &str, out: &str, no_phones: bool) -> Result
                 "duration": round3(duration), "words": words,
                 "wpm": round3(wpm),
                 "oov": oov,
+                // 前端版本标记：2026-11-27 起英文不再查引擎词表，
+                // OOV 列语义变了，曲线跨版本不可直接比较。
+                "frontend": engines.tts.frontend_id(),
                 "asr_sense": sense, "asr_whisper": whisper,
                 "sense_match": sense_ok, "whisper_match": whisper_ok,
                 "phone_min_gop": phone_min, "phone_suspect": phone_suspect,
@@ -2066,6 +2146,7 @@ fn tts_audit(cfg: &Config, manifest: &str, out: &str, no_phones: bool) -> Result
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
+            "frontend": engines.tts.frontend_id(),
             "assets": n,
             "pass": count("pass"), "review": count("review"),
             "reject": count("reject"), "unsupported": count("unsupported"),

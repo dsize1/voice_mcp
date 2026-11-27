@@ -262,6 +262,56 @@ pub fn contains_cjk(text: &str) -> bool {
     text.chars().any(is_cjk)
 }
 
+/// 中英混说时拼接多段音素的标记（只用于留证，不参与合成）。
+pub const SEGMENT_JOINER: &str = " | ";
+
+/// 把文本切成「CJK 段 / 非 CJK 段」，保持原文顺序与标点不变。
+///
+/// 为什么必须分段：`phoneme_codepoints` 一旦给出，引擎就**完全**按我们的音素
+/// 合成；而中文要走引擎的 `lexicon-zh`（Bopomofo 需要 jieba/pypinyin）。
+/// 不分段就只有两个坏选项：整句走中文词表（英文词被静默丢掉）或整句走英文 G2P
+/// （中文全部报 OOV）。分段后两套前端各自只处理自己那段。
+pub fn split_segments(text: &str) -> Vec<(bool, String)> {
+    let mut out: Vec<(bool, String)> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_cjk: Option<bool> = None;
+    for ch in text.chars() {
+        // 标点/空白不切换语言段，跟着当前段走
+        let this = if is_cjk(ch) {
+            Some(true)
+        } else if ch.is_whitespace()
+            || ch.is_ascii_punctuation()
+            || "，。！？；：、（）《》“”‘’…".contains(ch)
+        {
+            None
+        } else {
+            Some(false)
+        };
+        match (cur_cjk, this) {
+            (None, Some(k)) => {
+                cur_cjk = Some(k);
+                cur.push(ch);
+            }
+            (Some(k), Some(k2)) if k != k2 => {
+                if !cur.trim().is_empty() {
+                    out.push((k, std::mem::take(&mut cur)));
+                } else {
+                    cur.clear();
+                }
+                cur_cjk = Some(k2);
+                cur.push(ch);
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.trim().is_empty()
+        && let Some(k) = cur_cjk
+    {
+        out.push((k, cur));
+    }
+    out
+}
+
 fn split_sentences(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -769,6 +819,10 @@ const TENS: &[&str] = &[
 ];
 
 /// 0..=999_999 基数词（小数/负数/序数暂不特殊处理）。
+pub fn number_to_words(digits: &str) -> Option<String> {
+    number_words(digits)
+}
+
 fn number_words(digits: &str) -> Option<String> {
     let n: u64 = digits.parse().ok()?;
     if n > 999_999 {
@@ -1004,6 +1058,19 @@ mod tests {
             m.encode_sentences(&["klʒ".to_string()]).is_err(),
             "未登录音素必须报错"
         );
+    }
+
+    /// 中英混说必须分段：英文段走 G2P、中文段走 lexicon-zh，谁都不许被整段吞掉。
+    #[test]
+    fn mixed_sentence_splits_into_language_segments() {
+        let segs = split_segments("这个 API 返回 404 error，我们明天再查。");
+        let kinds: Vec<bool> = segs.iter().map(|(k, _)| *k).collect();
+        assert_eq!(kinds, vec![true, false, true, false, true]);
+        assert_eq!(segs[1].1.trim(), "API", "英文段: {:?}", segs[1].1);
+        assert!(segs[3].1.contains("404"), "数字段归英文: {:?}", segs[3].1);
+        assert_eq!(split_segments("hello world").len(), 1);
+        assert!(!split_segments("hello world")[0].0);
+        assert!(split_segments("你好")[0].0);
     }
 
     #[test]

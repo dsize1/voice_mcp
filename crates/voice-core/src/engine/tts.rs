@@ -197,11 +197,9 @@ impl TtsEngine {
         // 只保留中文词表给 zh 路径。sherpa-onnx 对重复词条是“后加载覆盖先加载”，
         // 所以 overlay 放最后。
         let mut paths: Vec<PathBuf> = Vec::new();
-        for name in ["lexicon-zh.txt"] {
-            let p = cfg.model(format!("kokoro-multi-lang/{name}"));
-            if p.is_file() {
-                paths.push(p);
-            }
+        let zh = cfg.model("kokoro-multi-lang/lexicon-zh.txt");
+        if zh.is_file() {
+            paths.push(zh);
         }
         if overlay.is_file() {
             paths.push(overlay.clone());
@@ -309,20 +307,36 @@ impl TtsEngine {
         if text.trim().is_empty() {
             bail!("待合成文本为空");
         }
-        let (phoneme_cps, phonemes) = self.frontend(text)?;
-        let gcfg = GenerationConfig {
-            sid,
-            speed,
-            phoneme_codepoints: phoneme_cps,
-            ..Default::default()
-        };
-        let t0 = std::time::Instant::now();
-        let audio = self
-            .tts
-            .generate_with_config::<fn(&[f32], f32) -> bool>(text, &gcfg, None)
-            .ok_or_else(|| anyhow!("合成失败（文本语言与 lexicon 不匹配？）"))?;
-        let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        let samples = audio.samples().to_vec();
+        // 分段：CJK 段走引擎中文词表；非 CJK 段走开放词表 G2P → phoneme_codepoints。
+        // 中英混说（"这个 API 返回 404 error"）靠这一步才不会出现“整句都走中文词表
+        // 于是英文词被静默丢掉”的回退，也不会让中文段被英文音素化。
+        let segs = g2p_ipa::split_segments(text);
+        let mut samples: Vec<f32> = Vec::new();
+        let mut gen_ms = 0.0f64;
+        let mut phonemes: Vec<String> = Vec::new();
+        let mut en_text_seen = false;
+
+        for (is_cjk, seg) in &segs {
+            if seg.trim().is_empty() {
+                continue;
+            }
+            if *is_cjk {
+                let (part, ms) = self.synth_raw(seg, sid, speed, None)?;
+                samples.extend(part);
+                gen_ms += ms;
+            } else {
+                let (cps, ipa) = self.english_codepoints(seg)?;
+                en_text_seen = true;
+                let (part, ms) = self.synth_raw(seg, sid, speed, Some(cps))?;
+                samples.extend(part);
+                gen_ms += ms;
+                phonemes.push(ipa);
+            }
+        }
+        if samples.is_empty() {
+            bail!("合成结果为空（文本里没有可发的内容）");
+        }
+
         let duration = samples.len() as f32 / self.sample_rate as f32;
         let words = count_words(text);
         // 语速按语音跨度算：Kokoro 会在首尾留 0.1–0.4 s 近静音，按总时长算会
@@ -359,9 +373,103 @@ impl TtsEngine {
             speech_duration,
             onset_gap_ms,
             target_wpm: None,
-            phonemes,
+            phonemes: if en_text_seen {
+                Some(phonemes.join(g2p_ipa::SEGMENT_JOINER))
+            } else {
+                None
+            },
             gen_ms,
         })
+    }
+
+    /// 单段合成（英文段带 `phoneme_codepoints`，中文段交给引擎词表）。
+    fn synth_raw(
+        &self,
+        text: &str,
+        sid: i32,
+        speed: f32,
+        phoneme_cps: Option<Vec<Vec<i32>>>,
+    ) -> Result<(Vec<f32>, f64)> {
+        let gcfg = GenerationConfig {
+            sid,
+            speed,
+            phoneme_codepoints: phoneme_cps,
+            ..Default::default()
+        };
+        let t0 = std::time::Instant::now();
+        let audio = self
+            .tts
+            .generate_with_config::<fn(&[f32], f32) -> bool>(text, &gcfg, None)
+            .ok_or_else(|| anyhow!("合成失败（文本语言与 lexicon 不匹配？）"))?;
+        let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        Ok((audio.samples().to_vec(), gen_ms))
+    }
+
+    /// 英文段 → 逐句音素码点。**不查引擎词表**；覆盖不了直接报错。
+    fn english_codepoints(&self, text: &str) -> Result<(Vec<Vec<i32>>, String)> {
+        let ph = self.g2p.phonemize(text);
+        if !ph.oov.is_empty() {
+            bail!(
+                "G2P({}) 覆盖不了 {}；请在 {} 为其指定发音（`word 音素…`）",
+                self.g2p.name(),
+                ph.oov.join(", "),
+                self.lexicon_path.display()
+            );
+        }
+        if ph.is_empty() {
+            bail!("G2P({}) 产出空音素，拒绝合成", self.g2p.name());
+        }
+        let cps = self.tokens.encode_sentences(&ph.sentence_ipa)?;
+        Ok((cps, ph.ipa()))
+    }
+
+    /// 文本前端预览（留证 / 回归断言用，不合成音频）。
+    ///
+    /// 只音素化**英文段**：中文段由引擎词表处理，不应出现在这里（也就不会被
+    /// 误报成 OOV）。
+    pub fn phonemize_preview(&self, text: &str) -> crate::engine::g2p_ipa::Phonemized {
+        let mut out = crate::engine::g2p_ipa::Phonemized::default();
+        for (is_cjk, seg) in g2p_ipa::split_segments(text) {
+            if is_cjk || seg.trim().is_empty() {
+                continue;
+            }
+            let ph = self.g2p.phonemize(&seg);
+            out.words.extend(ph.words);
+            out.sentence_ipa.extend(ph.sentence_ipa);
+            for w in ph.oov {
+                if !out.oov.contains(&w) {
+                    out.oov.push(w);
+                }
+            }
+        }
+        out
+    }
+
+    /// 合成前 OOV 预检。英文交给 G2P（**不再用“base+'s 就算已知”的宽容规则**），
+    /// 中文仍查中文词表。
+    pub fn oov_words(&self, text: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (is_cjk, seg) in g2p_ipa::split_segments(text) {
+            if seg.trim().is_empty() {
+                continue;
+            }
+            let got = if is_cjk {
+                oov_in_text(&self.lexicon_words, &seg)
+            } else {
+                self.g2p.phonemize(&seg).oov
+            };
+            for w in got {
+                if !out.contains(&w) {
+                    out.push(w);
+                }
+            }
+        }
+        out
+    }
+
+    /// 文本前端标识（写进审计/留证，避免“前端换了导致 OOV 曲线突变”被误读）
+    pub fn frontend_id(&self) -> String {
+        format!("g2p-ipa/1.0[{}]+lexicon-zh", self.g2p.name())
     }
 
     /// 按目标 wpm 合成：先 1.0 测速，再算倍率；必要时二次校正。
@@ -427,54 +535,6 @@ impl TtsEngine {
         let mut out = best;
         out.target_wpm = Some(target);
         Ok(out)
-    }
-
-    /// 文本前端：返回（逐句音素码点, 音素串）。
-    ///
-    /// - 英文：**一律**走开放词表 G2P → `phoneme_codepoints`，完全不查引擎词表。
-    ///   任何未被覆盖的词直接报错（宁可失败，不出缺词的音频）。
-    /// - 中文：暂由引擎 `lexicon-zh` 处理（Bopomofo 前端属后续工作）。
-    fn frontend(&self, text: &str) -> Result<(Option<Vec<Vec<i32>>>, Option<String>)> {
-        if g2p_ipa::contains_cjk(text) {
-            let oov = oov_in_text(&self.lexicon_words, text);
-            if !oov.is_empty() {
-                bail!(
-                    "中文词表缺少 {}；请在 {} 增加词条",
-                    oov.join(", "),
-                    self.lexicon_path.display()
-                );
-            }
-            return Ok((None, None));
-        }
-        let ph = self.g2p.phonemize(text);
-        if !ph.oov.is_empty() {
-            bail!(
-                "G2P({}) 覆盖不了 {}；请在 {} 为其指定发音（`word 音素…`）",
-                self.g2p.name(),
-                ph.oov.join(", "),
-                self.lexicon_path.display()
-            );
-        }
-        if ph.is_empty() {
-            bail!("G2P({}) 产出空音素，拒绝合成", self.g2p.name());
-        }
-        let cps = self.tokens.encode_sentences(&ph.sentence_ipa)?;
-        Ok((Some(cps), Some(ph.ipa())))
-    }
-
-    /// 文本前端预览（留证 / 回归断言用，不合成音频）。
-    pub fn phonemize_preview(&self, text: &str) -> crate::engine::g2p_ipa::Phonemized {
-        self.g2p.phonemize(text)
-    }
-
-    /// 合成前 OOV 预检。英文交给 G2P（**不再用“base+'s 就算已知”的宽容规则**），
-    /// 中文仍查中文词表。
-    pub fn oov_words(&self, text: &str) -> Vec<String> {
-        if g2p_ipa::contains_cjk(text) {
-            oov_in_text(&self.lexicon_words, text)
-        } else {
-            self.g2p.phonemize(text).oov
-        }
     }
 }
 

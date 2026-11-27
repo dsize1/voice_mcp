@@ -77,8 +77,8 @@
 | **M3** | Part 2/3 长独白训练 | ⏳ | 需 D38 分块切词 + D14 长句 accuracy 口径 |
 | **M4** | 自由说 L4 + Route A 评估 | 🅿️ | ADR-0010；前置 L4、D04、D49 |
 | **M5** | 中文发音诊断（拼音层） | ⏳ | D13；当前中文只做字级 diff |
-| **M6** | 分发：Pi package / 预编译 / 跨平台 | ⏳ | D29/D30/D31；Windows-only 假设 |
-| **M7** | CI + 合成 fixture + 数据保留策略 | ⏳ | D20/D21/D25/D26 |
+| **M6** | 分发：Pi package / 预编译 / 跨平台 | 🅿️ **调低（2026-11-28）** | D29/D30/D31；Windows-only 假设。单用户本地跑通优先于分发 |
+| **M7** | CI + 合成 fixture + 数据保留策略 | 🟡 | D20/D21 已还（`tools/build.ps1` + 前端 golden 进 CI）；剩 D25/D26（数据保留策略），与分发无关 |
 | **M8** | `learner.json` schema 校验与迁移 | ⏳ | D27；现有 `readiness` 等字段只靠散文 |
 
 ---
@@ -90,7 +90,7 @@
 | **L1** | P4 产品形态：热键听写 daemon / HTTP 模式 / 流式 TTS / 音色复刻 | ⏳ | 当前只有 MCP stdio + CLI |
 | **L2** | 雅思全题库 + Part 1/2/3 课程化 | ⏳ | 依赖 N9 素材入库与长独白支持 |
 | **L3** | 数据飞轮：真实训练 → `error_stats` → 定向组卷 → 再标定 | ⏳ | 先用单用户跑通，再考虑第二用户 |
-| **L4** | 跨平台与发布（macOS/Linux、安装包、Release） | ⏳ | 与 M6 合并推进 |
+| **L4** | 跨平台与发布（macOS/Linux、安装包、Release） | 🅿️ **调低（2026-11-28）** | 与 M6 合并推进；同等理由暂缓 |
 | **L5** | 运行时性能/GPU EP（`VOICE_PROVIDER=cuda`） | ⏳ | 当前 CPU 已够；GPU EP 未打通 |
 | **L6** | 100% Rust 运行时（无 Python 训练依赖） | 🟡 | 运行时已纯 Rust；训练/标定仍用 Python |
 

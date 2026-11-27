@@ -62,7 +62,7 @@
 | D56 | **中英混说音质**：分段合成后拼接，单音色下另一语言口音不纯 | 2026-11-27 听测 | S3 | 混说句的实际可用性（英语教学材料不受影响） | **已缓解（2026-11-27 深夜）**：①产品入口默认拒答混说；②**misaki-zh 接入验证完成**（`tools/g2p_misaki.py` + `VOICE_G2P_CMD_ZH`，中文走 `phoneme_codepoints`，与英文同一链路），中文 5 句实测字符级准确率 **misaki 0.939 vs lexicon-zh 0.903**（vf_xiaoni）；③顺带测出**音色差异极大**：同一批句子 `zf_xiaobei` 的 codepoint 路径只有 **0.515**，`zf_xiaoni` 0.939 → 中文示范音应优先 `zf_xiaoni`。残留：混说的双语音色问题（Kokoro 无双语 voice）仍需换声学模型或做音色拼接 |
 | D57 | **未见词根的读音（LTS）**：CMUdict/形态规则都查不到的生造专名、品牌名、人名（`Zorbly's`、`Nvidia`）此前直接 `ok:false`，等于“功能残缺” | 2026-11-27 前端改造复盘 | S2 | 任何含未见专名的句子 | **已还（2026-11-27）**：新增规则 LTS（多字母组合→单字母→末尾 e 静音→双写合流→首元音重音），**必打标记**（`PhoneSource::Lts` / `Synthesized.lts_words` / MCP `lts_words` / `tts-regress` 的 `expect=lts` 用例），材料侧可据此人工复听或拒收；`VOICE_LTS=0` 可退回“直接报 OOV”。局限：只为“读得出来”负责，不为“读得对”负责（重音/元音质量不如 CMUdict） |
 | D58 | **字符级门禁对多音字是盲的**：`tts-regress`/`tts-audit` 比的是 ASR 回读的**汉字**，ASR 语言模型会把错读音“纠正”成正确的字（实测 银行 xíng 也回读成「银行」）→ 多音字读错抓不到 | 2026-11-28 多音字 A/B | S2 | 中文材料正确性 | **搁置（2026-11-28 决定）**：当前风险已由「misaki-zh 默认前端」+ 人耳抽样覆盖，暂不投入。下次动中文前端/换音色/换声学模型前必须补：把“多音字最小对”（银行/重庆/长城/音乐/空调/便宜/行长/还钱）在语料里存 `expect_phonemes`，`tts-regress` 加一条**音素级**断言分支（比音素串，不比汉字） |
-| D59 | **中文默认 G2P 依赖 Python sidecar，与 L6「100% Rust 运行时」冲突**：2026-11-28 起中文默认走 `tools/g2p_misaki.py`（misaki 0.7.4 + pypinyin + jieba + cn2an），默认路径因此需要一个 python 解释器，且每次中文合成 +~0.7 s | 2026-11-28 多音字 A/B 后设为默认 | S2 | 分发（M6/D29）、离线部署、CI；纯 Rust 承诺 | **未偿还**：缓解已有——`VOICE_G2P_CMD_ZH=off` 回退 `lexicon-zh`、sidecar 失败自动回退、D55 超时/熔断。**做 M6 分发之前必须二选一**：① 把 misaki-zh 逻辑移植 Rust（`jieba-rs` + `pinyin` crate + 自写数字/变调），② 或把 sidecar 作为可选件随包分发并明确降级行为（`phonemes` 里 `⟨zh⟩` 前缀可判别来源） |
+| D59 | **中文默认 G2P 依赖 Python sidecar，与 L6「100% Rust 运行时」冲突**：2026-11-28 起中文默认走 `tools/g2p_misaki.py`（misaki 0.7.4 + pypinyin + jieba + cn2an），默认路径因此需要一个 python 解释器，且每次中文合成 +~0.7 s | 2026-11-28 多音字 A/B 后设为默认 | S2 | 分发（M6/D29）、离线部署、CI；纯 Rust 承诺 | **未偿还**：缓解已有——`VOICE_G2P_CMD_ZH=off` 回退 `lexicon-zh`、sidecar 失败自动回退、D55 超时/熔断。**做 M6 分发之前必须二选一**：① 把 misaki-zh 逻辑移植 Rust（`jieba-rs` + `pinyin` crate + 自写数字/变调），② 或把 sidecar 作为可选件随包分发并明确降级行为（`phonemes` 里 `⟨zh⟩` 前缀可判别来源） ｜**优先级下调（2026-11-28）**：分发（M6/L4/D29–D31）已调低，这条随之降级——单用户本地跑通期间 sidecar 是可接受的；只有真要对外分发时才必须解开 |
 ## 三、工程韧性
 
 | ID | 欠债 | 证据 | 级别 | 触发偿付条件 | 预估 |
@@ -89,15 +89,15 @@
 | D27 | `learner.json` 的 schema 只存在于 SKILL.md 的散文里，**无代码校验、无版本迁移** | S2 | 改一次字段名时（会静默丢档案） | 2h：`voice-core::profile` + `version` 字段 + 迁移 |
 | D28 | `docs/security-hashes.txt` 覆盖不全 | ~~S3~~ ✅已还：`verify_models.py --write-baseline` 全量输出（12 个模型文件 + 3 个 DLL + 1 个轮子 = 22 条） | – | – |
 
-## 五、分发（当前最大的"产品债"）
+## 五、分发（**2026-11-28 起调低优先级**：单用户本地跑通优先，对外分发暂缓）
 
 | ID | 欠债 | 级别 | 触发偿付条件 | 预估 |
 |---|---|---|---|---|
-| D29 | Skill 靠 `tools/install_skills.ps1` 建 junction 装到 `~/.pi/agent/skills`；项目 `.pi/settings.json` 又需项目授信。**没有真正的安装包形态** | S2 | 第二个人要用 | 0.5d：打成 Pi package（见 `docs/packages.md`） |
-| D30 | Windows-only 假设（默认路径、录音机目录名、DLL 名、`mklink /J`） | S2 | 出现 mac/linux 用户 | 1d |
-| D31 | 无预编译二进制 / 无 GitHub Release，新用户必须本地装 Rust + MSVC | S2 | 出现非 Rust 用户 | 1d（CI 矩阵） |
+| D29 | Skill 靠 `tools/install_skills.ps1` 建 junction 装到 `~/.pi/agent/skills`；项目 `.pi/settings.json` 又需项目授信。**没有真正的安装包形态** | S2 | 第二个人要用 | 0.5d：打成 Pi package（见 `docs/packages.md`）  ｜**优先级下调（2026-11-28）**：分发类统一降级 |
+| D30 | Windows-only 假设（默认路径、录音机目录名、DLL 名、`mklink /J`） | S2 | 出现 mac/linux 用户 | 1d  ｜**优先级下调（2026-11-28）**：同上 |
+| D31 | 无预编译二进制 / 无 GitHub Release，新用户必须本地装 Rust + MSVC | S2 | 出现非 Rust 用户 | 1d（CI 矩阵）  ｜**优先级下调（2026-11-28）**：同上 |
 | D32 | 无 `LICENSE` 文件（README 只写了许可说明） | ~~S3~~ ✅已还 | – | – |
-| D33 | 项目级 `.pi/mcp.json`、`.pi/settings.json` 因未授信被忽略，与实际生效的全局配置存在**双份真相** | 每次 `pi mcp list` 都会提示 | S3 | 下次交接 | 1h：README 写清"哪个是权威" |
+| D33 | 项目级 `.pi/mcp.json`、`.pi/settings.json` 因未授信被忽略，与实际生效的全局配置存在**双份真相** | 每次 `pi mcp list` 都会提示 | S3 | 下次交接 | 1h：README 写清"哪个是权威"  ｜**优先级下调（2026-11-28）**：同上 |
 | D38 | 分块边界仍可能切断词：超长连续朗读（无 VAD 停顿）会按 20 s 硬切，跨块的词会被拆成两条转写 | S3 | 出现长独白（Part 2）素材时 | 0.5d：块间加 0.3 s 重叠 + 末尾词去重 |
 | D39 | `record` 起始等待硬编码 8 s，真机上“人已经在说、工具报没检测到说话” | **已还**：`RecordOptions.start_timeout_sec` + CLI `--start-timeout` + MCP `start_timeout_sec`（默认仍 8，建议自由说 20） | ~~S2~~ ✅已还 | – | – |
 | D37 | 功能词 `omitted` 没有交叉验证：旧实现只按“是不是短功能词”猜一个 `LikelyAsrMiss`，既不确认也不定罪 | 2026-11-24 起 | S2 | 跟读评分的误报 | **已还（2026-11-28）**：`assess(cross_check=true)`——对疑似 ASR 漏听的 omitted 项跑 whisper 复核：听到 → `severity=low` + 注明“不算漏读”；也没听到 → `severity=high` + 清空 hint（提示复听）。证据字段 `issues[].cross_checked` / `other_engine_heard`；`auto/mixed` 下按 en 复核。**连带修掉一个真 bug**：`CONTRACTIONS` 表缺 `we'll`/`they'll`/`he'll`/`she'll`/`it'll`/`*'d`/`where's`/`how's` 等 20 条，导致 "we'll" 与 ASR 的 "we will" 对不上（既误报漏读，又让交叉复核失效）；已补齐 + 单测 |

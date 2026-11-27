@@ -1,15 +1,17 @@
 # 当前状态与下一步（交接用）
 
-> 写于 2026-11-19，最后更新 **2026-11-26**（真人素材入库 `bank ingest-audio`（含 `--srt`）+ 语料排除 + D52/D53）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
+> 写于 2026-11-19，最后更新 **2026-11-28**（真人素材入库 `bank ingest-audio`（含 `--srt`）+ 语料排除 + D52/D53）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
 > 再读这一页、README / CONTRACT / ADR。
 
 ## 一句话现状
 
 **P3 闭环 + P4 素材库（5 028 条：NCE 4 997 / IELTS prompt 10 / IELTS 听力真人 14 / Peppa 7）+ 音素级 GOP + 韵律分析均已上线并在真机验证。**
 评测侧的“参考音”已从 TTS 改为**真人原声优先**（D52）；真人素材有两条入库通道（有字幕 `--srt` / 无字幕 ASR 双引擎复核）。
-`crates` 11k+ 行 Rust，**148 个单测 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
+`crates` 11k+ 行 Rust，**174 个单测 + TTS 前端 golden 集成测试 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
 已由 `tools/check.ps1` 与 GitHub Actions 守住（D20/D45）。
-下一步：N1 whisper 端到端回归、N6/N7 readiness 自动评估 + plan 去重。
+**优先级（2026-11-28 调整）**：分发（M6/L4、D29–D31、D33）**调低**——单用户本地跑通优先；
+下一步：评测精度（D53 SenseVoice 语言 / D52 基线残留重跑 / D13 中文拼音层）、N6/N7 readiness 自动评估 + plan 去重、M1/M2（ref_slow 批量、按音素组卷）。
+TTS 侧已收口：前端开放词表 G2P + misaki-zh + LTS + 漏词门禁（见 `docs/audit/tts-2026-11-27-frontend.md`）。
 
 ## 已实测的关键数字（别再猜）
 

@@ -31,7 +31,7 @@
 |---|---|---|---|
 | `path` | string | ✅ | 绝对路径或 `"last"` |
 | `reference` | string | | 参考文本（跟读目标句）。为空则只做语流分析 |
-| `lang` | string | | `auto`/`en`/`zh`/`mixed` |
+| `lang` | string | | `auto`/`en`/`zh`/`mixed`。**`en`/`zh` 用语言锁定的 SenseVoice 实例**（D53，首次用到才加载，各 +~230 MB）；`auto`/`mixed` 走 auto 实例 + 语言守卫 |
 | `engine` | string | | 强制 `sense-voice`/`whisper` |
 | `with_gop` | bool | | 同时跑音素级 GOP（需 `reference`；首次调用加载 1.2 GB 模型，约 1–2 s） |
 | `baseline_tts` | bool | | 用 TTS 合成参考文本再跑一遍同一套 GOP，作为**对照基线**（区分"用户读错"与"模型分辨不出"） |
@@ -130,7 +130,7 @@ sessions/<date>/<hhmmss>_drill/takes/
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `path` | string | ✅ | 绝对路径，或 `"last"`。支持 `wav/m4a/mp3/flac/ogg/aac`（Win11 录音机 `.m4a` 直读） |
-| `lang` | string | | `auto`(默认) / `en` / `zh` / `mixed` |
+| `lang` | string | | `auto`(默认) / `en` / `zh` / `mixed`。**`en`/`zh` 用语言锁定的 SenseVoice 实例**（D53，首次用到才加载，各 +~230 MB）；`auto`/`mixed` 走 auto 实例 + 语言守卫 |
 | `engine` | string | | 强制 `sense-voice` / `whisper`；默认按 `lang` 路由 |
 | `scene` | string | | 场景标签，进入留证文件名与 manifest，如 `read_third` |
 

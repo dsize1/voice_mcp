@@ -2,7 +2,8 @@
 //!
 //! 路由规则见 ADR-0002（含 P0 更正：SenseVoice 也有 token 时间戳，因此英文默认走它）。
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Result, anyhow, bail};
 use serde::Serialize;
@@ -67,6 +68,12 @@ pub struct AsrEngine {
 
 impl AsrEngine {
     pub fn load(cfg: &Config, kind: AsrKind) -> Result<Self> {
+        Self::load_locked(cfg, kind, None)
+    }
+
+    /// `locked_lang`：仅对 SenseVoice 有意义——`Some("en")` 会把模型配置成英文锁定实例
+    /// （SenseVoice 的 `language` 只能加载期指定，per-call 传 `lang` 不生效，D53）。
+    pub fn load_locked(cfg: &Config, kind: AsrKind, locked_lang: Option<&str>) -> Result<Self> {
         let mut config = OfflineRecognizerConfig::default();
         match kind {
             AsrKind::SenseVoice => {
@@ -77,7 +84,7 @@ impl AsrEngine {
                 }
                 config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
                     model: Some(path_str(&model)),
-                    language: Some("auto".into()),
+                    language: Some(locked_lang.unwrap_or("auto").to_string()),
                     use_itn: true,
                 };
                 config.model_config.tokens = Some(path_str(&tokens));
@@ -163,37 +170,64 @@ impl AsrEngine {
 /// 双引擎 + 路由
 pub struct Asr {
     cfg: Config,
-    sense: AsrEngine,
-    whisper: OnceLock<AsrEngine>,
+    sense: Arc<AsrEngine>,
+    /// 语言锁定的 SenseVoice 实例（en / zh），首次用到才加载（每份额外 ~230 MB）
+    sense_locked: Mutex<HashMap<&'static str, Arc<AsrEngine>>>,
+    whisper: OnceLock<Arc<AsrEngine>>,
     whisper_err: OnceLock<String>,
 }
 
 impl Asr {
     pub fn load(cfg: &Config) -> Result<Self> {
-        let sense = AsrEngine::load(cfg, AsrKind::SenseVoice)?;
+        let sense = Arc::new(AsrEngine::load(cfg, AsrKind::SenseVoice)?);
         Ok(Self {
             cfg: cfg.clone(),
             sense,
+            sense_locked: Mutex::new(HashMap::new()),
             whisper: OnceLock::new(),
             whisper_err: OnceLock::new(),
         })
     }
 
-    fn whisper(&self) -> Result<&AsrEngine> {
+    fn whisper(&self) -> Result<Arc<AsrEngine>> {
         if let Some(e) = self.whisper.get() {
-            return Ok(e);
+            return Ok(e.clone());
         }
         if let Some(err) = self.whisper_err.get() {
             bail!("{err}");
         }
         match AsrEngine::load(&self.cfg, AsrKind::Whisper) {
-            Ok(e) => Ok(self.whisper.get_or_init(|| e)),
+            Ok(e) => Ok(self.whisper.get_or_init(|| Arc::new(e)).clone()),
             Err(e) => {
                 let msg = format!("whisper 引擎不可用: {e}");
                 let _ = self.whisper_err.set(msg.clone());
                 bail!(msg)
             }
         }
+    }
+
+    /// 取（必要时懒加载）语言锁定的 SenseVoice 实例。
+    fn sense_for(&self, lang: &str) -> Result<Arc<AsrEngine>> {
+        let Some(lock) = sense_language_for(lang) else {
+            return Ok(self.sense.clone());
+        };
+        if !lang_lock_enabled() {
+            return Ok(self.sense.clone());
+        }
+        let mut m = self
+            .sense_locked
+            .lock()
+            .map_err(|_| anyhow!("ASR 语言实例缓存锁中毒"))?;
+        if let Some(e) = m.get(lock) {
+            return Ok(e.clone());
+        }
+        let e = Arc::new(AsrEngine::load_locked(
+            &self.cfg,
+            AsrKind::SenseVoice,
+            Some(lock),
+        )?);
+        m.insert(lock, e.clone());
+        Ok(e)
     }
 
     /// `lang`: auto | en | zh | mixed。`engine`: 可选强制引擎名。
@@ -210,8 +244,9 @@ impl Asr {
         let primary = route_engine(&lang_lc, &self.cfg.en_engine, forced);
 
         let attempt = |k: AsrKind| -> Result<Transcript> {
-            let e = match k {
-                AsrKind::SenseVoice => &self.sense,
+            let e: Arc<AsrEngine> = match k {
+                // D53：en/zh 用语言锁定实例（SenseVoice 的 language 只能加载期指定）
+                AsrKind::SenseVoice => self.sense_for(&lang_lc)?,
                 AsrKind::Whisper => self.whisper()?,
             };
             e.transcribe(
@@ -256,6 +291,30 @@ impl Asr {
         }
         Ok(t)
     }
+}
+
+/// D53：请求的语言 → 该用哪个**语言锁定**的 SenseVoice 实例（`None` = 用 auto 实例）。
+///
+/// 为什么需要：SenseVoice 的 `language` 是**加载期**配置，per-call 的 `lang` 不生效；
+/// 用 `language=auto` 时英文素材偶尔会被解成中文/日文
+/// （实测佩奇 S01E01 出现「マディ puddles。」「はいマ。」「おここ。」）。
+/// 给 en / zh 各开一个锁定实例后，这类跑偏消失。
+pub fn sense_language_for(lang: &str) -> Option<&'static str> {
+    match lang.trim().to_ascii_lowercase().as_str() {
+        "en" => Some("en"),
+        "zh" => Some("zh"),
+        _ => None,
+    }
+}
+
+/// 语言锁定是否启用（`VOICE_SENSE_LANG_LOCK=0` 可关闭，省内存/排查用）。
+fn lang_lock_enabled() -> bool {
+    !matches!(
+        std::env::var("VOICE_SENSE_LANG_LOCK")
+            .unwrap_or_default()
+            .trim(),
+        "0" | "false" | "off"
+    )
 }
 
 /// ASR 路由（纯函数，可回归测试；D04）。

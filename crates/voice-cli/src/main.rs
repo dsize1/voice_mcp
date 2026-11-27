@@ -1930,10 +1930,19 @@ fn tts_regress(
         // 门禁只看“有没有丢词”。`phone_min_gop` 仅作报告：我们的 G2P 现在会沿用
         // Kokoro lexicon 的发音惯例（`ði`、`ᵊ`、闪音 ɾ、次重音 ˌ），与 GOP 参考
         // （CMUdict ARPAbet）不是同一套标注，负分不代表读错。
+        // `tolerance=count`：允许“词界被 ASR 重写”（`isn't ready`→`tizen ready`、
+        // `finished and`→`finished then`）——这类改写**不减少词数**；
+        // 真正的漏词必然让回读词数变少。用它把“音素流没有词间连接建模”这一已知弱点
+        // 与“整词消失”分开。
+        let tolerance = m["tolerance"].as_str().unwrap_or("strict");
+        let ref_n = gate_words(&intended).len();
+        let wh_n = gate_words(&wh.text).len();
+        let sv_n = gate_words(&sv.text).len();
+        let count_ok = tolerance == "count" && wh_n >= ref_n && sv_n + 1 >= ref_n;
         let ok = g2p_oov.is_empty()
-            && both_lost.is_empty()
             && s.phonemes.is_some()
-            && must_missing.is_empty();
+            && must_missing.is_empty()
+            && (both_lost.is_empty() || count_ok);
         if !ok {
             failed += 1;
         }
@@ -1952,6 +1961,8 @@ fn tts_regress(
             "phone_min_gop": phone_min.map(|v: f32| (v * 100.0).round() / 100.0),
             "phone_warn": phone_bad,
             "check": check,
+            "tolerance": tolerance,
+            "words_ref": ref_n, "words_whisper": wh_n, "words_sense": sv_n,
             "must_missing": must_missing,
             "duration": (s.duration * 1000.0).round() / 1000.0,
             "wpm": (s.wpm * 10.0).round() / 10.0,

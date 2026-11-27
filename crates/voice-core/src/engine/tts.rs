@@ -528,21 +528,25 @@ impl TtsEngine {
             }
             speed = (speed * target / best.wpm).clamp(0.4, 1.2);
         }
-        // 有起始伪影 → 换速度重试（策略：换速度/换音色，不裁音频；见 audit §11）
-        if best.onset_gap_ms.is_some() {
+        // 兜底：**只要还没进目标带宽**，就继续换速度试（策略：换速度/换音色，不裁音频；见 audit §11）。
+        // 不能只在“有起始伪影”时重试：`rank` 的第一键已改为带宽距离，
+        // 越界且无伪影的候选也必须让位给“更靠近带宽、但带轻微伪影”的候选（D54 残留 wl04）。
+        if best.onset_gap_ms.is_some() || rank(&best, target).0 > 0.0 {
             let base = best.speed;
-            for k in [1.04f32, 0.96, 1.08, 0.92] {
-                if tried.len() >= 7 {
+            for k in [1.04f32, 0.96, 1.08, 0.92, 1.12, 0.88, 1.16] {
+                if tried.len() >= 9 {
                     break;
                 }
                 let sp = (base * k).clamp(0.4, 1.2);
+                if tried.iter().any(|t| (t - sp).abs() < 1e-3) {
+                    continue;
+                }
                 let out = self.synthesize(text, sid, sp)?;
                 tried.push(sp);
-                if out.onset_gap_ms.is_none() && rank(&out, target) < rank(&best, target) {
+                if rank(&out, target) < rank(&best, target) {
                     best = out.clone();
                 }
-                if out.onset_gap_ms.is_none() && (out.wpm - target).abs() <= target * 0.06 {
-                    best = out;
+                if (best.wpm - target).abs() <= target * 0.06 && best.onset_gap_ms.is_none() {
                     break;
                 }
             }

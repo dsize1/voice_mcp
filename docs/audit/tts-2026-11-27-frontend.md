@@ -164,3 +164,34 @@ voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55 --out report.jsonl
 
 遗留（不阻塞本次收口）：D54 残留（`Where's` 句 128.6 wpm，略低于 130 带下沿）、D55（Sidecar 超时/自愈，接 misaki 前补）、
 D56（混说音质，需 misaki-zh）、LTS 兜底（`Zorbly's` 这类未见词根）。
+
+
+## 八、D54 / D55 收口（2026-11-27 深夜，同一轮）
+
+### 8.1 D54 语速标定：已还
+
+- **改法**：`rank()` 第一键由 `off_band: 0/1` 改为**连续带宽距离** `excess = max(0, |wpm−target| − target×6%)`；
+  重试条件由“仅当有起始伪影”改为“**只要还没进带宽**就继续换速度”，候选上限 9 点（含去重与 clamp）。
+- **复测**（`voice-cli say` 默认 140 wpm 校准，am_michael）：
+
+| case | 改前 wpm | 改后 wpm | onset |
+| :--- | ---: | ---: | ---: |
+| wl04 Apple's stock fell again. | 190.5 | **136.4** | None |
+| wl06 today's meeting was cancelled. | 89.9 | **142.0** | None |
+| wl08 He's already sent the invoice… | 168.2 | **136.1** | None |
+| wl01 The client's report isn't ready… | 139.9 | **140.2** | None |
+| wl02 Where's the log file… | 128.6 | **138.1** | None |
+| wl10 It's not finished, and they aren't ready. | 140.5 | **139.5** | 20 ms |
+
+全部落在雅思 130–160 带内；单次合成 430–930 ms（重试没有明显增加延迟）。
+
+### 8.2 D55 Sidecar 生命周期：已还
+
+- `check_program()`：启动即验程序可达（绝对路径 / PATH+PATHEXT），错配立刻失败。
+- 单次调用**超时**（默认 5 s，`VOICE_G2P_TIMEOUT_MS` 可调），超时 `kill` 子进程并报错。
+- stdin / stdout / stderr **各独立线程**：子进程不读 stdin 也不会卡住调用方。
+- 失败**一次重启重试**（新进程＝自愈）；连续失败 3 次**熔断**快速失败；任何失败都**不退回闭集词表**。
+- 6 条单测（用本机 python 当假 sidecar）：成功 / 行数不符 / 非零退出 / 超时被杀（300 ms 内返回）/ 程序不存在 / 熔断。
+
+> 这层是接 misaki（`VOICE_G2P_CMD='python -m misaki --ipa -'`）的前置条件；接口与失败语义已就绪，
+> 缺的只是网络与权重。

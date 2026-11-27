@@ -18,7 +18,7 @@
 //! - `tts-lexicon.txt`（项目 overlay）降级为**高优先级覆盖层**，不再是唯一路径。
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -647,6 +647,10 @@ pub struct SidecarBackend {
     program: String,
     args: Vec<String>,
     name: &'static str,
+    /// 单次调用超时（超时即杀进程并报错）
+    timeout: std::time::Duration,
+    /// 连续失败次数（≥3 熔断，避免每个请求都白等一次超时）
+    fail_streak: std::sync::atomic::AtomicUsize,
 }
 
 impl SidecarBackend {
@@ -655,23 +659,49 @@ impl SidecarBackend {
             program: program.into(),
             args,
             name,
+            timeout: default_timeout(),
+            fail_streak: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
     /// 从 `VOICE_G2P_CMD` 读环境变量形式的配置：
     /// `VOICE_G2P_CMD="python -m misaki --ipa -"`
+    ///
+    /// 启动时做一次**存在性检查**：程序找不到就立刻失败（而不是每个请求都超时一次）。
     pub fn from_env() -> Option<Self> {
         let cmd = std::env::var("VOICE_G2P_CMD").ok()?;
         let mut it = cmd.split_whitespace();
         let program = it.next()?.to_string();
-        Some(Self {
+        Some(Self::new(
             program,
-            args: it.map(str::to_string).collect(),
-            name: "external-sidecar",
-        })
+            it.map(str::to_string).collect(),
+            "external-sidecar",
+        ))
     }
 
-    fn run(&self, sentences: &[String]) -> Result<Vec<String>> {
+    /// 超时（单次调用）。默认 5 s，可用 `VOICE_G2P_TIMEOUT_MS` 覆盖。
+    pub fn with_timeout(mut self, d: std::time::Duration) -> Self {
+        self.timeout = d;
+        self
+    }
+
+    /// 健康检查：程序能否解析到（PATH/绝对路径）。找不到 → 立即报错。
+    pub fn check_program(&self) -> Result<()> {
+        if program_exists(&self.program) {
+            Ok(())
+        } else {
+            bail!(
+                "外部 G2P 程序找不到: {}（VOICE_G2P_CMD 配置错误？）",
+                self.program
+            )
+        }
+    }
+
+    /// 一次调用：写 stdin（独立线程，避免卡住调用方）＋ 读 stdout/stderr 带超时。
+    ///
+    /// 超时/崩溃都**杀进程并报错**，绝不退回闭集词表（那会重新引入静默丢词）。
+    fn run_once(&self, sentences: &[String]) -> Result<Vec<String>> {
+        self.check_program()?;
         let mut child = Command::new(&self.program)
             .args(&self.args)
             .stdin(Stdio::piped())
@@ -679,34 +709,137 @@ impl SidecarBackend {
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("启动外部 G2P 失败: {}", self.program))?;
-        {
-            let stdin = child
-                .stdin
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("无法写 sidecar stdin"))?;
-            for s in sentences {
-                writeln!(stdin, "{s}")?;
-            }
+
+        // stdin 交给独立线程写：子进程不读 stdin 时不会把调用方卡死
+        let payload = {
+            let mut s = sentences.join("\n");
+            s.push('\n');
+            s
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(payload.as_bytes());
+                let _ = stdin.flush();
+                // 关闭 stdin 让子进程看到 EOF
+            });
         }
-        let out = child.wait_with_output()?;
-        if !out.status.success() {
+
+        // stdout / stderr 各一个读线程 + 超时等待
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        if let Some(stdout) = child.stdout.take() {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = std::io::BufReader::new(stdout).read_to_end(&mut buf);
+                let _ = tx.send(buf);
+            });
+        }
+        let (etx, erx) = std::sync::mpsc::channel::<Vec<u8>>();
+        if let Some(stderr) = child.stderr.take() {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = std::io::BufReader::new(stderr).read_to_end(&mut buf);
+                let _ = etx.send(buf);
+            });
+        }
+
+        let stdout_buf = match rx.recv_timeout(self.timeout) {
+            Ok(b) => b,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!(
+                    "外部 G2P 超时（>{} ms，{} 句）：已杀进程。检查 sidecar 是否卡住/需要预热",
+                    self.timeout.as_millis(),
+                    sentences.len()
+                );
+            }
+        };
+        let status = child.wait()?;
+        let stderr_buf = erx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap_or_default();
+        if !status.success() {
             bail!(
                 "外部 G2P 退出码 {:?}: {}",
-                out.status.code(),
-                String::from_utf8_lossy(&out.stderr)
+                status.code(),
+                String::from_utf8_lossy(&stderr_buf).trim()
             );
         }
-        let text = String::from_utf8_lossy(&out.stdout);
+        let text = String::from_utf8_lossy(&stdout_buf);
         let lines: Vec<String> = text.lines().map(|l| l.trim().to_string()).collect();
         if lines.len() != sentences.len() {
             bail!(
-                "外部 G2P 行数不匹配：{} 句 → {} 行",
+                "外部 G2P 行数不匹配：{} 句 → {} 行（约定：每行一句，逐行一个音素串）",
                 sentences.len(),
                 lines.len()
             );
         }
         Ok(lines)
     }
+
+    /// 带**一次重启重试**的调用 + 熔断（连续失败 3 次后快速失败，避免每个请求都等超时）。
+    fn run(&self, sentences: &[String]) -> Result<Vec<String>> {
+        use std::sync::atomic::Ordering;
+        if self.fail_streak.load(Ordering::Relaxed) >= 3 {
+            bail!(
+                "外部 G2P 已连续失败 {} 次，熔断中（重启 MCP server 或修正 VOICE_G2P_CMD 后恢复）",
+                self.fail_streak.load(Ordering::Relaxed)
+            );
+        }
+        let mut last = None;
+        for attempt in 0..2 {
+            match self.run_once(sentences) {
+                Ok(v) => {
+                    self.fail_streak.store(0, Ordering::Relaxed);
+                    return Ok(v);
+                }
+                Err(e) => {
+                    self.fail_streak.fetch_add(1, Ordering::Relaxed);
+                    last = Some(e);
+                    if attempt == 0 {
+                        // 第一次失败：子进程可能已崩，重起一次（新进程 = 自愈）
+                        continue;
+                    }
+                }
+            }
+        }
+        Err(last.unwrap_or_else(|| anyhow::anyhow!("外部 G2P 调用失败")))
+    }
+}
+
+fn default_timeout() -> std::time::Duration {
+    let ms = std::env::var("VOICE_G2P_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(5_000);
+    std::time::Duration::from_millis(ms.clamp(200, 120_000))
+}
+
+/// 程序能否解析到（绝对/相对路径直接查文件；裸名字查 PATH + PATHEXT）。
+fn program_exists(program: &str) -> bool {
+    let p = std::path::Path::new(program);
+    if program.contains('/') || program.contains('\\') {
+        return p.is_file();
+    }
+    let exts: Vec<String> = if cfg!(windows) {
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
+        std::iter::once(String::new())
+            .chain(pathext.split(';').map(|e| e.to_lowercase()))
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    for dir in std::env::split_paths(&path) {
+        for ext in &exts {
+            if dir.join(format!("{program}{ext}")).is_file() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 impl G2pBackend for SidecarBackend {
@@ -1195,6 +1328,109 @@ mod tests {
         assert!(!is_mixed("The client's report is ready."));
         assert!(!is_mixed("我们明天再查这个问题。"));
         assert!(!is_mixed("404 error")); // 纯英文/数字不算混说
+    }
+
+    /// 用本机 python 当假 sidecar（CI 上 windows-latest 自带 python）。
+    fn python_backend(script: &str) -> Option<SidecarBackend> {
+        if !program_exists("python") {
+            eprintln!("跳过：本机没有 python");
+            return None;
+        }
+        Some(SidecarBackend::new(
+            "python",
+            vec!["-c".into(), script.into()],
+            "test-sidecar",
+        ))
+    }
+
+    #[test]
+    fn sidecar_returns_one_line_per_sentence() {
+        let Some(b) = python_backend(
+            "import sys
+for line in sys.stdin:
+    print(line.strip().upper())
+",
+        ) else {
+            return;
+        };
+        let out = b.run(&["a b".into(), "c d".into()]).unwrap();
+        assert_eq!(out, vec!["A B".to_string(), "C D".to_string()]);
+    }
+
+    #[test]
+    fn sidecar_line_count_mismatch_is_hard_error() {
+        let Some(b) = python_backend(
+            "print('only one')
+",
+        ) else {
+            return;
+        };
+        let e = b.run(&["a".into(), "b".into()]).unwrap_err();
+        assert!(format!("{e:#}").contains("行数不匹配"), "{e:#}");
+    }
+
+    #[test]
+    fn sidecar_nonzero_exit_is_hard_error() {
+        let Some(b) = python_backend(
+            "import sys
+sys.stderr.write('boom')
+sys.exit(3)
+",
+        ) else {
+            return;
+        };
+        let e = b.run(&["a".into()]).unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(msg.contains("退出码"), "{msg}");
+        assert!(msg.contains("boom"), "{msg}");
+    }
+
+    /// 卡住的 sidecar 必须被超时杀掉并报错，而不是把调用方挂住。
+    #[test]
+    fn sidecar_timeout_kills_process_and_errors() {
+        let Some(b) = python_backend(
+            "import time
+time.sleep(30)
+",
+        ) else {
+            return;
+        };
+        let b = b.with_timeout(std::time::Duration::from_millis(300));
+        let t0 = std::time::Instant::now();
+        let e = b.run(&["a".into()]).unwrap_err();
+        let elapsed = t0.elapsed();
+        assert!(format!("{e:#}").contains("超时"), "{e:#}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "超时后应立刻返回，实际 {elapsed:?}"
+        );
+    }
+
+    /// 程序不存在：启动时（而不是每个请求）就失败。
+    #[test]
+    fn sidecar_missing_program_is_detected_up_front() {
+        let b = SidecarBackend::new("definitely-not-a-real-g2p-xyz", vec![], "test");
+        let e = b.check_program().unwrap_err();
+        assert!(format!("{e:#}").contains("找不到"), "{e:#}");
+    }
+
+    /// 连续失败 3 次后熔断：后续请求快速失败，不再每次白等超时。
+    #[test]
+    fn sidecar_opens_circuit_after_repeated_failures() {
+        let Some(b) = python_backend(
+            "import sys
+sys.exit(1)
+",
+        ) else {
+            return;
+        };
+        for _ in 0..3 {
+            let _ = b.run(&["a".into()]);
+        }
+        let t0 = std::time::Instant::now();
+        let e = b.run(&["a".into()]).unwrap_err();
+        assert!(format!("{e:#}").contains("熔断"), "{e:#}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]

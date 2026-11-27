@@ -7,10 +7,19 @@
 
 **P3 闭环 + P4 素材库（5 028 条：NCE 4 997 / IELTS prompt 10 / IELTS 听力真人 14 / Peppa 7）+ 音素级 GOP + 韵律分析均已上线并在真机验证。**
 评测侧的“参考音”已从 TTS 改为**真人原声优先**（D52）；真人素材有两条入库通道（有字幕 `--srt` / 无字幕 ASR 双引擎复核）。
-`crates` 11k+ 行 Rust，**174 个单测 + TTS 前端 golden 集成测试 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
+`crates` 11k+ 行 Rust，**175 个单测 + TTS 前端 golden 集成测试 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
 已由 `tools/check.ps1` 与 GitHub Actions 守住（D20/D45）。
 **优先级（2026-11-28 调整）**：分发（M6/L4、D29–D31、D33）**调低**——单用户本地跑通优先；
-下一步：评测精度（D53 SenseVoice 语言 / D52 基线残留重跑 / D13 中文拼音层）、N6/N7 readiness 自动评估 + plan 去重、M1/M2（ref_slow 批量、按音素组卷）。
+**已收口（2026-11-28 这一轮，可直接引用）**：
+- TTS 前端换代：开放词表 G2P → `phoneme_codepoints`（lexicon 降为覆盖层）+ 规则 LTS + 漏词门禁 `tts-regress`；
+  中文默认 **misaki-zh**（多音字 7/8 vs 1/8）+ 默认音色 **`zf_xiaoni`**；中英混说**默认拒答**
+- 评测精度：**D46** 同形异音按音频选变体（`gop.words[].variant`）；**D37** 功能词 `omitted` whisper 交叉复核
+  （`cross_check`）+ 补齐 `CONTRACTIONS` 20 条；**D53** `en`/`zh` 走语言锁定 SenseVoice（佩奇 CJK 30→0）；
+  **D52** `delta_comparable` 字段 + 基线审计（280 条里仅 5 条 Δ 可跨期比）
+- 工程：**D18** `tools/build.ps1`（DLL 占用不再 panic）；**D21** 前端 golden 进 CI（无需模型）
+下一步（按优先级）：**D13/M5 中文拼音层诊断** → **N6/N7/M8**（readiness、plan 去重、learner schema）→
+**M1/M2**（ref_slow 批量、按音素组卷）；**IELTS prompt 10 条补录真人示范**（补完 D52 才完全收口，需要人录音）。
+门禁一句话：`powershell -File tools/check.ps1`（fmt+clippy+175 单测+golden）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55`（需模型）。
 TTS 侧已收口：前端开放词表 G2P + misaki-zh + LTS + 漏词门禁（见 `docs/audit/tts-2026-11-27-frontend.md`）。
 
 ## 已实测的关键数字（别再猜）

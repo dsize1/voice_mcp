@@ -8,8 +8,9 @@ pub mod vad;
 pub use asr::{Asr, AsrEngine, AsrKind, Transcript, Word};
 pub use g2p_ipa::{CmuBackend, G2pBackend, KokoroTokenMap, PhoneSource, Phonemized, WordPhones};
 pub use tts::{
-    DEFAULT_VOICE, IELTS_WPM_DEFAULT, IELTS_WPM_MAX, IELTS_WPM_MIN, KOKORO_VOICES, SpeechTarget,
-    Synthesized, TTS_SLOW_WPM, TtsEngine, VoiceInfo, count_words, demo_targets,
+    DEFAULT_VOICE, DEFAULT_ZH_VOICE, IELTS_WPM_DEFAULT, IELTS_WPM_MAX, IELTS_WPM_MIN,
+    KOKORO_VOICES, SpeechTarget, Synthesized, TTS_SLOW_WPM, TtsEngine, VoiceInfo, count_words,
+    default_voice_for, demo_targets,
 };
 
 use anyhow::Result;

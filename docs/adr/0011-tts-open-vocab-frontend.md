@@ -24,6 +24,7 @@
 3. **中文默认走引擎 `lexicon-zh`**；可选 **misaki-zh sidecar**（`VOICE_G2P_CMD_ZH`）接管，
    让中文也走 `phoneme_codepoints`（实测 0.939 vs lexicon 0.903，音色 `zf_xiaoni`）。
    注意 Kokoro 中文音色差异很大：`zf_xiaobei` 在 codepoint 路径只有 0.515，示范音优先 `zf_xiaoni`。
+   **已定为产品默认**：`DEFAULT_ZH_VOICE = "zf_xiaoni"`，`default_voice_for(text)` 按语言自动选（英文 `am_michael`）。
    中英混说**默认拒答**：单音色下另一语言必然跑调，且分段拼接处实测有 0.2–0.5 s 停顿与
    +10…19 dB 电平跳变 → 产品入口不出已知降级的音频（契约见 ADR-0002“一段文本一种语言”）。
    内部实验放行：`VOICE_ALLOW_MIXED=1` 或 `voice-cli say --allow-mixed`（此时按语言分段合成后拼接，

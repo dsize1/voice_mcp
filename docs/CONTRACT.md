@@ -166,7 +166,7 @@ sessions/<date>/<hhmmss>_drill/takes/
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `text` | string | ✅ | 待合成文本。**一段文本只能一种语言**：中英混说会被**拒答**（`ok:false`，提示拆成两次调用） |
-| `voice` | string | | 音色名（`am_michael`/`am_fenrir`/`bf_emma`/`af_heart`/`zf_xiaobei`…）或 sid 数字，**默认 `am_michael`（男声）** |
+| `voice` | string | | 音色名（`am_michael`/`am_fenrir`/`bf_emma`/`af_heart`/`zf_xiaoni`…）或 sid 数字。**默认按语言**：英文 `am_michael`（男声）、中文 `zf_xiaoni`（实测 `zf_xiaobei` 在码点路径字符准确率仅 0.515，不要用） |
 | `speed` | number | | **显式倍率**（高级用法）；不传时按目标 **140 wpm**（雅思区间 130–160）自动校准。传了就以倍率为准 |
 | `play` | bool | | `true` 时由**服务端**播放（Pi 终端放不出声音，必须用这个） |
 | `slow_too` | bool | | 同时生成一对：`label=slow`(**110 wpm**) + `label=norm`(**140 wpm**)；显式 `speed` 时 slow 取 `speed×0.75` |

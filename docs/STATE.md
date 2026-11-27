@@ -16,7 +16,7 @@
 | 项 | 数值 |
 |---|---|
 | ASR SenseVoice int8 | 6 s 音频 82 ms（RTF 0.013）；81 s 音频分块后 2.3 s（RTF 0.028） |
-| TTS Kokoro 82M | RTF 0.21，24 kHz，54 音色；**默认 140 wpm**（130–160），slow=110；短文本/中文不按 WPM 校准；WPM 按**语音跨度**算（单位＝英文词＋中文字） |
+| TTS Kokoro 82M | 默认音色按语言：英文 `am_michael`、中文 **`zf_xiaoni`**（`zf_xiaobei` 实测 0.515，已弃用）；RTF 0.21，24 kHz，54 音色；**默认 140 wpm**（130–160），slow=110；短文本/中文不按 WPM 校准；WPM 按**语音跨度**算（单位＝英文词＋中文字） |
 | TTS 文本前端（2026-11-27） | 英文走**开放词表 G2P** → `phoneme_codepoints`（CMUdict + 形态规则 + 数字 + 规则 LTS 兜底），lexicon 降为**覆盖层**；未见词根走 LTS 并打 `lts_words` 标记；中文走 `lexicon-zh`；**中英混说默认拒答**；标识 `g2p-ipa/1.0[cmudict+overlay]+lexicon-zh` |
 | TTS 中文前端（2026-11-27） | 默认 `lexicon-zh`；可选 misaki-zh sidecar（`tools/g2p_misaki.py`，`pip install "misaki[zh]"`）。5 句实测字符准确率 misaki 0.939 vs lexicon 0.903（`zf_xiaoni`）；`zf_xiaobei` 在码点路径仅 0.515 → 中文示范音优先 `zf_xiaoni` |
 | TTS 回归门禁 | `cargo test`（170，含 G2P/LTS/sidecar）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl`（13 条：漏词=词数减少、`expect=reject_mixed`、`expect=lts`、wpm 带内断言） |

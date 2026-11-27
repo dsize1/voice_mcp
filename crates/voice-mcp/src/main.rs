@@ -303,7 +303,7 @@ impl VoiceServer {
     /// 中文讲解与英文示范必须分开调用（一段文本只允许一种语言）。
     #[tool(
         name = "synthesize",
-        description = "文字转语音（示范音，24kHz）。默认按雅思目标 140 wpm（130–160）；slow_too 生成 110 wpm 慢速 + 140 wpm 常速；显式 speed 时按倍率。"
+        description = "文字转语音（示范音，24kHz）。默认按雅思目标 140 wpm（130–160）；slow_too 生成 110 wpm 慢速 + 140 wpm 常速；显式 speed 时按倍率。音色默认按语言：英文 am_michael、中文 zf_xiaoni；中英混说会被拒答。"
     )]
     async fn synthesize(&self, Parameters(p): Parameters<SynthesizeParams>) -> Json<OkResult> {
         let app = self.app.clone();
@@ -313,10 +313,12 @@ impl VoiceServer {
             let scene = p.scene.clone().unwrap_or_else(|| "tts".into());
             let prefix = session.take_prefix(seq, &scene);
             let targets = voice_core::engine::demo_targets(p.slow_too, p.speed, app.cfg.tts_wpm);
+            // 未指定音色时按语言取默认：英文 am_michael、中文 zf_xiaoni
+            // （实测 zf_xiaobei 在码点路径只有 0.515，不能当默认）
             let voice = p
                 .voice
                 .clone()
-                .unwrap_or_else(|| voice_core::engine::DEFAULT_VOICE.to_string());
+                .unwrap_or_else(|| voice_core::engine::default_voice_for(&p.text).to_string());
 
             let files = app.with_engines(|e| {
                 let sid = e.tts.resolve_sid(&voice);

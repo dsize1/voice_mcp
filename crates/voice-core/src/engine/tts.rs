@@ -94,6 +94,25 @@ pub const TTS_SLOW_WPM: f32 = 110.0;
 /// 这是**默认值**，不是“唯一可用音色”：材料侧仍逐条验证，必要时回退 am_fenrir。
 pub const DEFAULT_VOICE: &str = "am_michael";
 
+/// 中文默认音色。
+///
+/// 为什么是 `zf_xiaoni` 而不是 `zf_xiaobei`：2026-11-28 实测 5 句中文
+/// （sense-voice 字符级准确率）——
+/// `zf_xiaoni` lexicon 0.903 / 码点路径 **0.939**；
+/// `zf_xiaobei` lexicon 0.775 / 码点路径 **0.515**。
+/// 同一批音素，换音色差 2 倍，所以中文示范音固定用 `zf_xiaoni`。
+pub const DEFAULT_ZH_VOICE: &str = "zf_xiaoni";
+
+/// 按文本语言挑默认音色（调用方没显式指定 voice 时用）：
+/// 含 CJK → 中文音色；否则英文音色。
+pub fn default_voice_for(text: &str) -> &'static str {
+    if g2p_ipa::contains_cjk(text) {
+        DEFAULT_ZH_VOICE
+    } else {
+        DEFAULT_VOICE
+    }
+}
+
 /// 一次合成请求的目标：显式倍率（高级用法）或目标 wpm（默认）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SpeechTarget {
@@ -883,6 +902,18 @@ mod tests {
         );
         assert_eq!(voice_lang(DEFAULT_VOICE), "en-us");
         assert_eq!(voice_gender(DEFAULT_VOICE), "male");
+    }
+
+    #[test]
+    fn default_voice_follows_text_language() {
+        assert_eq!(
+            default_voice_for("The client's report is ready."),
+            "am_michael"
+        );
+        assert_eq!(default_voice_for("这个报错必须今天修好。"), "zf_xiaoni");
+        // 混说按中文取（会被入口拒答，但这层不该 panic）
+        assert_eq!(default_voice_for("这个 API 报错了"), "zf_xiaoni");
+        assert!(KOKORO_VOICES.contains(&DEFAULT_ZH_VOICE));
     }
 
     #[test]

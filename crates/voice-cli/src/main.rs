@@ -946,7 +946,8 @@ fn say(
     let engines = Engines::load(cfg.clone())?;
     let tts = &engines.tts;
 
-    let voice_name = voice.unwrap_or(voice_core::engine::DEFAULT_VOICE);
+    // 未指定音色时按语言取默认：英文 am_michael / 中文 zf_xiaoni
+    let voice_name = voice.unwrap_or_else(|| voice_core::engine::default_voice_for(text));
     let sid = tts.resolve_sid(voice_name);
 
     let seq = session.next_seq()?;

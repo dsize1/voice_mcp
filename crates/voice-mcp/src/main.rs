@@ -350,6 +350,11 @@ impl VoiceServer {
                         "onset_gap_ms": s.onset_gap_ms.map(round3),
                         "gen_ms": round3(s.gen_ms as f32),
                         "rtf": round3((s.gen_ms / 1000.0 / s.duration as f64) as f32),
+                        // 实际送进模型的音素串：留证/复核用（中文路径为 null）
+                        "phonemes": s.phonemes.clone(),
+                        // LTS 猜读音的词：非空时建议人工复听（VOICE_LTS=0 可关掉兜底）
+                        "lts_words": s.lts_words.clone(),
+                        "frontend": e.tts.frontend_id(),
                     }));
                 }
                 Ok((sid, out))

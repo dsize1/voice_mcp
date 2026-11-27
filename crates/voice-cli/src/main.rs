@@ -1831,6 +1831,33 @@ fn tts_regress(
         }
         total += 1;
 
+        // 期望“必须走 LTS 兜底”的用例（生造词根：读得出来但读音是猜的）
+        if expect == "lts" {
+            let attempt = engines.tts.synthesize(&intended, sid, target);
+            match attempt {
+                Ok(s) => {
+                    let ok = !s.lts_words.is_empty();
+                    if !ok {
+                        failed += 1;
+                    }
+                    rows.push(serde_json::json!({
+                        "id": id, "ok": ok, "check": "lts", "text": intended,
+                        "lts_words": s.lts_words, "phonemes": s.phonemes,
+                        "duration": (s.duration * 1000.0).round() / 1000.0,
+                        "note": "未见词根必须走 LTS 并打标记（材料侧可据此人工复听）",
+                    }));
+                }
+                Err(e) => {
+                    failed += 1;
+                    rows.push(serde_json::json!({
+                        "id": id, "ok": false, "check": "lts", "text": intended,
+                        "error": format!("{e:#}"),
+                    }));
+                }
+            }
+            continue;
+        }
+
         // 期望“必须被拒绝”的用例：中英混说默认拒答（产品契约：一段文本一种语言）
         if expect == "reject_mixed" {
             let ph = engines.tts.phonemize_preview(&intended);
@@ -1988,9 +2015,15 @@ fn tts_regress(
         let wh_n = gate_words(&wh.text).len();
         let sv_n = gate_words(&sv.text).len();
         let count_ok = tolerance == "count" && wh_n >= ref_n && sv_n + 1 >= ref_n;
+        // D54 收口后的门禁：走 140 wpm 校准时，语速必须落在雅思带内（130–160）
+        let wpm_in_band = match s.target_wpm {
+            Some(_) => (130.0..=160.0).contains(&s.wpm),
+            None => true, // 固定倍率模式不判带内
+        };
         let ok = g2p_oov.is_empty()
             && s.phonemes.is_some()
             && must_missing.is_empty()
+            && wpm_in_band
             && (both_lost.is_empty() || count_ok);
         if !ok {
             failed += 1;
@@ -2017,6 +2050,8 @@ fn tts_regress(
             "speech_duration": (s.speech_duration * 1000.0).round() / 1000.0,
             "speed": s.speed,
             "phoneme_count": ipa.chars().filter(|c| *c != ' ').count(),
+            "lts_words": s.lts_words.clone(),
+            "wpm_in_band": wpm_in_band,
             "wpm": (s.wpm * 10.0).round() / 10.0,
         }));
     }

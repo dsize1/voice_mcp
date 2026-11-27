@@ -51,6 +51,9 @@ pub struct Config {
     /// 是否允许中英混说合成分段拼接（默认 false = 拒答；内部实验用）
     #[serde(default)]
     pub allow_mixed: bool,
+    /// 未见词根是否用规则 LTS 兜底读音（默认 true；`VOICE_LTS=0` 关闭 → 直接报 OOV）
+    #[serde(default = "default_true")]
+    pub allow_lts: bool,
 }
 
 impl Default for Config {
@@ -69,9 +72,14 @@ impl Default for Config {
             capture_sr: 48_000,
             mic: None,
             allow_mixed: false,
+            allow_lts: true,
             watch_dirs: default_watch_dirs(),
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_watch_dirs() -> Vec<PathBuf> {
@@ -123,6 +131,9 @@ impl Config {
         }
         if let Some(v) = std::env::var_os("VOICE_TTS_LEXICON") {
             cfg.tts_lexicon = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("VOICE_LTS") {
+            cfg.allow_lts = !matches!(v.trim(), "0" | "false" | "no");
         }
         if let Ok(v) = std::env::var("VOICE_ALLOW_MIXED") {
             cfg.allow_mixed = matches!(v.trim(), "1" | "true" | "yes");

@@ -42,6 +42,8 @@ pub enum PhoneSource {
     External,
     /// Kokoro 内置 lexicon（高优先级覆盖层：发音惯例与声学模型训练分布一致）
     Lexicon,
+    /// 规则 LTS 兜底（未见词根；读音是猜的，留证标记以便材料侧拒收）
+    Lts,
 }
 
 /// 逐词结果（留证 + 回归断言用）。
@@ -394,6 +396,7 @@ pub struct CmuBackend {
     lexicon: HashMap<String, String>,
     overlay: HashMap<String, String>,
     dict_path: PathBuf,
+    lts: LtsPolicy,
 }
 
 impl CmuBackend {
@@ -426,7 +429,14 @@ impl CmuBackend {
             lexicon,
             overlay: load_overlay(overlay_path),
             dict_path: cmu_path.to_path_buf(),
+            lts: LtsPolicy::Off,
         })
+    }
+
+    /// 启用/关闭规则 LTS 兜底（默认关闭：保持“查不到就报 OOV”的严格语义）。
+    pub fn with_lts(mut self, policy: LtsPolicy) -> Self {
+        self.lts = policy;
+        self
     }
 
     pub fn entries(&self) -> usize {
@@ -477,6 +487,40 @@ impl CmuBackend {
             return Some((ipa, PhoneSource::Morphology));
         }
         if let Some((base, suf)) = w.rsplit_once('\'') {
+            // 词根查不到时，若启用 LTS 就用规则读音拼后缀（Zorbly's → zorbly + z）
+            if self.lts == LtsPolicy::On
+                && self.base_ipa(base).is_none()
+                && let Some(base_lts) = lts_ipa(base)
+            {
+                let (head, tail) = match suf {
+                    "s" => {
+                        let last = base_lts.chars().last().unwrap_or(' ');
+                        let tail = if "sʃzʒʧʤ".contains(last) {
+                            "ɪz"
+                        } else if "ptkfθ".contains(last) {
+                            "s"
+                        } else {
+                            "z"
+                        };
+                        (base_lts.clone(), tail)
+                    }
+                    "ll" => (base_lts.clone(), "l"),
+                    "re" => (base_lts.clone(), "ɹ"),
+                    "ve" => (base_lts.clone(), "v"),
+                    "d" => (base_lts.clone(), "d"),
+                    "m" => (base_lts.clone(), "m"),
+                    "t" if base.ends_with('n') && base.len() > 1 => {
+                        let stem = &base[..base.len() - 1];
+                        let stem_ipa = self
+                            .base_ipa(stem)
+                            .or_else(|| lts_ipa(stem))
+                            .unwrap_or_else(|| base_lts.clone());
+                        (stem_ipa, "nt")
+                    }
+                    _ => return None,
+                };
+                return Some((format!("{head}{tail}"), PhoneSource::Lts));
+            }
             // n't 必须先把词尾 n 去掉再查（isn't → is），否则 base="isn" 查不到
             if suf == "t" && base.ends_with('n') && base.len() > 1 {
                 let stem = &base[..base.len() - 1];
@@ -503,6 +547,12 @@ impl CmuBackend {
                 _ => return None,
             };
             return Some((format!("{base_ipa}{tail}"), PhoneSource::Morphology));
+        }
+        // 最后兜底：规则 LTS（仅在启用时）
+        if self.lts == LtsPolicy::On
+            && let Some(ipa) = lts_ipa(&w)
+        {
+            return Some((ipa, PhoneSource::Lts));
         }
         None
     }
@@ -1434,6 +1484,35 @@ sys.exit(1)
     }
 
     #[test]
+    fn lts_reads_invented_names() {
+        for w in ["zorbly", "kaelin", "tamsin", "nvidia", "wifi", "brontë"] {
+            let ipa = lts_ipa(w).unwrap_or_else(|| panic!("{w} 应有读音"));
+            assert!(!ipa.is_empty(), "{w}");
+            assert!(ipa.contains('ˈ'), "{w} 应带主重音: {ipa}");
+            assert!(
+                ipa.chars().any(|c| "æɑɔɛɪʌəɹiuʊ".contains(c)),
+                "{w} 应有元音: {ipa}"
+            );
+        }
+        assert!(lts_ipa("123").is_none(), "纯数字不该走 LTS");
+        assert!(lts_ipa("").is_none());
+    }
+
+    #[test]
+    fn lts_ipa_chars_are_outside_nothing_weird() {
+        // LTS 只应产出 ASCII 字母与常见 IPA 字符（不出现大写 I/A/O 之外的可疑符号）
+        for w in ["zorbly", "quixotry", "xylophone"] {
+            let ipa = lts_ipa(w).unwrap();
+            for c in ipa.chars() {
+                assert!(
+                    c.is_ascii_lowercase() || "ˈɪɑɔɛæʌəɹʃʒʧʤŋθðʊiu".contains(c),
+                    "{w}: 异常字符 {c:?} in {ipa}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn cjk_is_detected_for_lexicon_path() {
         assert!(contains_cjk("你好 world"));
         assert!(!contains_cjk("hello world"));
@@ -1469,3 +1548,194 @@ sys.exit(1)
 // 2) sidecar（今天就能用，无需 Rust 依赖）
 //    环境变量 `VOICE_G2P_CMD='python -m misaki --ipa -'`（每行一句 → 每行一个
 //    IPA 串），`TtsEngine::load` 会优先采用它；失败直接报错，不退回闭集。
+
+// ================================================================ 规则 LTS（未见词根兜底）
+
+/// 规则型 letter-to-sound（LTS）：CMUdict 与形态规则都查不到时的**兜底读音**。
+///
+/// 定位：只为“读得出来”负责，不为“读得对”负责 —— 输出一定带
+/// [`PhoneSource::Lts`] 标记，`phonemes` 留证里也会写 `⟨lts:word⟩`，材料侧可选择拒收。
+/// 用 `VOICE_LTS=0`（或 `Config::allow_lts=false`）关掉，退回“直接报 OOV”。
+///
+/// 规则集刻意保持小：多字母组合优先，其次单字母，末尾 e 静音，双写合流，
+/// 首个元音前加主重音（Kokoro 对无重音串很敏感）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LtsPolicy {
+    Off,
+    On,
+}
+
+/// 多字母组合（按长度优先匹配）。顺序即优先级。
+const LTS_DIGRAPHS: &[(&str, &str)] = &[
+    ("tion", "ʃən"),
+    ("sion", "ʒən"),
+    ("ture", "ʧəɹ"),
+    ("ough", "O"),
+    ("eigh", "A"),
+    ("augh", "ɔ"),
+    ("igh", "I"),
+    ("dge", "ʤ"),
+    ("tch", "ʧ"),
+    ("sch", "sk"),
+    ("kn", "n"),
+    ("wr", "ɹ"),
+    ("wh", "w"),
+    ("ck", "k"),
+    ("ph", "f"),
+    ("sh", "ʃ"),
+    ("ch", "ʧ"),
+    ("th", "θ"),
+    ("ng", "ŋ"),
+    ("qu", "kw"),
+    ("oo", "u"),
+    ("ee", "i"),
+    ("ea", "i"),
+    ("ai", "A"),
+    ("ay", "A"),
+    ("oa", "O"),
+    ("ow", "O"),
+    ("ou", "W"),
+    ("oi", "Y"),
+    ("oy", "Y"),
+    ("au", "ɔ"),
+    ("aw", "ɔ"),
+    ("ew", "u"),
+    ("ie", "i"),
+    ("ue", "u"),
+    ("ui", "u"),
+    ("ei", "A"),
+    ("ey", "A"),
+    ("ar", "ɑɹ"),
+    ("or", "ɔɹ"),
+    ("er", "əɹ"),
+    ("ir", "əɹ"),
+    ("ur", "əɹ"),
+];
+
+const LTS_VOWELS: &[char] = &['a', 'e', 'i', 'o', 'u', 'y'];
+
+fn lts_single(c: char, prev: Option<char>, next: Option<char>) -> Option<&'static str> {
+    let front = |n: Option<char>| matches!(n, Some('e' | 'i' | 'y'));
+    Some(match c {
+        'a' => "æ",
+        'e' => "ɛ",
+        'i' => "ɪ",
+        'o' => "ɑ",
+        'u' => "ʌ",
+        'y' => {
+            if next.is_some() {
+                "ɪ"
+            } else {
+                "i"
+            }
+        }
+        'b' => "b",
+        'c' => {
+            if front(next) {
+                "s"
+            } else {
+                "k"
+            }
+        }
+        'd' => "d",
+        'f' => "f",
+        'g' => {
+            if front(next) {
+                "ʤ"
+            } else {
+                "ɡ"
+            }
+        }
+        'h' => "h",
+        'j' => "ʤ",
+        'k' => "k",
+        'l' => "l",
+        'm' => "m",
+        'n' => "n",
+        'p' => "p",
+        'q' => "k",
+        'r' => "ɹ",
+        's' => {
+            // 元音间 s 常浊化（rise/these）——只在两侧都是元音时
+            if prev.is_some_and(|p| LTS_VOWELS.contains(&p))
+                && next.is_some_and(|n| LTS_VOWELS.contains(&n))
+            {
+                "z"
+            } else {
+                "s"
+            }
+        }
+        't' => "t",
+        'v' => "v",
+        'w' => "w",
+        'x' => "ks",
+        'z' => "z",
+        _ => return None,
+    })
+}
+
+/// 未见词根 → 粗读音（IPA，含主重音）。字符里只要有一个字母就会给结果。
+pub fn lts_ipa(word: &str) -> Option<String> {
+    let w: Vec<char> = word
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect();
+    if w.is_empty() || w.len() > 40 {
+        return None;
+    }
+    let mut out = String::new();
+    let mut stressed = false;
+    let mut i = 0usize;
+    while i < w.len() {
+        let rest: String = w[i..].iter().collect();
+        // 末尾 e 静音（≥2 字母时）
+        if i == w.len() - 1 && w[i] == 'e' && w.len() > 2 {
+            break;
+        }
+        // 双写合流（bb/ll/ss…），元音双写交给 digraph 表
+        if i + 1 < w.len() && w[i] == w[i + 1] && !LTS_VOWELS.contains(&w[i]) {
+            i += 1;
+            continue;
+        }
+        // 多字母组合优先
+        let mut matched = false;
+        for (from, to) in LTS_DIGRAPHS {
+            if rest.starts_with(from) {
+                if !stressed
+                    && to
+                        .chars()
+                        .any(|c| LTS_VOWELS.contains(&c) || "æɑɔɛɪʌ".contains(c))
+                {
+                    out.push('ˈ');
+                    stressed = true;
+                }
+                out.push_str(to);
+                i += from.chars().count();
+                matched = true;
+                break;
+            }
+        }
+        if matched {
+            continue;
+        }
+        let prev = if i > 0 { Some(w[i - 1]) } else { None };
+        let next = w.get(i + 1).copied();
+        if let Some(ipa) = lts_single(w[i], prev, next) {
+            if !stressed && LTS_VOWELS.contains(&w[i]) {
+                out.push('ˈ');
+                stressed = true;
+            }
+            out.push_str(ipa);
+        }
+        i += 1;
+    }
+    if out.is_empty() {
+        return None;
+    }
+    if !stressed {
+        // 没有元音（如 "ng"）：补一个 schwa，避免 Kokoro 拿到纯辅音串
+        out.push('ə');
+    }
+    Some(out)
+}

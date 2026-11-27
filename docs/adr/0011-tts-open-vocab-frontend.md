@@ -46,8 +46,9 @@
 1. **`synthesize_at_wpm` 语速标定散布**：个别短句落到 96–190 wpm（越界）。
    新前端沿用 lexicon 的发音惯例后时长分布变化，使该问题更显性。
    **结论：“140 wpm” 这个承诺目前不可靠**，见 ADR-0008 D54；修法是单独一轮做标定。
-2. **生造专名**（`Zorbly's`）现在**报错**而不是静默丢词；要真读出来需要 LTS 兜底
-   （espeak-ng / piper_phonemize，`SidecarBackend` 已留口）。
+2. ~~生造专名报错~~ **已还（2026-11-27）**：加规则 LTS 兜底（`lts_ipa`），
+   读音**必带标记**（`lts_words`），材料侧可人工复听/拒收；`VOICE_LTS=0` 退回报错。见 D57。
+   若要对齐真人读音，仍需外部 LTS（espeak-ng / piper_phonemize，`SidecarBackend` 已就绪）。
 3. **中英混说（已改为默认拒答）**：检测到混说 → `bail!` 并提示拆成两次调用。
    回归用例改为 `expect=reject_mixed`（必须拒答，且英文段音素仍可用）。
    要真正支持混说需 misaki-zh 接管中文（两段走同一条 `phoneme_codepoints` 链路），见 D56。

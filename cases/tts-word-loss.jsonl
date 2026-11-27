@@ -8,6 +8,6 @@
 {"id": "wl08", "text": "He's already sent the invoice, so we'll start on Monday.", "note": "对照：代词缩略（旧路径也能过）"}
 {"id": "wl09", "text": "They did not check the backup, so the release did not stop.", "note": "对照：无缩略"}
 {"id": "wl10", "text": "It's not finished, and they aren't ready.", "note": "对照：it's/aren't（词界连接的已知弱点：允许 ASR 重写词界，但词数不得减少）", "tolerance": "count"}
-{"id": "wl11", "text": "Zorbly's report is late.", "expect": "oov", "note": "生造专名：必须报 OOV，不能静默合成"}
+{"id": "wl11", "text": "Zorbly's report is late.", "note": "生造专名：必须走规则 LTS 并打 lts_words 标记（VOICE_LTS=0 时退回 OOV 报错）", "expect": "lts"}
 {"id": "mx01", "text": "这个 API 返回 404 error，我们明天再查。", "lang": "en", "note": "中英混说：产品入口必须拒答（单音色必然降调、拼接点 0.2-0.5s 停顿）；英文段音素仍需可用", "expect": "reject_mixed"}
 {"id": "mx02", "text": "Sarah's laptop 上那个 build 失败了。", "lang": "en", "note": "中英混说：产品入口必须拒答（单音色必然降调、拼接点 0.2-0.5s 停顿）；英文段音素仍需可用", "expect": "reject_mixed"}

@@ -14,7 +14,9 @@ use sherpa_onnx::{
 };
 
 use crate::config::Config;
-use crate::engine::g2p_ipa::{self, CmuBackend, G2pBackend, KokoroTokenMap, SidecarBackend};
+use crate::engine::g2p_ipa::{
+    self, CmuBackend, G2pBackend, KokoroTokenMap, LtsPolicy, SidecarBackend,
+};
 
 /// Kokoro v1.0 的 54 个音色（顺序与 voices.bin 一致，按 hexgrad 官方 voices 目录字典序）。
 pub const KOKORO_VOICES: [&str; 54] = [
@@ -149,6 +151,10 @@ pub struct Synthesized {
     /// 留证与回归断言用：**任何缺词都能在这里看出来**。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phonemes: Option<String>,
+    /// 用规则 LTS 猜读音的词（空数组 = 全部词都有可靠依据）。
+    /// 材料侧可据此决定是否人工复听（`VOICE_LTS=0` 可强制关闭，退回报错）。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lts_words: Vec<String>,
     pub gen_ms: f64,
 }
 
@@ -252,7 +258,15 @@ impl TtsEngine {
             .collect();
         let g2p: Box<dyn G2pBackend> = match SidecarBackend::from_env() {
             Some(side) => Box::new(side),
-            None => Box::new(CmuBackend::load(&cmu_path, Some(&overlay), &en_lexicons)?),
+            None => Box::new(
+                CmuBackend::load(&cmu_path, Some(&overlay), &en_lexicons)?.with_lts(
+                    if cfg.allow_lts {
+                        LtsPolicy::On
+                    } else {
+                        LtsPolicy::Off
+                    },
+                ),
+            ),
         };
         let tokens = KokoroTokenMap::load(&tokens)?;
         Ok(Self {
@@ -325,6 +339,7 @@ impl TtsEngine {
         let mut samples: Vec<f32> = Vec::new();
         let mut gen_ms = 0.0f64;
         let mut phonemes: Vec<String> = Vec::new();
+        let mut lts_words: Vec<String> = Vec::new();
         let mut en_text_seen = false;
 
         for (is_cjk, seg) in &segs {
@@ -336,7 +351,12 @@ impl TtsEngine {
                 samples.extend(part);
                 gen_ms += ms;
             } else {
-                let (cps, ipa) = self.english_codepoints(seg)?;
+                let (cps, ipa, lts) = self.english_codepoints(seg)?;
+                for w in lts {
+                    if !lts_words.contains(&w) {
+                        lts_words.push(w);
+                    }
+                }
                 en_text_seen = true;
                 let (part, ms) = self.synth_raw(seg, sid, speed, Some(cps))?;
                 samples.extend(part);
@@ -393,6 +413,7 @@ impl TtsEngine {
             } else {
                 None
             },
+            lts_words,
             gen_ms,
         })
     }
@@ -420,8 +441,8 @@ impl TtsEngine {
         Ok((audio.samples().to_vec(), gen_ms))
     }
 
-    /// 英文段 → 逐句音素码点。**不查引擎词表**；覆盖不了直接报错。
-    fn english_codepoints(&self, text: &str) -> Result<(Vec<Vec<i32>>, String)> {
+    /// 英文段 → 逐句音素码点 + LTS 兜底词（证据）。**不查引擎词表**；覆盖不了直接报错。
+    fn english_codepoints(&self, text: &str) -> Result<(Vec<Vec<i32>>, String, Vec<String>)> {
         let ph = self.g2p.phonemize(text);
         if !ph.oov.is_empty() {
             bail!(
@@ -435,7 +456,13 @@ impl TtsEngine {
             bail!("G2P({}) 产出空音素，拒绝合成", self.g2p.name());
         }
         let cps = self.tokens.encode_sentences(&ph.sentence_ipa)?;
-        Ok((cps, ph.ipa()))
+        let lts: Vec<String> = ph
+            .words
+            .iter()
+            .filter(|w| w.source == g2p_ipa::PhoneSource::Lts)
+            .map(|w| w.word.clone())
+            .collect();
+        Ok((cps, ph.ipa(), lts))
     }
 
     /// 文本前端预览（留证 / 回归断言用，不合成音频）。

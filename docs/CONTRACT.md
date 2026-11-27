@@ -176,8 +176,10 @@ sessions/<date>/<hhmmss>_drill/takes/
 项目 lexicon 只作**高优先级覆盖层**），音素经 `phoneme_codepoints` 注入，**不再查引擎 closed lexicon**
 （sherpa-onnx 2.0.x 已移除 espeak-ng，闭集词表会静默丢词，见 `docs/audit/tts-2026-11-27-frontend.md`）。
 
-- 覆盖不了（未见词根、生造专名）→ `ok:false` 并列出词，**不输出缺词音频**；
-  给该词补发音：`$VOICE_HOME/tts-lexicon.txt` 写 `word 音素…`。
+- 未见词根/生造专名：默认走**规则 LTS** 兜底读音（能读，但读音是猜的），并在
+  `files[].lts_words` 里列出这些词 —— 材料侧应据此人工复听或拒收；
+  `VOICE_LTS=0` 可关闭兜底（退回 `ok:false` + 列出缺词）。给某词指定准确发音：
+  `$VOICE_HOME/tts-lexicon.txt` 写 `word 音素…`。
 - 中文走 `lexicon-zh`（原路径）；中英混说**默认拒答**（单音色必然降调 + 拼接点停顿），
   内部实验：`VOICE_ALLOW_MIXED=1` / `voice-cli say --allow-mixed`。
 - 前端标识（审计/留证用）：`g2p-ipa/1.0[cmudict+overlay]+lexicon-zh`；`tts-audit` 每行带 `frontend` 字段，
@@ -185,7 +187,8 @@ sessions/<date>/<hhmmss>_drill/takes/
 
 返回 `detail`：`voice` / `sid` / `sample_rate`(24000) /
 `files[]{label,speed,wpm,target_wpm,path,duration,speech_duration,onset_gap_ms,gen_ms,rtf}` / `session` / `prefix` /
-`phonemes`（本次实际送进模型的音素串，留证/回归用；中文路径为 `null`）
+`files[].phonemes`（实际送进模型的音素串，留证/回归用；中文路径为 `null`）/
+`files[].lts_words`（用 LTS 猜读音的词，非空建议人工复听）/ `files[].frontend`（前端标识）
 
 - `wpm` 按**语音跨度**算（去掉首尾静音），不再按文件总时长（后者系统性低估，目标 140 会量到 128）；
   单位是“英文词 + 中文字”（混说句只数 ASCII 词会把 20.7 当 146，已修）

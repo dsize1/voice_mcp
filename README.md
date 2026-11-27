@@ -161,10 +161,16 @@ powershell -ExecutionPolicy Bypass -File tools/fetch_models.ps1 -Sets vad,kokoro
 
 ### 3. 构建
 
-```bash
-cargo build --release
-cp .cache/sherpa/lib/*.dll target/release/      # DLL 需与 exe 同目录
-./tools/check.ps1                               # 门禁：fmt + clippy -D warnings + test
+```powershell
+# 推荐：包装脚本会先检测"进程占用 DLL"（否则 build.rs 会 panic os error 32），
+# 构建后幂等补 .cache/sherpa/lib/*.dll 到输出目录，并校验产物
+powershell -ExecutionPolicy Bypass -File tools/build.ps1
+
+# MCP 正在运行、又不能停（例如正在用）：构建到 %TEMP%，产品不受影响
+powershell -ExecutionPolicy Bypass -File tools/build.ps1 -AltTarget
+
+# 门禁：fmt + clippy -D warnings + test（含 TTS 前端 golden 回归，无需模型）
+powershell -ExecutionPolicy Bypass -File tools/check.ps1
 ```
 
 产物：

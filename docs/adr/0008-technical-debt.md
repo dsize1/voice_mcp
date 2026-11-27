@@ -62,7 +62,7 @@
 | D56 | **中英混说音质**：分段合成后拼接，单音色下另一语言口音不纯 | 2026-11-27 听测 | S3 | 混说句的实际可用性（英语教学材料不受影响） | **已缓解（2026-11-27 深夜）**：①产品入口默认拒答混说；②**misaki-zh 接入验证完成**（`tools/g2p_misaki.py` + `VOICE_G2P_CMD_ZH`，中文走 `phoneme_codepoints`，与英文同一链路），中文 5 句实测字符级准确率 **misaki 0.939 vs lexicon-zh 0.903**（vf_xiaoni）；③顺带测出**音色差异极大**：同一批句子 `zf_xiaobei` 的 codepoint 路径只有 **0.515**，`zf_xiaoni` 0.939 → 中文示范音应优先 `zf_xiaoni`。残留：混说的双语音色问题（Kokoro 无双语 voice）仍需换声学模型或做音色拼接 |
 | D57 | **未见词根的读音（LTS）**：CMUdict/形态规则都查不到的生造专名、品牌名、人名（`Zorbly's`、`Nvidia`）此前直接 `ok:false`，等于“功能残缺” | 2026-11-27 前端改造复盘 | S2 | 任何含未见专名的句子 | **已还（2026-11-27）**：新增规则 LTS（多字母组合→单字母→末尾 e 静音→双写合流→首元音重音），**必打标记**（`PhoneSource::Lts` / `Synthesized.lts_words` / MCP `lts_words` / `tts-regress` 的 `expect=lts` 用例），材料侧可据此人工复听或拒收；`VOICE_LTS=0` 可退回“直接报 OOV”。局限：只为“读得出来”负责，不为“读得对”负责（重音/元音质量不如 CMUdict） |
 | D58 | **字符级门禁对多音字是盲的**：`tts-regress`/`tts-audit` 比的是 ASR 回读的**汉字**，ASR 语言模型会把错读音“纠正”成正确的字（实测 银行 xíng 也回读成「银行」）→ 多音字读错抓不到 | 2026-11-28 多音字 A/B | S2 | 中文材料正确性 | **搁置（2026-11-28 决定）**：当前风险已由「misaki-zh 默认前端」+ 人耳抽样覆盖，暂不投入。下次动中文前端/换音色/换声学模型前必须补：把“多音字最小对”（银行/重庆/长城/音乐/空调/便宜/行长/还钱）在语料里存 `expect_phonemes`，`tts-regress` 加一条**音素级**断言分支（比音素串，不比汉字） |
-
+| D59 | **中文默认 G2P 依赖 Python sidecar，与 L6「100% Rust 运行时」冲突**：2026-11-28 起中文默认走 `tools/g2p_misaki.py`（misaki 0.7.4 + pypinyin + jieba + cn2an），默认路径因此需要一个 python 解释器，且每次中文合成 +~0.7 s | 2026-11-28 多音字 A/B 后设为默认 | S2 | 分发（M6/D29）、离线部署、CI；纯 Rust 承诺 | **未偿还**：缓解已有——`VOICE_G2P_CMD_ZH=off` 回退 `lexicon-zh`、sidecar 失败自动回退、D55 超时/熔断。**做 M6 分发之前必须二选一**：① 把 misaki-zh 逻辑移植 Rust（`jieba-rs` + `pinyin` crate + 自写数字/变调），② 或把 sidecar 作为可选件随包分发并明确降级行为（`phonemes` 里 `⟨zh⟩` 前缀可判别来源） |
 ## 三、工程韧性
 
 | ID | 欠债 | 证据 | 级别 | 触发偿付条件 | 预估 |
@@ -70,11 +70,11 @@
 | D15 | 全局 `Mutex<Option<Engines>>` 在 ASR/TTS 期间持锁，**并发调用串行化** | `voice-mcp/src/main.rs` 的 `with_engines` | S2 | 出现第二个并发调用方（HTTP 模式/热键 daemon） | 0.5d：拆成 per-engine 锁 |
 | D16 | 无**取消/中断**：`record` 阻塞最长 30 s、`play` 阻塞到播完，都只能靠客户端超时兜底 | – | S2 | 用户抱怨"卡住没法停" | 1d：`record` 改流式 + 支持 abort |
 | D17 | 引擎加载**失败不缓存**：每次调用都会重试并重新付出加载代价（whisper 1.6 s） | `With_engines` 只缓存成功 | S3 | 出现一次引擎加载失败 | 0.5d |
-| D18 | 原生 DLL 需**手工** `cp .cache/sherpa/lib/*.dll target/release/`，忘掉就启动即崩（Windows loader 报错，没有友好提示） | README 快速开始第 3 步 | S2 | 第二次有人在这台机器上构建 | 0.5d：`build.rs` 或 cargo xtask 自动复制 |
+| D18 | 原生 DLL 需**手工** `cp .cache/sherpa/lib/*.dll target/release/`，忘掉就启动即崩；且 MCP 进程占用 DLL 时 `cargo build` 直接 panic（os error 32，报错像编译器错误） | 2026-11-27 实测两次（本轮改 TTS 时被咬） | **已还（2026-11-28）**：新增 `tools/build.ps1`——① 先检测 `voice-mcp`/`voice-cli` 进程并给出「先停进程 / 或用 -AltTarget」两条明确路径（退出码 2）；② `-AltTarget` 自动切到 `%TEMP%` target + 临时 lib 副本，**不动运行中的产品进程**；③ 构建后幂等补 3 个 DLL 并校验产物大小/时间。README 构建段同步 |
 | D19 | 无 `rust-toolchain.toml`、无 MSRV 声明 | **已还**：`rust-toolchain.toml`（stable + rustfmt/clippy）+ `Cargo.toml` `rust-version = "1.99"`（实测版本；edition 2024 理论下限 1.85 未验证） | ~~S3~~ ✅已还 | – | – |
 | D20 | 无 CI：`cargo test`/`clippy`/`fmt` 都没有门禁 | **已还（2026-11-25）**：`tools/check.ps1` + `.github/workflows/ci.yml`；GitHub Actions 在 `windows-latest` 上绿两次（`530e668` 2026-11-24、`3cf8736` 2026-11-25，run 45643953511），148 单测 + clippy `-D warnings` + fmt 全过。残留：CI 里没有音频 fixture（另记 D21） | ~~S2~~ ✅已还 | – | – |
 | D45 | **没有门禁导致 HEAD 编译失败无人发现**：`{peak_dbfs:.1f}` 在 `4f57a36` 引入后陪着 3 个提交 | `cargo build --release` 报 `unknown format trait f` | ~~S1~~ ✅已还 | – | – |
-| D21 | 回归用例 | **部分偿还**：`cases/*.json` 只存断言（音频留本机，`VOICE_CASES_DIR` 指过去），`voice-cli cases` 一条命令跑全部；已覆盖 16k/48k/TTS/自由说/漏词 5 个场景。仍缺：没有**合成** fixture（正弦/噪声），CI 里无法无音频跑 decode/flow | S2 | 接 CI 前 | 2h |
+| D21 | 回归用例 | **部分偿还（2026-11-28 补）**：新增 `crates/voice-core/tests/tts_frontend_golden.rs` —— 用**随仓库提交的 66 条 mini CMUdict** + `cases/tts-word-loss.phonemes.jsonl` golden，在 CI（无任何模型/ASR）就能抓住“某词丢了音素”（实测人为删掉 `client's` 的音素会立刻红）。原始说明：`cases/*.json` 只存断言（音频留本机，`VOICE_CASES_DIR` 指过去），`voice-cli cases` 一条命令跑全部；已覆盖 16k/48k/TTS/自由说/漏词 5 个场景。仍缺：没有**合成** fixture（正弦/噪声），CI 里无法无音频跑 decode/flow | S2 | 接 CI 前 | 2h |
 | D22 | `assess` 的 MCP 版与 CLI `assess_cmd` **逻辑重复**，两处维护 | 两个文件各 ~80 行 | S3 | 参数再变一次时 | 2h：抽到 `voice-core::pipeline` |
 | D23 | `spike` crate 在 workspace 默认成员里，`cargo build --release` 会编译 8 个二进制 | 曾提交；已用 `default-members` 修复 | ~~S3~~ ✅已还 | – | – |
 | D24 | `OkResult.detail: Option<Value>` 丢类型，输出无 schema 约束（只能在文档里写契约） | – | S3 | 想用 schema 做自动校验/生成客户端时 | 1d |

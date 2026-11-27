@@ -1,0 +1,66 @@
+again AH0 G EH1 N
+already AO0 L R EH1 D IY0
+and AH0 N D
+apple AE1 P AH0 L
+apple's AE1 P AH0 L Z
+are AA1 R
+aren't AA1 R AH0 N T
+backup B AE1 K AH2 P
+be B IY1
+book B UH1 K
+but B AH1 T
+cancelled K AE1 N S AH0 L D
+check CH EH1 K
+client K L AY1 AH0 N T
+client's K L AY1 AH0 N T S
+desk D EH1 S K
+did D IH1 D
+do D UW1
+fell F EH1 L
+file F AY1 L
+finished F IH1 N IH0 SH T
+friday F R AY1 D IY0
+going G OW1 IH0 NG
+he HH IY1
+he's HH IY1 Z
+invoice IH1 N V OY0 S
+is IH1 Z
+isn't IH1 Z AH0 N T
+it IH1 T
+it's IH1 T S
+laptop L AE1 P T AA2 P
+last L AE1 S T
+late L EY1 T
+log L AO1 G
+meeting M IY1 T IH0 NG
+monday M AH1 N D IY0
+not N AA1 T
+on AA1 N
+ready R EH1 D IY0
+release R IY0 L IY1 S
+report R IY0 P AO1 R T
+sarah S EH1 R AH0
+sarah's S EH1 R AH0 Z
+saw S AO1
+send S EH1 N D
+sent S EH1 N T
+so S OW1
+start S T AA1 R T
+stock S T AA1 K
+stop S T AA1 P
+teacher T IY1 CH ER0
+teacher's T IY1 CH ER0 Z
+that DH AE1 T
+the DH AH0
+they DH EY1
+today T AH0 D EY1
+today's T AH0 D EY1 Z
+tomorrow T AH0 M AA1 R OW2
+was W AA1 Z
+we W IY1
+we'll W IY1 L
+what W AH1 T
+what's W AH1 T S
+where W EH1 R
+where's W EH1 R Z
+working W ER1 K IH0 NG

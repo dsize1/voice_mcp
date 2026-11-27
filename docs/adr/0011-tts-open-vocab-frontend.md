@@ -21,8 +21,11 @@
    覆盖不了就 `bail!`（宁可失败，不出缺词音频）。
 2. **引擎 lexicon 降为高优先级覆盖层**：`overlay(tts-lexicon.txt)` > `lexicon-us-en` > `lexicon-gb-en` > CMUdict > 形态规则 > 数字 > 报错。
    命中 lexicon 保音质（与声学模型训练分布一致），未命中由离线规则与 CMUdict 保覆盖。
-3. **中文默认走引擎 `lexicon-zh`**；可选 **misaki-zh sidecar**（`VOICE_G2P_CMD_ZH`）接管，
-   让中文也走 `phoneme_codepoints`（实测 0.939 vs lexicon 0.903，音色 `zf_xiaoni`）。
+3. **中文默认走 misaki-zh sidecar**（`tools/g2p_misaki.py`，自动探测；`VOICE_G2P_CMD_ZH=off` 可关），
+   中文因此也走 `phoneme_codepoints`。理由：`lexicon-zh` 是**逐字**查表，多音字错 7/8
+   （银行 xíng / 重庆 zhòng / 长城 zhǎng / 音乐 lè / 空调 diào / 便宜 biàn / 行长 xíng），
+   misaki 按 jieba 分词定音只错 1（还钱 huán）；普通句两者 ASR 字符准确率均 1.000（speed 1.0）。
+   失败/超时/空行自动回退 `lexicon-zh`（字级词表，回退不丢字）。代价：每次中文合成 +~0.7 s。
    注意 Kokoro 中文音色差异很大：`zf_xiaobei` 在 codepoint 路径只有 0.515，示范音优先 `zf_xiaoni`。
    **已定为产品默认**：`DEFAULT_ZH_VOICE = "zf_xiaoni"`，`default_voice_for(text)` 按语言自动选（英文 `am_michael`）。
    中英混说**默认拒答**：单音色下另一语言必然跑调，且分段拼接处实测有 0.2–0.5 s 停顿与

@@ -180,10 +180,14 @@ sessions/<date>/<hhmmss>_drill/takes/
   `files[].lts_words` 里列出这些词 —— 材料侧应据此人工复听或拒收；
   `VOICE_LTS=0` 可关闭兜底（退回 `ok:false` + 列出缺词）。给某词指定准确发音：
   `$VOICE_HOME/tts-lexicon.txt` 写 `word 音素…`。
-- 中文默认走 `lexicon-zh`；可选 misaki-zh sidecar（`VOICE_G2P_CMD_ZH=python <repo>/tools/g2p_misaki.py`，
-  需 `pip install "misaki[zh]"`，首次调用要加载 jieba，建议 `VOICE_G2P_TIMEOUT_MS=8000`）——
-  此时中文也走 `phoneme_codepoints`，`files[].phonemes` 以 `⟨zh⟩` 前缀区分来源；
-  失败/空行自动回退 `lexicon-zh`。**中文示范音建议 `zf_xiaoni`**（`zf_xiaobei` 在码点路径明显劣化）。
+- **中文默认走 misaki-zh**（`tools/g2p_misaki.py` sidecar，`pip install "misaki[zh]"` 一次性安装）：
+  按 jieba 分词 + pypinyin 定音，多音字（银行/重庆/长城/音乐/空调/便宜/行长）比 `lexicon-zh` 的逐字查表准确得多。
+  中文因此也走 `phoneme_codepoints`，`files[].phonemes` 带 `⟨zh⟩` 前缀区分来源。
+  - 自动探测：`<exe>/../../tools/g2p_misaki.py`（仓库 `target/release`）或编译期 manifest 目录；找脚本 + python 才启用
+  - 显式覆盖：`VOICE_G2P_CMD_ZH="python <path>"`；**关闭**：`VOICE_G2P_CMD_ZH=off` → 回退 `lexicon-zh`
+  - sidecar 失败/超时/空行 → **自动回退 `lexicon-zh`**（字级词表，回退不丢字）
+  - 代价：每次中文合成多 ~0.7 s（python 启动 + misaki/jieba 加载）；超时默认 5 s，慢机器可 `VOICE_G2P_TIMEOUT_MS=8000`
+  - **中文示范音固定 `zf_xiaoni`**（`zf_xiaobei` 在码点路径字符准确率仅 0.515）
   中英混说**默认拒答**（单音色必然降调 + 拼接点停顿），
   内部实验：`VOICE_ALLOW_MIXED=1` / `voice-cli say --allow-mixed`。
 - 前端标识（审计/留证用）：`g2p-ipa/1.0[cmudict+overlay]+lexicon-zh`；`tts-audit` 每行带 `frontend` 字段，

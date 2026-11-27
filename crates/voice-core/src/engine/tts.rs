@@ -291,20 +291,10 @@ impl TtsEngine {
             ),
         };
         let tokens = KokoroTokenMap::load(&tokens)?;
-        // 可选中文前端：misaki-zh（Python sidecar）。默认不启用 —— 保持“零外部依赖”，
-        // 也避免 MCP 长驻进程带上一个 Python 子进程（D55 里已修好超时/熔断）。
-        let zh_g2p = match std::env::var("VOICE_G2P_CMD_ZH") {
-            Ok(cmd) if !cmd.trim().is_empty() => {
-                let mut it = cmd.split_whitespace();
-                let prog = it.next().unwrap_or_default().to_string();
-                Some(SidecarBackend::new(
-                    prog,
-                    it.map(str::to_string).collect(),
-                    "misaki-zh",
-                ))
-            }
-            _ => None,
-        };
+        // 中文前端：默认启用 misaki-zh（Python sidecar）—— 它按词定音，
+        // 多音字（银行/重庆/长城/音乐/空调/便宜）比 `lexicon-zh` 的逐字查表准得多；
+        // 找不到脚本 / 没有 python / 或显式关闭时回退 `lexicon-zh`（见 `zh_g2p_backend`）。
+        let zh_g2p = zh_g2p_backend();
         Ok(Self {
             tts,
             sample_rate,
@@ -671,6 +661,51 @@ impl TtsEngine {
     }
 }
 
+/// 中文 G2P 后端解析（默认 misaki-zh）：
+///
+/// 1. `VOICE_G2P_CMD_ZH` 显式指定（`off`/`0`/`none` = 关闭，回退 `lexicon-zh`）；
+/// 2. 否则自动找 `<repo>/tools/g2p_misaki.py`（相对可执行文件向上两级），
+///    并挑一个可用的 python（`python` → `python3` → `py`）；
+/// 3. 都找不到 → `None`，中文走引擎 `lexicon-zh`（零外部依赖的兜底）。
+fn zh_g2p_backend() -> Option<SidecarBackend> {
+    if let Ok(cmd) = std::env::var("VOICE_G2P_CMD_ZH") {
+        let cmd = cmd.trim().to_string();
+        if matches!(cmd.to_lowercase().as_str(), "off" | "0" | "none" | "false") {
+            return None;
+        }
+        if !cmd.is_empty() {
+            let mut it = cmd.split_whitespace();
+            let prog = it.next()?.to_string();
+            return Some(SidecarBackend::new(
+                prog,
+                it.map(str::to_string).collect(),
+                "misaki-zh",
+            ));
+        }
+    }
+    // 自动探测：<exe>/../../tools/g2p_misaki.py（target/release → 仓库根）
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    // 候选：① 可执行文件向上两级（target/release → 仓库根，发布路径）
+    //        ② 编译期 manifest 目录（`crates/voice-core` → 仓库根；开发/临时 target 用）
+    let mut candidates: Vec<std::path::PathBuf> =
+        ["../../tools/g2p_misaki.py", "../tools/g2p_misaki.py"]
+            .iter()
+            .map(|rel| dir.join(rel))
+            .collect();
+    candidates
+        .push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/g2p_misaki.py"));
+    let script = candidates.into_iter().find(|p| p.is_file())?;
+    let python = ["python", "python3", "py"]
+        .into_iter()
+        .find(|p| g2p_ipa::program_exists(p))?;
+    Some(SidecarBackend::new(
+        python,
+        vec![script.to_string_lossy().to_string()],
+        "misaki-zh",
+    ))
+}
+
 /// 读 lexicon 的词条（只取每行第一个字段，去掉 `(2)` 变体后缀）。
 fn parse_lexicon_words(path: &Path) -> HashSet<String> {
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -914,6 +949,18 @@ mod tests {
         // 混说按中文取（会被入口拒答，但这层不该 panic）
         assert_eq!(default_voice_for("这个 API 报错了"), "zf_xiaoni");
         assert!(KOKORO_VOICES.contains(&DEFAULT_ZH_VOICE));
+    }
+
+    #[test]
+    fn zh_g2p_backend_honors_explicit_off_and_cmd() {
+        // 显式关闭 → None（回退 lexicon-zh）
+        unsafe { std::env::set_var("VOICE_G2P_CMD_ZH", "off") };
+        assert!(zh_g2p_backend().is_none());
+        // 显式命令 → 用之（不校验程序是否可执行，交给运行期 check_program）
+        unsafe { std::env::set_var("VOICE_G2P_CMD_ZH", "python foo.py") };
+        let b = zh_g2p_backend().expect("应解析出 sidecar");
+        assert_eq!(b.name(), "misaki-zh");
+        unsafe { std::env::remove_var("VOICE_G2P_CMD_ZH") };
     }
 
     #[test]

@@ -873,7 +873,7 @@ fn default_timeout() -> std::time::Duration {
 }
 
 /// 程序能否解析到（绝对/相对路径直接查文件；裸名字查 PATH + PATHEXT）。
-fn program_exists(program: &str) -> bool {
+pub(crate) fn program_exists(program: &str) -> bool {
     let p = std::path::Path::new(program);
     if program.contains('/') || program.contains('\\') {
         return p.is_file();

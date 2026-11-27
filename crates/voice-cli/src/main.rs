@@ -1725,13 +1725,16 @@ fn gate_words(text: &str) -> Vec<String> {
         if w.is_empty() {
             continue;
         }
-        // 数字按读法展开后再比：G2P 会把 `404` 读成 "four hundred four"，
-        // 不展开会把正常音频误判成漏词。
-        if w.chars().all(|c| c.is_ascii_digit())
-            && let Some(words) = voice_core::engine::g2p_ipa::number_to_words(&w)
-        {
-            out.extend(words.split_whitespace().map(str::to_string));
-            continue;
+        // 数字有多种合理读法（基数 / 年份成对 / 状态码逐位）。
+        // 用前缀 \u{1} 标记"这是一个数字的多候选读法"，比对时命中任一条即算听到。
+        if w.chars().all(|c| c.is_ascii_digit()) {
+            let cands = voice_core::engine::g2p_ipa::number_candidates(&w);
+            if !cands.is_empty() {
+                for c in cands {
+                    out.push(format!("\u{1}{c}"));
+                }
+                continue;
+            }
         }
         out.push(w);
     }
@@ -1761,13 +1764,30 @@ fn similar(a: &str, b: &str) -> bool {
     a == b || (a.len() >= 3 && lev_ratio(a, b) >= 0.8)
 }
 
-/// 参考文本里“在回读中找不到对应词”的词。
+/// 参考文本里“在回读中找不到对应词”的词（数字按候选读法匹配）。
 fn lost_words(reference: &str, heard: &str) -> Vec<String> {
     let want = gate_words(reference);
     let got = gate_words(heard);
-    want.into_iter()
-        .filter(|w| !got.iter().any(|g| similar(w, g)))
-        .collect()
+    let plain: Vec<&String> = got.iter().filter(|w| !w.starts_with('\u{1}')).collect();
+    let mut lost: Vec<String> = Vec::new();
+    for w in &want {
+        if let Some(cands) = w.strip_prefix('\u{1}') {
+            // 连续子序列匹配：候选读法的词序列在回读里按序出现即算听到
+            let cw: Vec<&str> = cands.split_whitespace().collect();
+            let hit = !cw.is_empty()
+                && plain.windows(cw.len().min(plain.len())).any(|win| {
+                    win.len() == cw.len() && win.iter().zip(&cw).all(|(g, c)| similar(g, c))
+                });
+            if !hit {
+                lost.push(cands.to_string());
+            }
+            continue;
+        }
+        if !plain.iter().any(|g| similar(w, g)) {
+            lost.push(w.clone());
+        }
+    }
+    lost
 }
 
 fn tts_regress(
@@ -1934,7 +1954,8 @@ fn tts_regress(
         // `finished and`→`finished then`）——这类改写**不减少词数**；
         // 真正的漏词必然让回读词数变少。用它把“音素流没有词间连接建模”这一已知弱点
         // 与“整词消失”分开。
-        let tolerance = m["tolerance"].as_str().unwrap_or("strict");
+        // 默认按“词数不得减少”判（真漏词必然减词）；strict 只影响是否额外要求 lost 为空。
+        let tolerance = m["tolerance"].as_str().unwrap_or("count");
         let ref_n = gate_words(&intended).len();
         let wh_n = gate_words(&wh.text).len();
         let sv_n = gate_words(&sv.text).len();
@@ -1965,6 +1986,9 @@ fn tts_regress(
             "words_ref": ref_n, "words_whisper": wh_n, "words_sense": sv_n,
             "must_missing": must_missing,
             "duration": (s.duration * 1000.0).round() / 1000.0,
+            "speech_duration": (s.speech_duration * 1000.0).round() / 1000.0,
+            "speed": s.speed,
+            "phoneme_count": ipa.chars().filter(|c| *c != ' ').count(),
             "wpm": (s.wpm * 10.0).round() / 10.0,
         }));
     }

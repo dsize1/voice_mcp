@@ -251,6 +251,10 @@ impl KokoroTokenMap {
 
 // ================================================================ 文本切片
 
+pub fn is_cjk_char(c: char) -> bool {
+    is_cjk(c)
+}
+
 fn is_cjk(c: char) -> bool {
     matches!(c,
         '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{3040}'..='\u{30FF}')
@@ -418,6 +422,10 @@ impl CmuBackend {
 
     /// 单词 → IPA。`None` 表示确实没有依据（进 OOV，由调用方报错）。
     fn word_ipa(&self, raw: &str) -> Option<(String, PhoneSource)> {
+        self.word_ipa_ctx(raw, None)
+    }
+
+    fn word_ipa_ctx(&self, raw: &str, next_word: Option<&str>) -> Option<(String, PhoneSource)> {
         let w = raw.replace('\u{2019}', "'").to_lowercase();
         if w.is_empty() {
             return None;
@@ -429,7 +437,10 @@ impl CmuBackend {
             return Some((ipa.clone(), PhoneSource::Lexicon));
         }
         if w.chars().all(|c| c.is_ascii_digit()) {
-            let words = number_words(&w)?;
+            // 读法按上下文分三种（见 number_candidates）：
+            //   404 error → four oh four（逐位）；2026 → twenty twenty six（年份）
+            //   140 wpm  → one hundred forty（基数）
+            let words = read_number(&w, next_word)?;
             let ipa = self.phrase_ipa(&words)?;
             return Some((ipa, PhoneSource::Number));
         }
@@ -527,17 +538,23 @@ impl G2pBackend for CmuBackend {
         let mut out = Phonemized::default();
         for sentence in split_sentences(text) {
             let mut ipa_sentence = String::new();
-            for word in words_of(&sentence) {
-                match self.word_ipa(&word) {
+            let toks = words_of(&sentence);
+            for (i, word) in toks.iter().enumerate() {
+                let next = toks.get(i + 1).map(|w| w.to_lowercase());
+                match self.word_ipa_ctx(word, next.as_deref()) {
                     Some((ipa, source)) => {
                         if !ipa_sentence.is_empty() {
                             ipa_sentence.push(' ');
                         }
                         ipa_sentence.push_str(&ipa);
-                        out.words.push(WordPhones { word, ipa, source });
+                        out.words.push(WordPhones {
+                            word: word.clone(),
+                            ipa,
+                            source,
+                        });
                     }
                     None => {
-                        if !out.oov.iter().any(|w| w.eq_ignore_ascii_case(&word)) {
+                        if !out.oov.iter().any(|w| w.eq_ignore_ascii_case(word)) {
                             out.oov.push(word.clone());
                         }
                     }
@@ -820,6 +837,83 @@ const TENS: &[&str] = &[
 
 /// 0..=999_999 基数词（小数/负数/序数暂不特殊处理）。
 pub fn number_to_words(digits: &str) -> Option<String> {
+    number_words(digits)
+}
+
+/// 状态码语境：后面跟这些词时按**逐位**读（`404 error` → four oh four）。
+fn is_code_context(next: Option<&str>) -> bool {
+    let Some(n) = next else { return false };
+    matches!(
+        n,
+        "error" | "errors" | "code" | "codes" | "status" | "http" | "not" | "gateway"
+    )
+}
+
+/// 逐位读：0 读 "oh"（`404` → four oh four）。
+fn digit_by_digit(digits: &str) -> String {
+    digits
+        .chars()
+        .filter_map(|c| c.to_digit(10))
+        .map(|d| {
+            if d == 0 {
+                "oh".to_string()
+            } else {
+                ONES[d as usize].to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 年份成对读：`2026` → twenty twenty six、`1900` → nineteen hundred、`2005` → two thousand five。
+fn year_words(digits: &str) -> Option<String> {
+    if digits.len() != 4 {
+        return None;
+    }
+    let n: u32 = digits.parse().ok()?;
+    if !(1100..=2099).contains(&n) {
+        return None;
+    }
+    if (2000..=2009).contains(&n) {
+        return Some(format!("two thousand {}", ONES[(n - 2000) as usize]));
+    }
+    let hi: u32 = digits[..2].parse().ok()?;
+    let lo: u32 = digits[2..].parse().ok()?;
+    if lo == 0 {
+        return Some(format!("{} hundred", number_words(&hi.to_string())?));
+    }
+    Some(format!(
+        "{} {}",
+        number_words(&hi.to_string())?,
+        number_words(&lo.to_string())?
+    ))
+}
+
+/// 一个数字串所有“合理读法”（供回归门禁做多候选匹配）。
+pub fn number_candidates(digits: &str) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    if let Some(c) = number_words(digits) {
+        v.push(c);
+    }
+    if digits.len() >= 2 {
+        v.push(digit_by_digit(digits));
+    }
+    if let Some(y) = year_words(digits)
+        && !v.contains(&y)
+    {
+        v.push(y);
+    }
+    v
+}
+
+/// 按上下文决定数字读法。
+fn read_number(digits: &str, next: Option<&str>) -> Option<String> {
+    if is_code_context(next) && digits.len() >= 3 {
+        return Some(digit_by_digit(digits));
+    }
+    if let Some(y) = year_words(digits) {
+        return Some(y);
+    }
     number_words(digits)
 }
 

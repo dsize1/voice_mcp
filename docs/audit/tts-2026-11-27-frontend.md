@@ -97,3 +97,48 @@ voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55 --out report.jsonl
    但不会再被误读成“OOV 暴增”。
 6. **Piper 已从评测计划移出**：v2.x 里 Piper 同样是 closed-lexicon 前端，
    不能替代本次前端改造；`tts-ab --engine piper --mode g2p` 代码保留，可随时跑纯声学对比。
+
+
+---
+
+## 六、听测与标定诊断（2026-11-27 晚，按 `MCP 重启前听测验收清单` 执行）
+
+### 6.1 材料（都已播放试听）
+
+| 标签 | 文本 | 音色 | speed | 时长 |
+| :--- | :--- | :--- | ---: | ---: |
+| mx01_zh | 这个 API 返回 404 error，我们明天再查。 | zf_xiaobei | 0.55 | 9.18 s |
+| mx01_en | 同上 | am_michael | 0.55 | 11.03 s |
+| mx02_zh | Sarah's laptop 上那个 build 失败了。 | zf_xiaobei | 0.55 | 5.57 s |
+| mx02_en | 同上 | am_michael | 0.55 | 8.09 s |
+| reg_client | The client's report isn't ready, but we'll send it tomorrow. | am_michael | 0.55 | 5.56 s |
+| reg_where | Where's the log file that we saw last Friday? | am_michael | 0.55 | 4.60 s |
+
+### 6.2 客观指标（拼接点）
+
+- mx01_zh：内部静音 8 段，最长 520 ms；拼接点电平跳变 +10.2 / +19.3 / +7.0 dB。
+- mx02_zh：内部静音 6 段，最长 320 ms；跳变 +5.4 / +6.6 / +9.6 dB。
+- mx02_en：内部静音 9 段，最长 250 ms；跳变最大 +14.0 dB。
+- 纯英文回归样本（reg_client / reg_where）：内部静音 ≤ 290 ms，跳变 ≤ ±11 dB，与单段合成同量级（属正常词间停顿）。
+
+**结论**：混说句的拼接点确有可闻的停顿（0.2–0.5 s）与电平跳变；纯英文路径没有新增异常。
+
+### 6.3 数字读法（清单里的 404 项）
+
+已修：`read_number()` 按上下文分三种读法——
+`404 error` → four oh four（逐位，0 读 oh）、`2026` → twenty twenty six（年份成对）、`140 wpm` → one hundred forty（基数）。
+门禁侧用 `number_candidates()` 做多候选匹配，避免“读法不同”被误判成漏词。
+
+### 6.4 D54 诊断：不是尺子错，是选候选的键错
+
+同一文本扫 speed 0.45→1.0（wl04：71.6 → 190.5 wpm）**单调、无跳变**，说明 `length_scale` 正常。
+问题在 `synthesize_at_wpm` 的 `rank()`：
+
+- 旧键 `(off_band, artifact, dist)`，`off_band` 是 0/1 →
+  `190 wpm` 与 `128 wpm` **并列**（都算越界），第二键“无起始伪影”把 190 wpm 抬成最优 →
+  循环提前收敛在越界候选上。
+- 新键 `(excess, artifact, dist)`，`excess = max(0, |wpm−target| − target×6%)` 是连续量。
+- 修复后：wl06 142.0 / wl08 136.1 / wl01 139.9 / wl10 140.5（wl04 残留 124.4，见 D54 残留项）。
+
+另一个**确实**是尺子错的地方：混说句 wpm 只数 ASCII 词 →
+`这个 API 返回 404 error，我们明天再查。` 曾算出 20.7 wpm。已加 `spoken_units()`（中文按字），同一句现在 146.0。

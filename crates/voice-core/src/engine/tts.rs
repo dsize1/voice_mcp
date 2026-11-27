@@ -339,6 +339,10 @@ impl TtsEngine {
 
         let duration = samples.len() as f32 / self.sample_rate as f32;
         let words = count_words(text);
+        // wpm 的“单位数”：英文按词、中文按字（一字≈一音节）。
+        // 混说句里如果只数 ASCII 词，`这个 API 返回 404 error，我们明天再查。`
+        // 会被算成 3 词 / 4 秒 → 20 wpm，纯属尺子错。
+        let units = spoken_units(text);
         // 语速按语音跨度算：Kokoro 会在首尾留 0.1–0.4 s 近静音，按总时长算会
         // 系统性低估（实测长句目标 140 量到 128，导致语速校正循环来回震荡）。
         let speech_duration = speech_span(&samples, self.sample_rate)
@@ -346,7 +350,7 @@ impl TtsEngine {
             .filter(|d| *d >= 0.2)
             .unwrap_or(duration);
         let wpm = if speech_duration > 0.0 {
-            words as f32 / speech_duration * 60.0
+            units as f32 / speech_duration * 60.0
         } else {
             0.0
         };
@@ -603,6 +607,22 @@ pub fn count_words(text: &str) -> usize {
         .count()
 }
 
+/// 语速统计单位：英文按词（含缩写、数字串算一个词），中文按字。
+pub fn spoken_units(text: &str) -> usize {
+    let mut units = 0usize;
+    for tok in text.split_whitespace() {
+        if tok.chars().any(crate::engine::g2p_ipa::is_cjk_char) {
+            units += tok
+                .chars()
+                .filter(|c| crate::engine::g2p_ipa::is_cjk_char(*c))
+                .count();
+        } else if tok.chars().any(|c| c.is_ascii_alphanumeric()) {
+            units += 1;
+        }
+    }
+    units
+}
+
 /// 10 ms 帧的 RMS 电平（dBFS）。
 fn frame_dbs(samples: &[f32], sr: u32) -> (Vec<f32>, f32) {
     let hop = (sr as usize / 100).max(1);
@@ -695,14 +715,14 @@ fn onset_gap_ms(samples: &[f32], sr: u32) -> Option<f32> {
 ///
 /// 顺序很重要：如果只看“无伪影”，很慢的候选（实测 93 wpm）会脍过
 /// 140 wpm 但带起始伪影的候选——语速直接超出雅思区间，材料不可用。
-fn rank(s: &Synthesized, target: f32) -> (u8, u8, f32) {
-    let off_band = if (s.wpm - target).abs() > target * 0.06 {
-        1
-    } else {
-        0
-    };
-    let artifact = if s.onset_gap_ms.is_some() { 1 } else { 0 };
-    (off_band, artifact, (s.wpm - target).abs())
+fn rank(s: &Synthesized, target: f32) -> (f32, u8, f32) {
+    // 第一键必须是**离目标带宽多远**（连续量），不能是 0/1 的 off_band：
+    // 否则“190 wpm”和“128 wpm”并列（都算越界），第二键（无起始伪影）会把
+    // 190 wpm 的候选抬成最优 —— 实测 wl04 就是这么落到 190.5 wpm 的。
+    let dist = (s.wpm - target).abs();
+    let excess = (dist - target * 0.06).max(0.0);
+    let artifact = u8::from(s.onset_gap_ms.is_some());
+    (excess, artifact, dist)
 }
 
 fn voice_lang(name: &str) -> String {

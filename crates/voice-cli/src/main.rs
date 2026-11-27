@@ -978,6 +978,9 @@ fn say(
             "onset_gap_ms": s.onset_gap_ms.map(round3),
             "dur": round3(s.duration), "gen_ms": round3(s.gen_ms as f32),
             "rtf": round3((s.gen_ms / 1000.0 / s.duration as f64) as f32),
+            // 留证：实际送进模型的音素串 + LTS 猜读音的词 + 前端标识
+            "phonemes": s.phonemes.clone(),
+            "lts_words": s.lts_words.clone(),
         }));
     }
 
@@ -2358,9 +2361,12 @@ fn verify_synthesized(
         "target_wpm": s.target_wpm,
         "speech_duration": round3(s.speech_duration),
         "onset_gap_ms": s.onset_gap_ms.map(round3),
+        "phonemes": s.phonemes, "lts_words": s.lts_words,
         "asr_sense": sv.text, "asr_whisper": wh.text,
         "sense_match": sv_ok, "whisper_match": wh_ok, "wpm_ok": wpm_ok,
         "prefix_insert": prefix_insert, "word_boundary_only": boundary_only,
+        "phonemes": s.phonemes,
+        "lts_words": s.lts_words,
         "phone_min_gop": phone_min, "phone_suspect": phone_suspect,
         "confusions": confusions, "reasons": reasons,
     }))

@@ -161,6 +161,11 @@ impl Config {
     pub fn kokoro_lexicon(&self) -> PathBuf {
         self.model("kokoro-multi-lang/lexicon-en-us.txt")
     }
+    /// 开放词表 G2P 用的 CMUdict（TTS 文本前端的必需件）
+    pub fn g2p_cmudict(&self) -> PathBuf {
+        self.model("g2p/cmudict.dict")
+    }
+
     pub fn silero_vad(&self) -> PathBuf {
         self.model("silero-vad/onnx/model.onnx")
     }
@@ -176,6 +181,7 @@ impl Config {
             ("kokoro model", self.kokoro_model()),
             ("kokoro voices", self.kokoro_voices()),
             ("kokoro tokens", self.kokoro_tokens()),
+            ("g2p cmudict", self.g2p_cmudict()),
             ("silero vad", self.silero_vad()),
         ]
     }

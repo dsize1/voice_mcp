@@ -14,6 +14,7 @@ use sherpa_onnx::{
 };
 
 use crate::config::Config;
+use crate::engine::g2p_ipa::{self, CmuBackend, G2pBackend, KokoroTokenMap, SidecarBackend};
 
 /// Kokoro v1.0 的 54 个音色（顺序与 voices.bin 一致，按 hexgrad 官方 voices 目录字典序）。
 pub const KOKORO_VOICES: [&str; 54] = [
@@ -144,6 +145,10 @@ pub struct Synthesized {
     /// 本次请求的目标 wpm（显式 speed 时为 None）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_wpm: Option<f32>,
+    /// 实际送进声学模型的音素串（开放词表 G2P 产出；中文路径为 None）。
+    /// 留证与回归断言用：**任何缺词都能在这里看出来**。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phonemes: Option<String>,
     pub gen_ms: f64,
 }
 
@@ -164,6 +169,10 @@ pub struct TtsEngine {
     lexicon_words: HashSet<String>,
     /// 项目级 overlay 路径（错误提示用）
     lexicon_path: PathBuf,
+    /// 默认文本前端：开放词表 G2P（英文路径**不再查引擎词表**）
+    g2p: Box<dyn G2pBackend>,
+    /// 音素字符 → Kokoro token id（换模型/换词表时的硬门）
+    tokens: KokoroTokenMap,
 }
 
 impl TtsEngine {
@@ -178,21 +187,17 @@ impl TtsEngine {
             bail!("缺少 Kokoro 音色/词表文件: {}", voices.display());
         }
 
-        // 项目 overlay 放在最前；C++ 侧按顺序加载，先命中先赢。
+        // 项目 overlay：既是 C++ 侧的最后一份词表，也是 Rust 侧 G2P 的
+        // 高优先级覆盖层（同一份文件、两种用法，避免两处不一致）。
         let overlay = cfg
             .tts_lexicon
             .clone()
             .unwrap_or_else(|| cfg.data_dir.join("tts-lexicon.txt"));
-        // 顺序很关键：sherpa-onnx 对重复词条是“后加载覆盖先加载”，
-        // 因此自定义 overlay 必须放在最后（export 等内置词才能被覆盖）。
+        // 英文不再交给引擎词表（v2.x 的 closed lexicon 会静默丢词），
+        // 只保留中文词表给 zh 路径。sherpa-onnx 对重复词条是“后加载覆盖先加载”，
+        // 所以 overlay 放最后。
         let mut paths: Vec<PathBuf> = Vec::new();
-        for name in [
-            "lexicon-us-en.txt",
-            "lexicon-gb-en.txt",
-            "lexicon-zh.txt",
-            "lexicon-ja.txt",
-            "lexicon-ko.txt",
-        ] {
+        for name in ["lexicon-zh.txt"] {
             let p = cfg.model(format!("kokoro-multi-lang/{name}"));
             if p.is_file() {
                 paths.push(p);
@@ -232,12 +237,32 @@ impl TtsEngine {
         let tts = OfflineTts::create(&config).ok_or_else(|| anyhow!("TTS 创建失败"))?;
         let sample_rate = tts.sample_rate() as u32;
         let num_speakers = tts.num_speakers();
+
+        // 文本前端：优先外部 sidecar（如 misaki / espeak-ng），否则内置 CMUdict 后端。
+        let cmu_path = cfg.g2p_cmudict();
+        // 英文 lexicon 作为 G2P 的**高优先级覆盖层**：命中就用 Kokoro 自己的发音
+        // （与声学模型训练分布一致），未命中才落到 CMUdict + 形态规则。
+        // 顺序即优先级（先加载者优先，后加载者只补空缺）：美音优先，
+        // 因为是 `am_michael`／美音示范；英音词表只填空缺。
+        // 反了会把 `last` 读成 /lɑːst/（听成 "lost"）、`on` 读成 /ɒn/ —— 与声学模型不匹配。
+        let en_lexicons: Vec<PathBuf> = ["lexicon-us-en.txt", "lexicon-gb-en.txt"]
+            .iter()
+            .map(|n| cfg.model(format!("kokoro-multi-lang/{n}")))
+            .filter(|p| p.is_file())
+            .collect();
+        let g2p: Box<dyn G2pBackend> = match SidecarBackend::from_env() {
+            Some(side) => Box::new(side),
+            None => Box::new(CmuBackend::load(&cmu_path, Some(&overlay), &en_lexicons)?),
+        };
+        let tokens = KokoroTokenMap::load(&tokens)?;
         Ok(Self {
             tts,
             sample_rate,
             num_speakers,
             lexicon_words,
             lexicon_path: overlay,
+            g2p,
+            tokens,
         })
     }
 
@@ -284,17 +309,11 @@ impl TtsEngine {
         if text.trim().is_empty() {
             bail!("待合成文本为空");
         }
-        let oov = self.oov_words(text);
-        if !oov.is_empty() {
-            bail!(
-                "TTS 词表缺少 {}；请在 {} 增加词条（如 `iphone ˈ I f ˌ O n`）或改写文本（如 iPhone→eye phone）",
-                oov.join(", "),
-                self.lexicon_path.display()
-            );
-        }
+        let (phoneme_cps, phonemes) = self.frontend(text)?;
         let gcfg = GenerationConfig {
             sid,
             speed,
+            phoneme_codepoints: phoneme_cps,
             ..Default::default()
         };
         let t0 = std::time::Instant::now();
@@ -340,6 +359,7 @@ impl TtsEngine {
             speech_duration,
             onset_gap_ms,
             target_wpm: None,
+            phonemes,
             gen_ms,
         })
     }
@@ -409,11 +429,52 @@ impl TtsEngine {
         Ok(out)
     }
 
-    /// 合成前 OOV 预检：返回不在 lexicon 里的 ASCII 词（小写、去重）。
+    /// 文本前端：返回（逐句音素码点, 音素串）。
     ///
-    /// 支持 contraction/连字符：`that's` → `that` + `'s`、`re-export` → `re` + `export`。
+    /// - 英文：**一律**走开放词表 G2P → `phoneme_codepoints`，完全不查引擎词表。
+    ///   任何未被覆盖的词直接报错（宁可失败，不出缺词的音频）。
+    /// - 中文：暂由引擎 `lexicon-zh` 处理（Bopomofo 前端属后续工作）。
+    fn frontend(&self, text: &str) -> Result<(Option<Vec<Vec<i32>>>, Option<String>)> {
+        if g2p_ipa::contains_cjk(text) {
+            let oov = oov_in_text(&self.lexicon_words, text);
+            if !oov.is_empty() {
+                bail!(
+                    "中文词表缺少 {}；请在 {} 增加词条",
+                    oov.join(", "),
+                    self.lexicon_path.display()
+                );
+            }
+            return Ok((None, None));
+        }
+        let ph = self.g2p.phonemize(text);
+        if !ph.oov.is_empty() {
+            bail!(
+                "G2P({}) 覆盖不了 {}；请在 {} 为其指定发音（`word 音素…`）",
+                self.g2p.name(),
+                ph.oov.join(", "),
+                self.lexicon_path.display()
+            );
+        }
+        if ph.is_empty() {
+            bail!("G2P({}) 产出空音素，拒绝合成", self.g2p.name());
+        }
+        let cps = self.tokens.encode_sentences(&ph.sentence_ipa)?;
+        Ok((Some(cps), Some(ph.ipa())))
+    }
+
+    /// 文本前端预览（留证 / 回归断言用，不合成音频）。
+    pub fn phonemize_preview(&self, text: &str) -> crate::engine::g2p_ipa::Phonemized {
+        self.g2p.phonemize(text)
+    }
+
+    /// 合成前 OOV 预检。英文交给 G2P（**不再用“base+'s 就算已知”的宽容规则**），
+    /// 中文仍查中文词表。
     pub fn oov_words(&self, text: &str) -> Vec<String> {
-        oov_in_text(&self.lexicon_words, text)
+        if g2p_ipa::contains_cjk(text) {
+            oov_in_text(&self.lexicon_words, text)
+        } else {
+            self.g2p.phonemize(text).oov
+        }
     }
 }
 

@@ -114,7 +114,9 @@ fn word_to_arpa(cmu: &Cmu, w: &str) -> (Option<Vec<String>>, &'static str) {
     // 形态规则：X's / X' / n't / 'll / 're / 've / 'd / 'm
     if let Some((base, suf)) = w.rsplit_once('\'') {
         if let Some(p) = cmu.get(base) {
-            let last = p.last().map(|s| s.trim_end_matches(|c: char| c.is_ascii_digit()).to_string());
+            let last = p
+                .last()
+                .map(|s| s.trim_end_matches(|c: char| c.is_ascii_digit()).to_string());
             let mut out = p.clone();
             match suf {
                 "s" | "S" => {
@@ -172,7 +174,9 @@ fn word_to_arpa(cmu: &Cmu, w: &str) -> (Option<Vec<String>>, &'static str) {
 // ---------------------------------------------------------------- 音素序列化
 /// ARPAbet → IPA 字符串（重音：1 → ˈ，2 → ˌ，只加在元音前）
 fn arpa_to_ipa_str(phones: &[String]) -> String {
-    let vowels = ["AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW"];
+    let vowels = [
+        "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW",
+    ];
     let mut s = String::new();
     for p in phones {
         let base = p.trim_end_matches(|c: char| c.is_ascii_digit()).to_string();
@@ -272,7 +276,7 @@ fn parse_args() -> Result<Args> {
             "--out" => a.out = Some(PathBuf::from(v()?)),
             "--dict" => a.dict = PathBuf::from(v()?),
             "--tokens" => a.tokens = Some(PathBuf::from(v()?)),
-            "--mode" => a.mode = v()?,          // g2p | lexicon
+            "--mode" => a.mode = v()?, // g2p | lexicon
             "--max-sentences" => a.max_sentences = v()?.parse()?,
             "--dry-run" => a.dry_run = true,
             "--space-phonemes" => a.space_phonemes = true,
@@ -316,13 +320,23 @@ fn main() -> Result<()> {
                     } else {
                         cps_s.extend(ipa.chars().map(|c| c as i32));
                     }
-                    rows.push(WordRow { word: w, rule, arpa: p, ipa });
+                    rows.push(WordRow {
+                        word: w,
+                        rule,
+                        arpa: p,
+                        ipa,
+                    });
                 }
                 None => {
                     if !oov.contains(&w) {
                         oov.push(w.clone());
                     }
-                    rows.push(WordRow { word: w, rule, arpa: vec![], ipa: String::new() });
+                    rows.push(WordRow {
+                        word: w,
+                        rule,
+                        arpa: vec![],
+                        ipa: String::new(),
+                    });
                 }
             }
         }
@@ -381,7 +395,10 @@ fn main() -> Result<()> {
     }
 
     // 3) 合成
-    let dir = a.model_dir.clone().ok_or_else(|| anyhow!("需要 --model-dir"))?;
+    let dir = a
+        .model_dir
+        .clone()
+        .ok_or_else(|| anyhow!("需要 --model-dir"))?;
     let mut config = OfflineTtsConfig::default();
     config.model = match a.engine.as_str() {
         "kokoro" => OfflineTtsModelConfig {
@@ -391,15 +408,11 @@ fn main() -> Result<()> {
                 tokens: Some(dir.join("tokens.txt").to_string_lossy().to_string()),
                 lexicon: if a.mode == "lexicon" {
                     Some(
-                        [
-                            "lexicon-us-en.txt",
-                            "lexicon-gb-en.txt",
-                            "lexicon-zh.txt",
-                        ]
-                        .iter()
-                        .map(|n| dir.join(n).to_string_lossy().to_string())
-                        .collect::<Vec<_>>()
-                        .join(","),
+                        ["lexicon-us-en.txt", "lexicon-gb-en.txt", "lexicon-zh.txt"]
+                            .iter()
+                            .map(|n| dir.join(n).to_string_lossy().to_string())
+                            .collect::<Vec<_>>()
+                            .join(","),
                     )
                 } else {
                     None
@@ -433,7 +446,11 @@ fn main() -> Result<()> {
     let gcfg = GenerationConfig {
         sid: a.sid,
         speed: a.speed,
-        phoneme_codepoints: if a.mode == "g2p" { Some(cps.clone()) } else { None },
+        phoneme_codepoints: if a.mode == "g2p" {
+            Some(cps.clone())
+        } else {
+            None
+        },
         ..Default::default()
     };
     let t0 = std::time::Instant::now();

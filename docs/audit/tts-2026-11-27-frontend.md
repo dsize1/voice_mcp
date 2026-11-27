@@ -148,3 +148,19 @@ voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55 --out report.jsonl
 
 另一个**确实**是尺子错的地方：混说句 wpm 只数 ASCII 词 →
 `这个 API 返回 404 error，我们明天再查。` 曾算出 20.7 wpm。已加 `spoken_units()`（中文按字），同一句现在 146.0。
+
+
+## 七、人耳验收记录
+
+| 项 | 值 |
+| :--- | :--- |
+| 日期 | 2026-11-27 深夜（MCP 重启后） |
+| 版本 | `main @ 355241a`，MCP/CLI 同一份 `TtsEngine` |
+| 前端标识 | `g2p-ipa/1.0[cmudict+overlay]+lexicon-zh` |
+| 音色 / speed | `am_michael` / 140 wpm 校准（`norm`） |
+| 试听文件 | `2026-11-28/000039_tts/…001_smoke_mcp.ref_norm.wav`（`client's`）<br>`2026-11-28/000042_tts/…001_smoke_mcp.ref_norm.wav`（`Where's`）<br>对照：`private/2026-11-27/review/r1.wav`、`r3.wav`（旧路径事故音频） |
+| 结论 | **通过**（用户确认）。A/B 对照下 `client's` 的 /ts/ 尾音清楚、`Where's` 起句与后续衔接自然，无二次起音/截断；语速与音质较旧路径无退化 |
+| 附带确认 | 混说 `这个 API 返回 404 error。` → MCP 返回 `ok:false`（拒答生效），不再产出降级音频 |
+
+遗留（不阻塞本次收口）：D54 残留（`Where's` 句 128.6 wpm，略低于 130 带下沿）、D55（Sidecar 超时/自愈，接 misaki 前补）、
+D56（混说音质，需 misaki-zh）、LTS 兜底（`Zorbly's` 这类未见词根）。

@@ -122,6 +122,13 @@ pub struct Assessment {
     /// **`tts` 基线不能用来判"语调/重音是否地道"**，只能说"与合成示范的差异"。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop_baseline_source: Option<String>,
+    /// **这个 Δ 能不能跨会话/跨时间比**（D52）。
+    ///
+    /// 只有「基线存在 + 来源是 `native` + 自检通过」才 `true`。
+    /// `false` 时只能当"与合成示范的差异"，**不得**写进趋势/迁移结论；
+    /// `None` 表示本次没有基线（没开 `baseline_tts`、也没有 `reference_audio`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_comparable: Option<bool>,
     /// 音素级 GOP（`with_gop=true` 才有）。只能当排序/趋势，不能当判决。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gop: Option<crate::gop::GopResult>,
@@ -616,6 +623,12 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         }
     }
 
+    // D52：Δ 是否可比 —— 只有真人基线且自检通过才行
+    let delta_comparable = if gop_baseline.is_none() {
+        None
+    } else {
+        Some(gop_baseline_source.as_deref() == Some("native") && gop_baseline_valid == Some(true))
+    };
     Ok(Assessment {
         degraded,
         text_agreement: agree_value,
@@ -627,6 +640,7 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         gop_baseline,
         gop_baseline_valid,
         gop_baseline_source,
+        delta_comparable,
         gop,
         prosody,
         limitations,
@@ -636,6 +650,24 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
 
 #[cfg(test)]
 mod tests {
+
+    /// D52：Δ 可比性判定（只有真人基线 + 自检通过才算可比）
+    #[test]
+    fn delta_comparable_requires_native_and_valid() {
+        let f = |has_baseline: bool, source: Option<&str>, valid: Option<bool>| -> Option<bool> {
+            if !has_baseline {
+                None
+            } else {
+                Some(source == Some("native") && valid == Some(true))
+            }
+        };
+        assert_eq!(f(false, None, None), None);
+        assert_eq!(f(true, Some("native"), Some(true)), Some(true));
+        assert_eq!(f(true, Some("native"), Some(false)), Some(false));
+        assert_eq!(f(true, Some("tts"), Some(true)), Some(false));
+        assert_eq!(f(true, Some("tts"), None), Some(false));
+        assert_eq!(f(true, None, Some(true)), Some(false));
+    }
 
     /// D37：第二引擎听到 → 降级为 low 且保留 `LikelyAsrMiss`；也没听到 → 升为 high 且清空 hint
     #[test]

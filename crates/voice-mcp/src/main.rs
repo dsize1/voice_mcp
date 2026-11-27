@@ -846,6 +846,7 @@ impl VoiceServer {
                 "prosody": assessment.prosody.as_ref(),
                 "gop_baseline_valid": assessment.gop_baseline_valid,
                 "gop_baseline_source": assessment.gop_baseline_source,
+                "delta_comparable": assessment.delta_comparable,
                 "text_agreement": assessment.text_agreement,
                 "gop_baseline": assessment.gop_baseline.as_ref().map(|g| serde_json::json!({
                     "version": g.version,

@@ -987,7 +987,7 @@ impl ServerHandler for VoiceServer {
         let skills = self
             .skills
             .as_ref()
-            .ok_or_else(|| ErrorData::method_not_found::<rmcp::model::ListSkillsRequestMethod>())?;
+            .ok_or_else(ErrorData::method_not_found::<rmcp::model::ListSkillsRequestMethod>)?;
         // ttlMs=0：明确告诉客户端"清单不要缓存，每次问我"。
         // 服务端是内存快照，清单不会在两次请求间变；但客户端侧的 sha256 校验无法用
         // 新鲜度代替，所以这里不给缓存窗口，避免"ttl 内交付旧内容"的风险。
@@ -1006,7 +1006,7 @@ impl ServerHandler for VoiceServer {
         let skills = self
             .skills
             .as_ref()
-            .ok_or_else(|| ErrorData::method_not_found::<rmcp::model::GetSkillRequestMethod>())?;
+            .ok_or_else(ErrorData::method_not_found::<rmcp::model::GetSkillRequestMethod>)?;
         skills.get_skill(&request.uri)
     }
 

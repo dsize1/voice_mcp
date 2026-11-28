@@ -20,6 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pi-extensions 的测试用 node --test（假 MCP 服务，不需要模型/音频）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

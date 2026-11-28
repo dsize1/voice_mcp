@@ -171,18 +171,22 @@ export default function mcpSkills(pi) {
     const paths = [];
     let touched = false;
 
-    await Promise.all(
+    // 探测并行（每个最多 CONNECT_TIMEOUT_MS），避免多服务串行等超时。
+    const probes = await Promise.all(
       servers.map(async ({ name, config }) => {
-        if (!config.command && !config.url) return; // 没有连接方式，跳过
+        if (!config.command && !config.url) return { name, client: null, declared: null };
         const key = `${name}:${config.url ?? config.command}`;
-        if (probe.get(key) === false) return; // 本次会话已知不支持，不再探测
+        if (probe.get(key) === false) return { name, client: null, declared: null };
 
         const client = serverConnection(name, config, cwd, warn);
-
-        // 探测：大多数 MCP 服务不提供 skills，连不上/超时属于正常，不打扰用户。
-        let declared;
         try {
-          declared = await client.declaredSkills({ timeoutMs: CONNECT_TIMEOUT_MS });
+          const declared = await client.declaredSkills({ timeoutMs: CONNECT_TIMEOUT_MS });
+          if (!declared) {
+            probe.set(key, false);
+            return { name, client: null, declared: null };
+          }
+          probe.set(key, true);
+          return { name, client, declared };
         } catch (err) {
           probe.set(key, false);
           if (process.env.PI_MCP_SKILLS_DEBUG) {
@@ -190,33 +194,33 @@ export default function mcpSkills(pi) {
           }
           client.close?.();
           connections.delete(`${name}:${cwd}:${config.url ?? config.command}`);
-          return;
-        }
-        if (!declared) {
-          probe.set(key, false);
-          return; // 未声明扩展：静默跳过
-        }
-        probe.set(key, true);
-
-        // 已确认声明扩展：之后的失败都值得告警。
-        try {
-          const result = await syncServer({
-            client,
-            label: name,
-            cacheRoot: cacheRoot(),
-            reservedNames: reserved,
-            log: (message) => warn(ctx, message),
-          });
-          touched = true;
-          for (const skipped of result.skipped) {
-            warn(ctx, `[mcp-skills] ${name} 跳过 ${skipped.name ?? skipped.uri}：${skipped.reason}`);
-          }
-          paths.push(...result.skillPaths);
-        } catch (err) {
-          warn(ctx, `[mcp-skills] ${name}: 同步失败：${err.message}`);
+          return { name, client: null, declared: null };
         }
       }),
     );
+
+    // 同步串行：跨服务同名时"先到先得 + 告警"，不因并发完成顺序而抖动。
+    const takenNames = new Map();
+    for (const { name, client, declared } of probes) {
+      if (!declared || !client) continue;
+      try {
+        const result = await syncServer({
+          client,
+          label: name,
+          cacheRoot: cacheRoot(),
+          reservedNames: reserved,
+          takenNames,
+          log: (message) => warn(ctx, message),
+        });
+        touched = true;
+        for (const skipped of result.skipped) {
+          warn(ctx, `[mcp-skills] ${name} 跳过 ${skipped.name ?? skipped.uri}：${skipped.reason}`);
+        }
+        paths.push(...result.skillPaths);
+      } catch (err) {
+        warn(ctx, `[mcp-skills] ${name}: 同步失败：${err.message}`);
+      }
+    }
 
     if (touched) {
       // 缓存根不在任何 skill 发现路径内，只有这里把它交给 pi。

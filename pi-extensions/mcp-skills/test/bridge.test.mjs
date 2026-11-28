@@ -191,6 +191,26 @@ test("同名冲突：MCP 技能被跳过而不是遮蔽本地技能", async () =
   }
 });
 
+test("跨服务同名：后到的服务被跳过并告警", async () => {
+  const client = spawnFixture("ok");
+  try {
+    const takenNames = new Map([["demo", "another-server"]]);
+    const result = await syncServer({
+      client,
+      label: "demo",
+      cacheRoot: path.join(root, "cross"),
+      takenNames,
+      log,
+    });
+    assert.equal(result.skillPaths.length, 1);
+    assert.equal(result.names[0], "other");
+    assert.match(result.skipped[0].reason, /与其他服务（another-server）/);
+    assert.equal(takenNames.get("other"), "demo");
+  } finally {
+    client.close();
+  }
+});
+
 test("路径穿越与非 SKILL.md uri 被拒绝", () => {
   assert.throws(() => uriToRelPath("skill://demo/../../etc/passwd", "skill://demo/SKILL.md"));
   assert.throws(() => uriToRelPath("skill://demo%/x.md", "skill://demo/SKILL.md"));

@@ -85,7 +85,9 @@ impl ServerHandler for SkillServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(ListResourcesResult::with_all_items(self.catalog.resources()))
+        Ok(ListResourcesResult::with_all_items(
+            self.catalog.resources(),
+        ))
     }
 
     async fn read_resource(

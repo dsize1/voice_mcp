@@ -47,6 +47,17 @@ try {
             Write-Host "== 跳过拼音表校验（缺 pypinyin：pip install pypinyin）" -ForegroundColor Yellow
         }
     }
+    # 桥接扩展（pi-extensions）的离线测试：假 MCP 服务，不需要 pi 或模型。
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if ($node) {
+        Invoke-Step "node --test（pi-extensions/mcp-skills）" {
+            node --test pi-extensions/mcp-skills/test/bridge.test.mjs pi-extensions/mcp-skills/test/http.test.mjs
+        }
+    }
+    else {
+        Write-Host "== 跳过 pi-extensions 测试（缺 node）" -ForegroundColor Yellow
+    }
+
     if (-not $SkipTests) {
         Invoke-Step "cargo test" { cargo test --release }
     }

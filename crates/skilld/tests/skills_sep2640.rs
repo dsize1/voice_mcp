@@ -96,7 +96,10 @@ fn serves_skills_with_digests_and_no_list_caching() {
     assert_eq!(resources.len(), 2);
     for resource in resources {
         let digest = resource["digest"].as_str().unwrap();
-        assert!(digest.starts_with("sha256:") && digest.len() == 71, "{digest}");
+        assert!(
+            digest.starts_with("sha256:") && digest.len() == 71,
+            "{digest}"
+        );
         assert!(resource["size"].as_u64().unwrap() > 0);
     }
 
@@ -105,10 +108,12 @@ fn serves_skills_with_digests_and_no_list_caching() {
         "resources/read",
         serde_json::json!({"uri": "skill://demo/SKILL.md"}),
     );
-    assert!(read["result"]["contents"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("name: demo"));
+    assert!(
+        read["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("name: demo")
+    );
 
     let missing = session.request(
         4,

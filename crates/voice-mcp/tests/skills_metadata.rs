@@ -55,11 +55,17 @@ fn every_skill_matches_the_service_version() {
             continue;
         }
         let text = fs::read_to_string(&file).expect("SKILL.md 可读");
-        let fm = frontmatter(&text).unwrap_or_else(|| panic!("{} 缺少 frontmatter", file.display()));
+        let fm =
+            frontmatter(&text).unwrap_or_else(|| panic!("{} 缺少 frontmatter", file.display()));
 
         let name = field(fm, "name").unwrap_or_else(|| panic!("{} 缺少 name", file.display()));
         let dir_name = dir.file_name().unwrap().to_string_lossy();
-        assert_eq!(name, dir_name, "{} 的 name 必须与目录名一致", file.display());
+        assert_eq!(
+            name,
+            dir_name,
+            "{} 的 name 必须与目录名一致",
+            file.display()
+        );
         assert!(
             name.len() <= 64
                 && !name.starts_with('-')
@@ -74,7 +80,11 @@ fn every_skill_matches_the_service_version() {
 
         let description = field(fm, "description")
             .unwrap_or_else(|| panic!("{} 缺少 description", file.display()));
-        assert!(!description.is_empty(), "{} 的 description 不能为空", file.display());
+        assert!(
+            !description.is_empty(),
+            "{} 的 description 不能为空",
+            file.display()
+        );
         assert!(
             description.chars().count() <= 1024,
             "{} 的 description 超过 1024 字符",

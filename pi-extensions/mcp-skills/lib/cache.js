@@ -245,7 +245,15 @@ async function listFiles(dir, prefix = "") {
  * 同步一个服务的全部技能。冲突或非法的技能跳过并记录原因。
  * reservedNames 是本地已存在的技能名集合（不得静默遮蔽）。
  */
-export async function syncServer({ client, label, cacheRoot, reservedNames = new Set(), log = () => {} }) {
+export async function syncServer({
+  client,
+  label,
+  cacheRoot,
+  reservedNames = new Set(),
+  /** 已其他服务认领的技能名 → label；跨服务同名时拒绝而不是让 pi 静默取第一个。 */
+  takenNames = new Map(),
+  log = () => {},
+}) {
   const { skills, ttlMs, cacheScope } = await client.listSkills();
   const skillPaths = [];
   const skipped = [];
@@ -253,10 +261,15 @@ export async function syncServer({ client, label, cacheRoot, reservedNames = new
 
   for (const entry of skills) {
     const name = entry?.frontmatter?.name ?? skillRootUri(entry?.uri ?? "").split("/").pop();
-    if (reservedNames.has(name) || seen.has(name)) {
-      const reason = reservedNames.has(name)
-        ? `与本地技能同名（${name}）：移除本地副本后再加载 MCP 版`
-        : `同一服务内技能名重复（${name}）`;
+    let reason;
+    if (reservedNames.has(name)) {
+      reason = `与本地技能同名（${name}）：移除本地副本后再加载 MCP 版`;
+    } else if (takenNames.has(name)) {
+      reason = `与其他服务（${takenNames.get(name)}）的技能同名（${name}）`;
+    } else if (seen.has(name)) {
+      reason = `同一服务内技能名重复（${name}）`;
+    }
+    if (reason) {
       skipped.push({ uri: entry?.uri, name, reason });
       log(`[mcp-skills] 跳过 ${entry?.uri ?? "?"}：${reason}`);
       continue;
@@ -271,6 +284,7 @@ export async function syncServer({ client, label, cacheRoot, reservedNames = new
       const result = await syncSkill({ client, cacheRoot, label, entry });
       skillPaths.push(result.dir);
       seen.add(name);
+      takenNames.set(name, label);
       if (result.changed) {
         log(`[mcp-skills] ${name} 版本变化（entryDigest 更新），已刷新缓存`);
       }
@@ -280,7 +294,7 @@ export async function syncServer({ client, label, cacheRoot, reservedNames = new
     }
   }
 
-  return { skillPaths, skipped, ttlMs, cacheScope, count: skills.length };
+  return { skillPaths, skipped, ttlMs, cacheScope, count: skills.length, names: [...seen] };
 }
 
 /** 删除一个服务的全部缓存（服务被移除时调用）。 */

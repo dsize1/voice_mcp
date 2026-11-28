@@ -68,6 +68,11 @@ band <5.5 → 1     band <6.5 → 2     band <7.0 → 3     band ≥7.0 → 4
 - `--free-speech` → 强制包含（用于用户明确要求试一次）。
 - `--no-free-speech` → 强制省略。
 
+**计划去重（N7，2026-11-28）**：`bank plan` 会读 `history` **末尾 12 条**里出现过的 `bank_id`，
+把它们降级——自动选材不选它们（`error_stats`/`fill` 两步），`drill_queue` 里刚练过的排到队尾；
+只有素材不够时才兜底复用，并在 `notes` 里写明"兜底复用了 N 条最近练过的素材"。
+验收：连续两次计划重复率 <20%（单测 `consecutive_plans_do_not_repeat_material`）。
+
 ## 4. 当前状态（2026-11-24）
 
 | 项 | 值 |
@@ -82,11 +87,24 @@ band <5.5 → 1     band <6.5 → 2     band <7.0 → 3     band ≥7.0 → 4
 ## 5. 升级流程
 
 1. 每轮训练后把结果写进 `learner.json.history`（accuracy / rate / pause / 核心音素）。
-2. 每 5 次训练或用户要求时，Skill 重新计算最近 3 条：
+2. **机器算、人确认（D48/N6，2026-11-28）**：
+
+   ```bash
+   voice-cli learner readiness            # 只打印：stage / 每条判据 / missing / unknown
+   voice-cli learner readiness --write    # 写回 readiness（写前留 learner.json.prev）
+   voice-cli learner readiness --write --confirm-free-speech   # 仅 L4 达标时才真开自由说
+   ```
+
+   判据（`crates/voice-core/src/readiness.rs`，可用 `readiness.gate` 覆盖）：
+   连续 N 条 acc ≥0.90、语速 120–160、停顿 ≤6/30 s；`scene=word`（单词 drill）与
+   `scene=free`（无稿）**不参与**连续统计。缺数据的判据记 `unknown`——**不当成通过，也不算未达标**。
+   核心音素回归固定 `unknown`：要 Skill 读 `gop_words` / `note` / 混淆对判读。
+3. 历史上手工写的判据（本节 1–5 条）仍然成立，只是不再由人重算数字：
    - 连续 3 条 acc ≥0.90、rate 120–160、pause ≤6/30s、核心音素无回归 → **L3 达标**。
-3. L3 达标后，做一次 30–45 s 有稿/提纲独白；pause ≤8/45s、repetitions ≤1 → **L4 就绪**。
-4. 用户确认后，把 `readiness.free_speech_enabled` 置 `true`（或本轮用 `--free-speech` 试一次）。
-5. 任何一次出现 ≥2 个核心音素回归或 pause >10/30s → 退回 L2，关闭自由说槽位。
+4. L3 达标后，做一次 30–45 s 有稿/提纲独白；pause ≤8/45s、repetitions ≤1 → **L4 就绪**。
+5. 用户确认后，把 `readiness.free_speech_enabled` 置 `true`
+   （`learner readiness --write --confirm-free-speech`；L4 未达标时该参数**不会**强开）。
+6. 任何一次出现 ≥2 个核心音素回归或 pause >10/30s → 退回 L2，关闭自由说槽位。
 
 ## 6. 注意事项
 

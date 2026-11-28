@@ -782,6 +782,12 @@ impl VoiceServer {
                 "repetitions": assessment.flow.repetitions,
                 "degraded": assessment.degraded,
                 "issue_count": issues.len(),
+                // D13：中文拼音层（同音不同字不算错）；英文参考时为 null
+                "accuracy_pinyin": assessment
+                    .text_diff
+                    .as_ref()
+                    .and_then(|d| d.pinyin.as_ref())
+                    .map(|p| p.accuracy_pinyin),
                 "timestamp_alignment": assessment
                     .text_diff
                     .as_ref()
@@ -815,6 +821,8 @@ impl VoiceServer {
             Ok(serde_json::json!({
                 "summary": summary,
                 "issues": issues,
+                // 中文拼音层报告（声母/韵母/声调三层差异 + 混淆统计），英文参考为 null
+                "pinyin": assessment.text_diff.as_ref().and_then(|d| d.pinyin.as_ref()),
                 "flow": {
                     "duration": round3(assessment.flow.duration),
                     "analysis_window": assessment.flow.analysis_window,

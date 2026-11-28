@@ -9,6 +9,7 @@ pub mod flow;
 pub mod lrc;
 pub mod normalize;
 pub mod phonetic;
+pub mod pinyin;
 pub mod prosody;
 
 use anyhow::Result;
@@ -20,7 +21,7 @@ use crate::engine::{Engines, Transcript};
 pub use diff::{Hint, Issue, IssueKind, Op, Severity, TextDiff};
 
 /// 评测算法版本：写入 metrics，便于算法升级后回溯与 A/B
-pub const SCORER_VERSION: &str = "p2.1-wordlevel+prosody";
+pub const SCORER_VERSION: &str = "p2.2-wordlevel+prosody+pinyin";
 
 /// 削波采样占比上限：超过即判"输入过载"，ASR/GOP 都会失真。
 pub const CLIP_RATIO_MAX: f32 = 0.001; // 0.1%
@@ -69,6 +70,23 @@ pub fn snr_verdict(snr_db: f32, speech_duration: f32, peak_dbfs: f32) -> SnrVerd
     } else {
         SnrVerdict::Low
     }
+}
+
+/// D13 守卫：参考文本是汉字、识别结果里却**一个汉字都没有**。
+///
+/// 触发场景（2026-11-28 真机踩到）：用户传 `lang="zh"` 但 `path="last"` 指向一条**英文**录音，
+/// ASR 被强制按中文解码 → 输出 `X Ste par loved books to Shanghai last week.`。
+/// 此时字级 diff 会把每个汉字都报成"被替换成了英文单词"（`likely_different_word`），
+/// 拼音层又因为拿不到汉字而整体缺失 —— 看起来像"用户把中文读成了英文"，非常误导。
+///
+/// 判据刻意保守：只在「参考有汉字 + 转写非空 + 转写无汉字」时成立；
+/// 空转写（没说话）不算，避免和"没检测到语音"混为一谈。
+pub fn chinese_ref_without_hanzi(reference: Option<&str>, transcript: &str) -> bool {
+    let Some(r) = reference else {
+        return false;
+    };
+    let t = transcript.trim();
+    pinyin::has_cjk(r) && !t.is_empty() && !pinyin::has_cjk(t)
 }
 
 /// 双引擎文本闸门阈值（D49）：一致率低于此值说明 **ASR 自己没听清**，
@@ -394,7 +412,20 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
         && audio.source_sr > 0
         && audio.duration > 0.0
         && (audio.clipped as f32 / (audio.duration * audio.source_sr as f32)) > CLIP_RATIO_MAX;
+    // D13：中文（参考文本无拉丁字母）不走音素级 GOP。
+    // 现有 CTC 模型是英/多语 espeak 音素，中文没标定；硬跑只会把每个汉字丢进 `oov`，
+    // 再把空音素串当“没读对”。中文的发音诊断交给拼音层（`text_diff.pinyin`）。
+    let chinese_reference = req
+        .reference
+        .is_some_and(|r| pinyin::has_cjk(r) && !r.chars().any(|c| c.is_ascii_alphabetic()));
+    if req.with_gop && chinese_reference {
+        limitations.push(
+            "参考文本是中文：跳过音素级 GOP（当前 CTC 音素模型面向英文/espeak，中文未标定），发音诊断看 text_diff.pinyin（D13）"
+                .into(),
+        );
+    }
     if crate::gop::should_run(req.with_gop, req.reference.is_some(), band_limited)
+        && !chinese_reference
         && snr_state != SnrVerdict::Low
         && !clipped_too_much
     {
@@ -466,6 +497,14 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     }
 
     let mut degraded = transcript.degraded || transcript.words.is_empty();
+    // D13：中文参考 + 转写里没有汉字 → 语言不匹配，字级差异不能当发音结论
+    if chinese_ref_without_hanzi(req.reference, &transcript.text) {
+        degraded = true;
+        limitations.push(format!(
+            "参考文本是汉字，识别结果却没有任何汉字（「{}」）：`lang` 与录音语言可能不一致（或这条音频本身是英文）。拼音层无法成立，本次的字级差异**不能当发音结论**，请用正确的 lang 重考",
+            transcript.text.trim()
+        ));
+    }
     // 削波：AGC 把增益顶到满刻度时谐波失真严重，音素后验与 ASR 都不可信
     let clip_ratio = if audio.source_sr > 0 && audio.duration > 0.0 {
         audio.clipped as f32 / (audio.duration * audio.source_sr as f32)
@@ -530,6 +569,20 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
             );
     }
 
+    // D13：中文拼音层的口径必须写清（文本层，不是声学层）
+    if let Some(p) = text_diff.as_ref().and_then(|d| d.pinyin.as_ref()) {
+        limitations.push(format!(
+            "中文拼音层（{}）是**文本层**结论：来自 ASR 输出的汉字，不是声学信号。同音不同字不算错（{} 处），声调结论最弱（{} 处声调差异可能只是 ASR 选字）；中文无声学级音素打分（D13）",
+            p.table, p.homophones, p.tone_only
+        ));
+        if p.chars_lookup_missing > 0 {
+            limitations.push(format!(
+                "有 {} 个汉字不在拼音表里（生僻字/非汉字），未计入拼音层准确率",
+                p.chars_lookup_missing
+            ));
+        }
+    }
+
     if transcript.engine == "sense-voice" {
         limitations.push(
             "SenseVoice 给出的是 CTC token 时间戳（±0.5 s 量级），词界停顿时序只能作参考；             逐词精确定位需要音素级对齐".to_string(),
@@ -537,9 +590,11 @@ pub fn assess(engines: &Engines, req: AssessRequest<'_>) -> Result<Assessment> {
     }
     match &gop {
         Some(_) => limitations.push(crate::gop::GOP_LIMITATION.to_string()),
-        None => {
+        // 中文的 GOP 缺口在上面已经用 D13 那条说清了，不重复刷英文口径
+        None if !chinese_reference => {
             limitations.push("尚无音素级强制对齐（GOP），因此不能给出音素级发音分数".to_string())
         }
+        None => {}
     }
 
     // D49：文本可用性闸门。声学过闸（电平/SNR/削波都 OK）不代表 ASR 听清了；
@@ -731,6 +786,24 @@ mod tests {
         // 一边全空也算不可用
         assert_eq!(text_agreement(&a, &[]), 0.0);
         assert_eq!(text_agreement(&[], &[]), 1.0);
+    }
+
+    // ---------------- D13：中文参考 + 无汉字转写 ----------------
+
+    #[test]
+    fn chinese_reference_with_english_transcript_is_flagged() {
+        // 真机样本：lang=zh 却传了一条英文录音
+        assert!(chinese_ref_without_hanzi(
+            Some("四是四，十是十"),
+            "X Ste par loved books to Shanghai last week."
+        ));
+        // 正常中文转写 → 不触发
+        assert!(!chinese_ref_without_hanzi(Some("四是四"), "四是四"));
+        // 英文参考 → 不归这条管
+        assert!(!chinese_ref_without_hanzi(Some("I think so"), "I think so"));
+        // 没说话（空转写）→ 交给“没检测到语音”那条，不重复定罪
+        assert!(!chinese_ref_without_hanzi(Some("四是四"), "   "));
+        assert!(!chinese_ref_without_hanzi(None, "hello"));
     }
 
     // ---------------- D47：短语音 SNR 不下降 ----------------

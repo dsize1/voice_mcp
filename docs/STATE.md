@@ -1,13 +1,13 @@
 # 当前状态与下一步（交接用）
 
-> 写于 2026-11-19，最后更新 **2026-11-28**（真人素材入库 `bank ingest-audio`（含 `--srt`）+ 语料排除 + D52/D53）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
+> 写于 2026-11-19，最后更新 **2026-11-28**（**D13/M5 中文拼音层上线** + 真人素材入库 + 语料排除 + D52/D53）。新会话先读 [GOALS.md](GOALS.md)（近期/远期目标与进度），
 > 再读这一页、README / CONTRACT / ADR。
 
 ## 一句话现状
 
-**P3 闭环 + P4 素材库（5 028 条：NCE 4 997 / IELTS prompt 10 / IELTS 听力真人 14 / Peppa 7）+ 音素级 GOP + 韵律分析均已上线并在真机验证。**
+**P3 闭环 + P4 素材库（5 028 条：NCE 4 997 / IELTS prompt 10 / IELTS 听力真人 14 / Peppa 7）+ 音素级 GOP + 韵律分析 + **中文拼音层**均已上线并在真机验证。**
 评测侧的“参考音”已从 TTS 改为**真人原声优先**（D52）；真人素材有两条入库通道（有字幕 `--srt` / 无字幕 ASR 双引擎复核）。
-`crates` 11k+ 行 Rust，**175 个单测 + TTS 前端 golden 集成测试 + 9 个录音回归用例**全绿；`fmt` / `clippy -D warnings` / `test`
+`crates` 12k+ 行 Rust，**209 个单测 + TTS 前端 golden 集成测试 + 9 条录音回归**全绿；`fmt` / `clippy -D warnings` / `test`
 已由 `tools/check.ps1` 与 GitHub Actions 守住（D20/D45）。
 **优先级（2026-11-28 调整）**：分发（M6/L4、D29–D31、D33）**调低**——单用户本地跑通优先；
 **已收口（2026-11-28 这一轮，可直接引用）**：
@@ -16,10 +16,12 @@
 - 评测精度：**D46** 同形异音按音频选变体（`gop.words[].variant`）；**D37** 功能词 `omitted` whisper 交叉复核
   （`cross_check`）+ 补齐 `CONTRACTIONS` 20 条；**D53** `en`/`zh` 走语言锁定 SenseVoice（佩奇 CJK 30→0）；
   **D52** `delta_comparable` 字段 + 基线审计（280 条里仅 5 条 Δ 可跨期比）
+- 中文评测：**D13/M5 拼音层**（`text_diff.pinyin`）：声母/韵母/声调三层诊断 + 同音不同字不算错
+  （字级 accuracy 0.922 vs 拼音层 0.933，10 句真机审计 0 误报）+ 中文数字归一（`26`→`二十六`）
 - 工程：**D18** `tools/build.ps1`（DLL 占用不再 panic）；**D21** 前端 golden 进 CI（无需模型）
-下一步（按优先级）：**D13/M5 中文拼音层诊断** → **N6/N7/M8**（readiness、plan 去重、learner schema）→
+下一步（按优先级）：**M8**（learner schema 校验/迁移，D27）→ **N5**（韵律 12 条人工标注验收）→
 **M1/M2**（ref_slow 批量、按音素组卷）；**IELTS prompt 10 条补录真人示范**（补完 D52 才完全收口，需要人录音）。
-门禁一句话：`powershell -File tools/check.ps1`（fmt+clippy+175 单测+golden）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55`（需模型）。
+门禁一句话：`powershell -File tools/check.ps1`（fmt+clippy+209 单测+golden+pinyin 表 `--check`）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55`（需模型）。
 TTS 侧已收口：前端开放词表 G2P + misaki-zh + LTS + 漏词门禁（见 `docs/audit/tts-2026-11-27-frontend.md`）。
 
 ## 已实测的关键数字（别再猜）
@@ -31,7 +33,7 @@ TTS 侧已收口：前端开放词表 G2P + misaki-zh + LTS + 漏词门禁（见
 | TTS 文本前端（2026-11-27） | 英文走**开放词表 G2P** → `phoneme_codepoints`（CMUdict + 形态规则 + 数字 + 规则 LTS 兜底），lexicon 降为**覆盖层**；未见词根走 LTS 并打 `lts_words` 标记；中文走 `lexicon-zh`；**中英混说默认拒答**；标识 `g2p-ipa/1.0[cmudict+overlay]+lexicon-zh` |
 | TTS 中文前端（2026-11-28） | **默认 misaki-zh**（`tools/g2p_misaki.py`，自动探测，`VOICE_G2P_CMD_ZH=off` 可关）；失败回退 `lexicon-zh`。多音字：lexicon 逐字查表错 7/8（银行/重庆/长城/音乐/空调/便宜/行长），misaki 只错 1（还钱）。普通句 ASR 字符准确率两者都 1.000（speed 1.0）。原记录：可选 misaki-zh sidecar（`tools/g2p_misaki.py`，`pip install "misaki[zh]"`）。5 句实测字符准确率 misaki 0.939 vs lexicon 0.903（`zf_xiaoni`）；`zf_xiaobei` 在码点路径仅 0.515 → 中文示范音优先 `zf_xiaoni` |
 | ASR 语言（D53） | `en`/`zh` 走**语言锁定**的 SenseVoice 实例（懒加载，每份 ~230 MB）；实测佩奇 90 s：CJK 乱码 30 → 0；`VOICE_SENSE_LANG_LOCK=0` 可关 |
-| TTS 回归门禁 | `cargo test`（170，含 G2P/LTS/sidecar）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl`（13 条：漏词=词数减少、`expect=reject_mixed`、`expect=lts`、wpm 带内断言） |
+| TTS 回归门禁 | `cargo test`（209，含 G2P/LTS/sidecar/拼音层）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl`（13 条：漏词=词数减少、`expect=reject_mixed`、`expect=lts`、wpm 带内断言） |
 | 引擎冷启动 | 1.7 s（ASR 与 TTS 并行加载） |
 | `.m4a`/mp3 解码 | 纯 Rust（symphonia），6 s 音频 1.8 ms |
 | 麦克风（EDIFIER W820NB 蓝牙 HFP 端点） | 48 kHz 单声道 F32 可用；底噪 p50 −54.7 / p99 −46 dBFS（**偏高，AGC 强**） |
@@ -42,6 +44,10 @@ TTS 侧已收口：前端开放词表 G2P + misaki-zh + LTS + 漏词门禁（见
 | **MDD 微调（6ep/8L）** | 词级 AUROC 0.883→0.887、音素级 0.690→0.769；训练 65 s/epoch（RTX 5070 Ti cu128） |
 | **混淆对信号（TH→s）** | 命中精确率 0.50、召回 0.67（仅 TH 系列可对用户说） |
 | **韵律（YIN，纯 Rust）** | 51.8 s 真人：F0 中位 116.3 Hz、起伏 3.31 st、音域 12.61 st、句末 −0.38 st→flat；TTS 同文本 DTW 0.11 st |
+| **readiness 自动评估（N6/D48）** | `voice-cli learner readiness [--write]`：三态判据（acc/语速/停顿），`unknown` 不当通过；真机 `learner.json` 复算 L2+（missing 2 条 + unknown 3 条） |
+| **计划去重（N7）** | `RECENT_PRACTICED_N=12` 窗口；队列项排队尾、素材不够兜底复用并写 note；单测验收重叠 0/6 |
+| **中文拼音层（D13）** | 表 **26 703 汉字 / 7 310 多音字**（pypinyin 0.55 派生，287 KiB 内置二进制，runtime 无依赖）；10 句 TTS→ASR 审计：字级 0.922 / 拼音层 0.933、同音 1 处、**误报 0** |
+| 中文数字归一 | 中文参考下 `26`→`二十六`（逐字 3 单元）、`1998`/`007`/5 位以上逐位读；修掉「二十六度」被判 0.700 的假错 |
 | 素材库 | **5 028 条 / 7.18 h**（NCE 4 997 + IELTS prompt 10 + IELTS 听力真人 14 + Peppa 7），quarantine 1 234；`peppa` 默认不进训练计划 |
 | 素材库 ingest | 276 课 ≈ 10.5 min；`bank stats` 是唯一权威计数 |
 
@@ -68,6 +74,10 @@ cargo build --release && cp .cache/sherpa/lib/*.dll target/release/
 ./target/release/voice-cli.exe assess <audio|last> --reference "原句" --with-gop   # 词级+音素级 GOP + 基线（无 bank-id 时用 TTS）
 ./target/release/voice-cli.exe assess <audio|last> --bank-id nce2/02/003 --with-gop # 素材库：参考文本+真人原声切片当基线（推荐）
 ./target/release/voice-cli.exe assess <audio|last> --with-prosody --reference-audio <示范.wav>  # 韵律 + DTW
+./target/release/voice-cli.exe learner readiness --write                           # 从 history 重算 readiness（写回留 .prev）
+./target/release/voice-cli.exe learner readiness --confirm-free-speech                # L4 达标才真开自由说
+./target/release/voice-cli.exe pinyin "银行行长正在开会"                            # 中文逐字读音（多音字全列）
+./target/release/voice-cli.exe pinyin "我在北京银航工作" --reference "我在北京的银行工作"  # 拼音层诊断（纯文本）
 ./target/release/voice-cli.exe gop <audio> --text "原句"                          # 只跑 GOP（看 heard/confusion）
 ./target/release/voice-cli.exe bank plan --minutes 15 --limit 8                   # 定向训练计划（含 60 s 自由说槽位）
 ./target/release/voice-cli.exe bank plan --minutes 15 --limit 8 --no-free-speech # 强制省略自由说槽位
@@ -221,6 +231,8 @@ D15 全局锁串行 · D18 DLL 手工复制 · D21 CI 里的合成 fixture（**D
 D40 教材导语不在 LRC 里 → 每课固定 10–12 条 `extra` 噪声 · D41 英美变体表需人工维护（只覆盖 50 对高频词）· D46 G2P 同形异音词只取首变体（live/read）· D48 readiness 未自动评估 · D50 韵律 12 条标注验收未做
 D04 whisper 端到端音频回归仍缺（routing + 3 个 fixture 单测已补）· **D52 TTS 当基线（部分偿还）**：真人原声优先 + 音素自检已做；残留是 IELTS prompt 无真人音 + 历史 Δ 需重跑 · **D53 SenseVoice `lang` 不生效（部分偿还）**：语言守卫（请求 en/zh 却拿到另一种语言 → 换引擎重听）；彻底修需按语言分别加载识别器
 
+已还（2026-11-28）：**D13**（中文拼音层）· **M5** 达成 · **D56**（录音回归断言改等价集合，9/9 复绿）
+
 已还（2026-11-25）：**D47**（短语音 SNR 豁免）· **D49**（双引擎文本闸门 `text_agreement`）· **D51**（`bank refs` 批量验证 + 10/10 prompt 3/3 + 起始伪影检测）· **D20**（CI 首跑已绿）
 新增通道（2026-11-26）：`bank ingest-audio`（`--srt` 优先 / 无字幕 ASR 双引擎）、`bank pick/plan --exclude-corpus`
 
@@ -235,7 +247,7 @@ D04 whisper 端到端音频回归仍缺（routing + 3 个 fixture 单测已补�
 5. **Route A（无参考自由说伪 GOP）**：已立 [ADR-0010](adr/0010-free-speech-pseudo-gop.md)，
    **Proposed / Deferred**，不在当前迭代；触发条件见 ADR。
 6. **回到原定路线**：素材库定向训练（`bank plan`）→ 雅思素材入库（**通道已通**：`bank ingest-audio --srt`，仍缺整本题库音频）→ 按 `error_stats` 组卷
-7. **2026-11-26 之后**：N1（whisper 端到端回归）→ N6/N7（readiness 自动评估 + plan 去重）→ N4（D46 同形异音）
+7. **2026-11-26 之后**：N1（whisper 端到端回归）→ ~~N6/N7（readiness 自动评估 + plan 去重）~~（2026-11-28 已还）→ N4（D46 同形异音）
 
 ## GOP / 诊断层现状（2026-11-22）
 
@@ -271,6 +283,75 @@ SKILL 4.2 已固化措辞规则（先看句型再解读升降、`stress_top` 只
 `speech_duration`、`onset_gap_ms`）。MCP 是 Pi 的 stdio 子进程：换二进制必须先让旧进程退出
 （`/mcp` 里 disable/reconnect，或杀掉 PID），再 `cargo build --release -p voice-mcp`，
 否则 Windows 文件锁会让构建静默复用旧 exe。
+
+## 中文拼音层（2026-11-28，D13/M5 已还）
+
+详细口径见 **[docs/pinyin.md](pinyin.md)**，这里只记"是什么/数字/边界"。
+
+**做了什么**：参考文本含汉字时 `assess` 自动产出 `text_diff.pinyin`，把字级 diff 升级成
+**声母 / 韵母 / 声调**三层诊断。三个变化：
+
+1. **同音不同字不算错**（`的/得`、`在/再`、`银行/银航`）→ `issues[].hint = likely_homophone`、
+   severity `low`；中文真实发音口径看 `accuracy_pinyin`（字级 `accuracy` 口径不变，保持可纵向比）。
+2. **汉字替换的音形相似度不再恒为 0**：过去英文骨架编码对汉字返回空 key，导致所有汉字替换都被推成
+   `likely_different_word`（"说成了别的词"）。现在按 声母 .45 / 韵母 .35 / 声调 .20 加权。
+3. **已知混淆对可点名**：平翘舌（s/sh）、前后鼻音（-n/-ng）、n/l、尖团音… → `confusions[].tag`；
+   表外的差异只统计、不结论。声调一律 `unclear/medium`（文本层分不清"声调错"与"ASR 选字"）。
+
+**数据**：`crates/voice-core/data/pinyin-zh.txt`（`tools/gen_pinyin_table.py` 由 pypinyin 0.55 生成，
+**26 703 汉字 / 7 310 多音字**，287 KiB，`include_str!` 内置 → **运行时不依赖模型目录，CI 可跑**）。
+多音字取"让两边最接近的那一读"（同 D46：银行/长城/音乐/空调/重庆/便宜 全部判对）。
+
+**附带修复**：中文数字归一 —— SenseVoice 把「二十六」写成 `26`，旧口径按英文展开成 `twenty six`
+→ 「他把空调开到二十六度」字级准确率被拖到 0.700；现在两侧都归一成汉字（`26`→`二十六`，
+5 位以上/年份逐位）。修完该句 1.000。
+
+**实测**（`python tools/pinyin_audit.py`，10 句 TTS `zf_xiaoni` → SenseVoice `zh`）：
+字级 **0.922** / 拼音层 **0.933**、同音 1 处（`银行`→`银航`）、**被判成发音偏差的 0 处**。
+报告：[audit/pinyin-2026-11-28.md](audit/pinyin-2026-11-28.md)。
+
+**语言不匹配守卫（2026-11-28 真机踩到后补）**：参考是汉字、转写里却没有任何汉字
+（`lang="zh"` 配英文录音 → `X Ste par loved books to Shanghai last week.`）→ `degraded=true` +
+`limitations` 说明、`pinyin=null`，避免把"每个汉字都被替换成英文单词"当成发音结论。
+判据 `assess::chinese_ref_without_hanzi`（1 个单测）。
+
+**边界**：纯文本层（中文**没有**音素级 GOP，`with_gop` 会跳过并在 `limitations` 写明）；
+声调结论最弱；多读音会让错误被低估（宁漏不误报）；中文韵律未标定，不得据 `prosody` 判声调。
+
+**验收**：单测 **+21**（pinyin 13 / diff 中文 5 / 数字归一 2 / 语言守卫 1），全仓 **196 条**；
+`check.ps1` 增加 `gen_pinyin_table.py --check`（缺 pypinyin 只提示不阻断）。
+
+**录音回归现状（2026-11-28）**：**9/9 全绿**。本轮一度是 7/9（`r01_third_16k` / `r06_nce2_l2_native`），
+用 `git stash` 对比确认与 D13 无关，是 ASR 输出漂移（`third`→`three`、导语 `Lesson2`→`lesson`+`two`）。
+已按 **D56** 收口：断言支持**等价集合**（`cases::OneOrMany`，`said`/`hint`/`severity` 可写数组，命中任一即过），
+不再用单字符串锁死 ASR 的偶然写法。
+
+## readiness 自动评估 + 计划去重（2026-11-28，D48/N6/N7 已还）
+
+**问题**：`levels.md` 的 L2/L3/L4 判据早就写好，但代码只**消费** `readiness.free_speech_enabled`，
+`stage`/`missing` 全靠手写 → 与真实历史漂移（真机档案里 missing 还写着"最近 1.00 / 0.80 / 0.875"，
+其实 history 末尾三条是 0.800 / 0.875 / 0.667）。
+
+**N6（`voice-core::readiness`）**：从 `history` 复算，三态判据：
+
+| 判据 | 口径 | 缺数据 |
+|---|---|---|
+| `consecutive_acc` | 最近 `gate.consecutive_n`（3）条 acc ≥0.90 | `not_met` |
+| `rate_band` | 语速 120–160 wpm | `unknown`（全缺时） |
+| `pause_density` | pause_count ÷ (speech_duration/30) ≤ 6 | `unknown` |
+| `core_phonemes` | θ / v / 词尾无回归 | **固定 `unknown`**（交 Skill 判读） |
+| `free_speech` | 最近一条 `scene=free` 的停顿/重复 | `unknown` |
+
+- `scene=word`（单词 drill）与 `scene=free` **不参与**"连续 N 条"（单词 acc 与句子不可比，无稿没有 accuracy）。
+- CLI：`learner readiness [--write] [--confirm-free-speech]`；写回只动 `readiness`，保留人工写的 evidence
+  （`theta`/`v`/`contractions` 等），写前留 `learner.json.prev`；**开自由说必须 L4 达标 + 显式确认**。
+- 真机复算（2026-11-28）：stage **L2+**，missing 由 4 条手写 → **2 条明确未达标**（连续 acc / 语速带）
+  + **3 条 unknown**（停顿缺字段、核心音素、自由说）。
+
+**N7（`plan::RECENT_PRACTICED_N`）**：`bank plan` 把 `history` 末尾 12 条里练过的素材**降级**：
+`error_stats`/`fill` 两步跳过它们，`drill_queue` 里刚练过的排到队尾（不丢弃）；素材不够时兜底复用并在
+`notes` 写明。验收线"连续两次计划重复率 <20%"由单测 `consecutive_plans_do_not_repeat_material` 锁住
+（实测重叠 0/6）。真机 `bank plan --limit 6` 已带 `已把最近练过的 5 条素材降级` 提示。
 
 ## Route A 立项（2026-11-23，暂不实现）
 

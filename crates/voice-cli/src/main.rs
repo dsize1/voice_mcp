@@ -61,6 +61,11 @@ enum Cmd {
     },
     /// 播放 wav 文件
     Play { path: String },
+    /// 学习者档案（D48）：从 history 自动算 readiness stage / 缺项
+    Learner {
+        #[command(subcommand)]
+        cmd: LearnerCmd,
+    },
     /// 评测：转写 + 语流 + 与参考文本的词级差异
     Assess {
         /// 音频路径或 "last"
@@ -165,6 +170,16 @@ enum Cmd {
         #[arg(long, default_value = "drill")]
         scene: String,
     },
+    /// 中文拼音层（D13）：看一段中文的拼音，或与参考文本做声母/韵母/声调诊断
+    ///
+    /// 纯文本、不需要音频与模型 —— 用来核对 ASR 转写「同音不同字」和发音层级。
+    Pinyin {
+        /// 待分析的文本（通常是 ASR 转写结果）
+        text: String,
+        /// 参考文本：给了就做拼音层诊断（声母/韵母/声调哪一层不同）
+        #[arg(long)]
+        reference: Option<String>,
+    },
     /// 监视录音目录，新录音自动导入 + 转写（Win11 录音机 / 手机传回均可）
     Watch {
         /// 覆盖监视目录（默认取配置里的 Win11 录音机目录）
@@ -227,6 +242,25 @@ enum Cmd {
         /// 固定倍率（隔离“语速标定”这个变量；漏词门禁建议用固定倍率跑）
         #[arg(long)]
         speed: Option<f32>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LearnerCmd {
+    /// 用 history 重算 readiness（连续 acc / 语速带 / 停顿密度），可写回 learner.json
+    ///
+    /// 判据见 docs/levels.md §2/§5；代码口径见 crates/voice-core/src/readiness.rs。
+    /// `word`（单词 drill）与 `free`（无稿）不参与"连续 N 条"统计。
+    Readiness {
+        /// learner.json 路径（默认 $VOICE_HOME/learner.json）
+        #[arg(long)]
+        learner: Option<String>,
+        /// 写回 learner.json（默认只打印；写前留 .prev 备份）
+        #[arg(long)]
+        write: bool,
+        /// 用户已确认可以开无稿自由说（仅在 L4 达标时真正生效）
+        #[arg(long)]
+        confirm_free_speech: bool,
     },
 }
 
@@ -477,6 +511,13 @@ fn main() -> Result<()> {
             g2p.as_deref(),
         ),
         Cmd::Cases { dir, only } => run_cases(&cfg, &dir, only.as_deref()),
+        Cmd::Learner { cmd } => match cmd {
+            LearnerCmd::Readiness {
+                learner,
+                write,
+                confirm_free_speech,
+            } => learner_readiness(&cfg, learner.as_deref(), write, confirm_free_speech),
+        },
         Cmd::Bank { cmd } => match cmd {
             BankCmd::Ingest {
                 from_dir,
@@ -684,6 +725,7 @@ fn main() -> Result<()> {
             bank_id.as_deref(),
             &scene,
         ),
+        Cmd::Pinyin { text, reference } => pinyin_cmd(&text, reference.as_deref()),
         Cmd::Watch { dir, lang } => watch(&cfg, dir.as_deref(), &lang),
         Cmd::TtsProbe { text } => tts_probe(&cfg, &text),
         Cmd::TtsAudit {
@@ -1440,6 +1482,114 @@ fn rec(
             }))?
         ),
     }
+    Ok(())
+}
+
+// ------------------------------------------------------------------ pinyin
+/// 中文拼音层（D13）：纯文本诊断，不需要音频/模型。
+///
+/// 两种用法：
+/// - `pinyin "我觉得很好"` → 逐字读音（多音字列出全部候选）
+/// - `pinyin "<ASR 转写>" --reference "<原句>"` → 声母/韵母/声调哪一层不同 + 混淆统计
+fn pinyin_cmd(text: &str, reference: Option<&str>) -> Result<()> {
+    use voice_core::assess::{diff, pinyin};
+    let table = pinyin::table();
+    let chars: Vec<serde_json::Value> = text
+        .chars()
+        .filter(|c| pinyin::is_cjk(*c))
+        .map(|c| {
+            let readings: Vec<String> = table
+                .readings(c)
+                .map(|rs| rs.iter().map(|s| s.display()).collect())
+                .unwrap_or_default();
+            serde_json::json!({ "char": c.to_string(), "readings": readings })
+        })
+        .collect();
+    let out = match reference {
+        None => serde_json::json!({
+            "text": text,
+            "table": table.source(),
+            "chars": chars,
+        }),
+        Some(r) => {
+            // 用"纯文本转写"跑同一条 diff 路径：与 assess 里的中文分支完全一致
+            let t = Transcript {
+                text: text.to_string(),
+                lang: "zh".into(),
+                engine: "text".into(),
+                duration: 0.0,
+                words: Vec::new(),
+                tokens: Vec::new(),
+                degraded: false,
+                infer_ms: 0.0,
+            };
+            let d = diff::compare(r, &t);
+            serde_json::json!({
+                "reference": r,
+                "heard": text,
+                "table": table.source(),
+                "text_diff": {
+                    "accuracy": d.accuracy,
+                    "issues": d.issues,
+                },
+                "pinyin": d.pinyin,
+            })
+        }
+    };
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+
+// ------------------------------------------------------------------ learner
+/// D48/N6：从 `learner.json.history` 重算 readiness，可选写回。
+///
+/// 为什么不让 Skill 手写 `stage`：判据（连续 3 条 acc≥0.90、语速 120–160、停顿 ≤6/30 s）
+/// 写在 docs/levels.md，但手写会和真实历史漂移。这里机器算、人确认。
+fn learner_readiness(
+    cfg: &Config,
+    learner: Option<&str>,
+    write: bool,
+    confirm_free_speech: bool,
+) -> Result<()> {
+    let path = learner
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(&cfg.data_dir).join("learner.json"));
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("读取 {} 失败（先建档或用 --learner 指定）", path.display()))?;
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("{} 不是合法 JSON", path.display()))?;
+
+    let report = voice_core::readiness::evaluate(&doc);
+    let mut enabled_now = false;
+    if write {
+        // 与 metrics 同一套习惯：写前留一份 .prev，误写也能回滚
+        let _ = std::fs::copy(&path, path.with_extension("json.prev"));
+        enabled_now = voice_core::readiness::apply(&mut doc, &report, confirm_free_speech);
+        std::fs::write(
+            &path,
+            format!(
+                "{}
+",
+                serde_json::to_string_pretty(&doc)?
+            ),
+        )
+        .with_context(|| format!("写回 {} 失败", path.display()))?;
+    }
+    if confirm_free_speech && !report.free_speech_ready {
+        eprintln!(
+            "[readiness] 未开自由说：L4 未达标（见 report.criteria 的 free_speech / 其他未达标项）"
+        );
+    }
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "learner": path.to_string_lossy(),
+            "written": write,
+            "free_speech_enabled_now": enabled_now,
+            "readiness": report,
+        }))?
+    );
     Ok(())
 }
 

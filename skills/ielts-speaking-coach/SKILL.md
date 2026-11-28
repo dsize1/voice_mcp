@@ -192,6 +192,7 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 | **P0 可理解度** | `kind=omitted`（漏词/吞音） | 词尾辅音、弱读过度；先慢速读这个词 |
 | **P0 可理解度** | `kind=substitution` 且 `hint=likely_pronunciation` | 该词的音素（查 `references/phoneme-map.md`） |
 | **P0 可理解度** | `kind=substitution` 且 `hint=unclear` | **不下结论**，让用户重录该词或对照示范音确认 |
+| **P0 可理解度** | `kind=substitution` 且 `hint=likely_homophone`（中文） | **不算问题**。`的/得`、`在/再`、`银行/银航` 拼音完全相同，是 ASR 选字。不要报、不要写进 `error_stats` |
 | **P0 可理解度** | `kind=omitted` 且 `hint=likely_asr_miss` | **不算问题**。短功能词（is/a/the）被 ASR 吞掉很常见；让用户只重读该短语，或用 `engine="whisper"` 复核。不要写进 `error_stats` |
 | **P1 流利度** | `pause_count ≥ 3` 或 `pause_longest > 1.0` | 断句位置、意群（**以 `flow.pauses` 为准**） |
 | **P1 流利度** | `word_boundary_breaks ≥ 2` | 连读/词界（`not at all`、`an apple`）；若 `pause_count 0` 但有很大的 `word_gaps`，先怀疑 ASR 漏词，不要报“停顿” |
@@ -318,6 +319,40 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 6. 无词级时间戳时只有句级指标（`stress_top` 为空），只谈句末升降/平直/音域。
 7. 一次仍然只挑 **1 条**最高优先级的韵律问题（与第 4 节一致），且必须给"再示范一次 + 重读对比"。
 
+### 4.3 中文怎么用（拼音层，`assess(reference=…, lang="zh")`）
+
+**中文结论来自 `text_diff.pinyin`，不要用 `accuracy` 评价中文发音。**
+`accuracy` 是字级口径（`的/得` 不同字就算错），中文看 **`pinyin.accuracy_pinyin`**（同音不同字不算错）。
+
+| 字段 / `kind` | 含义 | 允许的说法 |
+|---|---|---|
+| `hint=likely_homophone` | 拼音（含声调）完全相同 | **不提**。用户问才解释"同音不同字，不算发音问题" |
+| `kind=tone_only` | 只有声调不同 | "你读的是 mài（4 声），参考是 mǎi（3 声）——也可能是识别选字，重读一次确认"（必须留这句） |
+| `kind=initial_only` + `tags` 含 `initial.sh_s`/`zh_z`/`ch_c` | 平翘舌 | "「四」听成了「十」：s → sh，先只练这一对" |
+| `kind=initial_only` + `initial.n_l` | 鼻音/边音 | "n 和 l 混了" |
+| `kind=rime_only` + `rime.an_ang`/`en_eng`/`in_ing` | 前后鼻音 | "-n / -ng 收尾，慢读那个字" |
+| `kind=mixed` | 两层不同（如声母+声调） | 只报**其中一层**（优先声母），一次一个 |
+| `kind=different` / `hint=unclear` | 三层都不同 / 表外混淆 | **不下结论**，让用户重读那 1–2 个字 |
+| `confusions[]` | 整句混淆统计（`{tag,count,examples}`） | 用来选下一条练习（`count` 最高的那对） |
+
+硬规则：
+
+1. **中文没有音素级声学打分**：`with_gop` 在中文参考下会被跳过（`limitations` 有说明）。
+   不要说"你的 /s/ 没读准"这种音素级断言，只能说"声母这一层不一样"。
+2. **同音不同字不是错**：`hint=likely_homophone` 不计入 `error_stats`、不进 `drill_queue`。
+3. **声调结论必须带"可能是识别选字"**（文本层区分不了），且一次只报一个字的声调。
+4. 中文字级 `accuracy` 与 `accuracy_pinyin` 差距大 → 先解释"这几处是同音字，不是你的问题"，
+   再报真正的 1 条（`confusions[]` 里 `count` 最高、且 `kind != homophone` 的那对）。
+5. 中文**韵律**（`prosody`）尚未标定 → 不据 `final_direction`/`stress_top` 判"声调/语调不对"。
+
+示例（L2 中文讲解）：
+
+```
+这句里「四」被听成「十」（s → sh，平翘舌），声调也从 4 掉到 2。
+先只练这一对：慢速跟读「四是四，十是十」，注意舌尖位置——s 是平的，sh 要卷起来。
+（另外两处「的/得」是同音字，不算你的错。）
+```
+
 ## 5. 教学语言阶梯
 
 档位存在 `learner.json.teaching_lang`，默认按第 2 节定级结果。
@@ -356,6 +391,10 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 ```
 
 规则：
+- **`readiness` 不要手写**：练完把结果写进 `history` 后跑
+  `voice-cli learner readiness --write`（判据见 `docs/levels.md` §5）。
+  它算出 `stage` / `missing` / `unknown`，并保留你之前手写的 evidence（`theta`/`v`/`contractions`）。
+  开无稿自由说只能 `--confirm-free-speech` 且 L4 达标；`unknown` 项（核心音素/停顿缺字段）**读出来自己判**。
 - `error_stats` 的 key 用固定词表（见 `references/phoneme-map.md` 的 id），便于统计"最常犯的 3 个错"。
 - `history` 只保留最近 20 条。
 - 更新后用一句话告诉用户当前的 focus 和最常犯的错（`manifest.jsonl` 也可用于趋势，但以档案为权威）。
@@ -364,6 +403,7 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 ## 7. 每 5 次训练做一次复评
 
 **若 `readiness.free_speech_enabled=false`**：跳过 Part 2 长独白，改用脚本朗读（有 reference）做复评；
+先跑 `voice-cli learner readiness` 看 `criteria`——`missing` 是明确未达标项，`unknown` 要你自己判读（别当通过）；
 只报朗读的发音/语流，不推断“无稿流利度”。
 
 用户同意做长独白时：`assess(path=..., reference 不传, scene="mock")` → 看 `speech_rate` / `pause_*` / `filler_rate` / `repetitions` 趋势，
@@ -378,6 +418,7 @@ drill 时如果让用户读三次 `thank`，`assess` 的 `reference` 就必须�
 | `references/band-descriptors.md` | 定级、复评、判断"这算 6 还是 7"时 |
 | `references/drills.md` | 需要新的训练方法（影子跟读、回音法、倒序链、节拍器）时 |
 | `references/ielts-topics.md` | Part 1/2/3 出题、给 7 分参考答案时 |
+| `docs/pinyin.md`（仓库） | 中文用户问"为什么拼音层这么说"、或要解释平翘舌/前后鼻音时 |
 
 ## 9. 收尾（每次训练结束）
 

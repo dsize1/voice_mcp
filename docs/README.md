@@ -1,6 +1,6 @@
 # Voice MCP Service — 文档索引
 
-> 本地语音 I/O + 发音诊断能力（词级 diff + 音素级 GOP），以 MCP 形式暴露给 Pi，
+> 本地语音 I/O + 发音诊断能力（词级 diff + 音素级 GOP + 中文拼音层），以 MCP 形式暴露给 Pi，
 > 配合 Skill 实现英语口语（雅思 7 分目标）训练。
 > 核心设计原则：**MCP 只做"测量"，Skill + LLM 做"教学"。**
 
@@ -16,6 +16,7 @@
 | [adr/0004-audio-io-and-evidence.md](adr/0004-audio-io-and-evidence.md) | 音频输入/输出契约与留证机制 | Accepted |
 | [adr/0005-deps-and-model-acquisition.md](adr/0005-deps-and-model-acquisition.md) | 第三方依赖与模型获取策略（网络/工具链实测与替代通路） | Accepted |
 | [adr/0006-assessment-scope.md](adr/0006-assessment-scope.md) | 评测层能力边界（P2 词级诊断的三态推断） | Accepted |
+| [pinyin.md](pinyin.md) | **中文拼音层**：声母/韵母/声调三层诊断、数据源、边界、真机审计 | ✅ 2026-11-28 |
 | [phoneme-gop.md](phoneme-gop.md) | 音素级 GOP：模型选型、标定数字、混淆对、能力边界 | ✅ |
 | [mdd.md](mdd.md) | MDD 微调实验：协议、结果（AUROC 0.690→0.769）、GPU 环境 | ✅ |
 | [datasets.md](datasets.md) | 评测数据集（speechocean762）：四层校验、数据画像、tag 权重 | ✅ |
@@ -52,8 +53,10 @@
 | 音素级 | AUROC 0.769、P@FP10 0.170（基率 7.5% ⇒ 上限 0.45） | 仅句内排序，**禁止断言** |
 | 混淆对 | 仅 `TH→s` 可用（P 0.50 / R 0.67） | 可说"模型听到的是 /s/ 而不是 /θ/" |
 | 韵律 | F0 中位/标准差/音域、句末升降、重音候选、DTW | 只报数值+位置；`stress_top` 是候选，不下"重音错了"的结论 |
+| **中文（文本层）** | `text_diff.pinyin`：声母/韵母/声调三层 + `accuracy_pinyin` | 同音不同字不算错；声调只到 `unclear`；**无中文声学打分**（见 [pinyin.md](pinyin.md)） |
 
 另有四道闸门：`snr_db < 13` / `peak < −30 dBFS` / 削波 > 0.1% / 缺参考文本 → 一律不出诊断结论。
+中文另有一条：`with_gop` 在中文参考下**直接跳过**（CTC 音素模型面向英文/espeak，中文未标定），只出拼音层。
 
 ## 3. 路径约定
 

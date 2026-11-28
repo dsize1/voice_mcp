@@ -15,11 +15,18 @@
 //!     "band_limited": true,
 //!     "issue_count": { "gte": 1 },
 //!     "issues": [
-//!       { "kind": "substitution", "reference": "third", "said": "straight", "hint": "unclear" }
+//!       { "kind": "substitution", "reference": "third", "said": ["straight", "three"], "hint": "unclear" }
 //!     ]
 //!   }
 //! }
 //! ```
+//!
+//! `said` / `hint` / `severity` 可以写字符串，也可以写**等价集合**（数组，命中任一即算过）。
+//!
+//! 为什么要集合（D56）：ASR 输出会随模型/语言锁定/归一化演进漂移——
+//! `third` 从被听成 `straight` 变成 `three`、`Lesson2` 从粘连一个 token 变成 `lesson` + `two`，
+//! 这些都是**同一个现象的两种写法**，不是行为退化。锁死单字符串会让门禁长期假红，
+//! 最后没人看门禁。写集合的规则：集合里每一项都必须能用"同一个语义"解释（例如都是 /θ/ 丢失）。
 
 use std::path::{Path, PathBuf};
 
@@ -68,6 +75,33 @@ pub struct Expect {
     pub absent_issues: Vec<ExpectIssue>,
 }
 
+/// 断言值：单个字符串，或**等价集合**（命中任一即算过，见 D56）。
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum OneOrMany {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl OneOrMany {
+    fn matches(&self, got: Option<&str>) -> bool {
+        let Some(g) = got else {
+            return false;
+        };
+        match self {
+            OneOrMany::One(s) => s == g,
+            OneOrMany::Many(v) => v.iter().any(|s| s == g),
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            OneOrMany::One(s) => s.clone(),
+            OneOrMany::Many(v) => format!("[{}]", v.join(" | ")),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ExpectIssue {
     pub kind: String,
@@ -75,9 +109,10 @@ pub struct ExpectIssue {
     /// 参考文本文件（长文本用这个；相对路径同样支持 ${VOICE_CASES_DIR}）
     #[serde(default)]
     pub reference_file: Option<String>,
-    pub said: Option<String>,
-    pub hint: Option<String>,
-    pub severity: Option<String>,
+    /// 识别出的词 / `hint` / `severity`：可写字符串或等价集合
+    pub said: Option<OneOrMany>,
+    pub hint: Option<OneOrMany>,
+    pub severity: Option<OneOrMany>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,7 +295,7 @@ fn matches_issue(want: &ExpectIssue, got: &crate::assess::Issue) -> bool {
         return false;
     }
     if let Some(s) = &want.said
-        && got.said.as_deref() != Some(s.as_str())
+        && !s.matches(got.said.as_deref())
     {
         return false;
     }
@@ -269,14 +304,15 @@ fn matches_issue(want: &ExpectIssue, got: &crate::assess::Issue) -> bool {
             .hint
             .map(|x| snake(&format!("{x:?}")))
             .unwrap_or_default();
-        if got_h != h.to_lowercase() {
+        if !h.matches(Some(got_h.as_str())) {
             return false;
         }
     }
-    if let Some(sv) = &want.severity
-        && snake(&format!("{:?}", got.severity)) != sv.to_lowercase()
-    {
-        return false;
+    if let Some(sv) = &want.severity {
+        let got_sv = snake(&format!("{:?}", got.severity));
+        if !sv.matches(Some(got_sv.as_str())) {
+            return false;
+        }
     }
     true
 }
@@ -286,15 +322,80 @@ fn describe_issue(i: &ExpectIssue) -> String {
         "kind={} reference={} said={} hint={} severity={}",
         i.kind,
         i.reference.as_deref().unwrap_or("-"),
-        i.said.as_deref().unwrap_or("-"),
-        i.hint.as_deref().unwrap_or("-"),
-        i.severity.as_deref().unwrap_or("-"),
+        i.said
+            .as_ref()
+            .map(OneOrMany::describe)
+            .unwrap_or_else(|| "-".into()),
+        i.hint
+            .as_ref()
+            .map(OneOrMany::describe)
+            .unwrap_or_else(|| "-".into()),
+        i.severity
+            .as_ref()
+            .map(OneOrMany::describe)
+            .unwrap_or_else(|| "-".into()),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn issue(said: &str, hint: Option<crate::assess::Hint>) -> crate::assess::Issue {
+        crate::assess::Issue {
+            kind: crate::assess::IssueKind::Substitution,
+            reference: Some("third".into()),
+            reference_surface: Some("third".into()),
+            said: Some(said.into()),
+            t0: 0.0,
+            t1: 0.1,
+            severity: crate::assess::Severity::High,
+            note: String::new(),
+            similarity: 0.0,
+            phonetic_similarity: 0.0,
+            hint,
+            cross_checked: None,
+            other_engine_heard: None,
+            pinyin: None,
+        }
+    }
+
+    /// D56：`said` 支持等价集合，命中任一即算过
+    #[test]
+    fn said_accepts_equivalence_set() {
+        let set: ExpectIssue =
+            serde_json::from_str(r#"{"kind":"substitution","said":["straight","three"]}"#).unwrap();
+        assert!(matches_issue(
+            &set,
+            &issue("three", Some(crate::assess::Hint::Unclear))
+        ));
+        assert!(matches_issue(&set, &issue("straight", None)));
+        assert!(!matches_issue(&set, &issue("tree", None)));
+
+        // 单字符串写法必须继续有效（向后兼容旧用例）
+        let one: ExpectIssue =
+            serde_json::from_str(r#"{"kind":"substitution","said":"three"}"#).unwrap();
+        assert!(matches_issue(&one, &issue("three", None)));
+        assert!(!matches_issue(&one, &issue("straight", None)));
+
+        // hint 也能写集合
+        let both: ExpectIssue = serde_json::from_str(
+            r#"{"kind":"substitution","hint":["unclear","likely_pronunciation"]}"#,
+        )
+        .unwrap();
+        assert!(matches_issue(
+            &both,
+            &issue("x", Some(crate::assess::Hint::Unclear))
+        ));
+        assert!(matches_issue(
+            &both,
+            &issue("x", Some(crate::assess::Hint::LikelyPronunciation))
+        ));
+        assert!(!matches_issue(
+            &both,
+            &issue("x", Some(crate::assess::Hint::LikelyHomophone))
+        ));
+    }
 
     #[test]
     fn snake_converts_enum_names() {

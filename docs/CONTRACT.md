@@ -70,7 +70,8 @@ sessions/<date>/<hhmmss>_drill/takes/
     "pause_count": 2, "pause_longest": 0.54,
     "word_boundary_breaks": 0, "filler_rate": 0.0, "repetitions": 0,
     "degraded": false, "issue_count": 1,
-    "timestamp_alignment": "exact"
+    "timestamp_alignment": "exact",
+    "accuracy_pinyin": null
   },
   "issues": [{
     "kind": "substitution", "reference": "third", "reference_surface": "third", "said": "straight",
@@ -85,7 +86,7 @@ sessions/<date>/<hhmmss>_drill/takes/
   "words": [{"w":"I","t0":1.86,"t1":2.28}],
   "text_agreement": 1.0,
   "limitations": ["源音频采样率 ≤16 kHz…", "SenseVoice…token 时间戳 ±0.5 s…", "尚无音素级对齐…"],
-  "scorer_version": "p2.0-wordlevel",
+  "scorer_version": "p2.2-wordlevel+prosody+pinyin",
   "evidence": { "src": "…", "norm_wav": "…", "metrics_json": "…", "feedback_md": "…" },
   "session": "2026-11-19/003545_assess", "prefix": "001_read_third"
 }
@@ -106,10 +107,12 @@ sessions/<date>/<hhmmss>_drill/takes/
    - `missing` → 无时间戳，只能报词
 4. `issues[].reference_surface` 是参考文本里的**原始写法**（`I'm`、`3rd`）。
    反馈时优先用它——同一缩写展开出的多个词只会报 1 条问题，不会出现"漏读 i"+"漏读 am"两条。
-5. `hint` 是**四态推断**，不是结论：
+5. `hint` 是**五态推断**，不是结论：
    - `likely_pronunciation` → 可以说"这里听起来是两个近音词，大概率发错了"
    - `likely_different_word` → 别说成发音问题，更像用词/记忆问题
    - `unclear` → **必须**说明"可能是发音问题，也可能是识别误差"，并提出重录或对照示范音
+   - `likely_asr_miss` → 短功能词被 ASR 吞掉（见第 2 条），不算漏读
+   - `likely_homophone` → 中文同音不同字（见第 9 条），不算发音问题
 6. `limitations` 里出现的每一条都要反映到措辞上（例如 `band_limited` 时不要断言 /θ/ vs /s/）。
 7. `accuracy` 只用于**纵向趋势对比**，不要换算成雅思分数对外承诺。
 8. **规范化会吃掉两类“假错误”**（ADR-0006 补充）：
@@ -118,7 +121,10 @@ sessions/<date>/<hhmmss>_drill/takes/
    - **ASR 伪缩略**：`did't`/`could't` 这类不存在的词形（识别引擎把 `did not` 糊成一个 token），
      自动展开成 `did + not`，不得报成“漏读 + 替换”两条错误。合法缩略仍走缩写表。
    所以：**看到 `accuracy` 下降时，先看 `issues` 是否集中在导语/拼写变体/功能词**，再决定要不要当真。
-9. **停顿要看 `flow.pauses`（VAD，以音频为真），不是 `flow.word_gaps`（ASR 时间戳）。**
+9. **中文：`hint=likely_homophone` 不是错误**（`的/得`、`在/再`、`银行/银航`）。
+   它是 ASR 选字差异，不要写进 `error_stats`、不要当发音问题报；
+   想判断"中文发音到底有没有问题"看 `text_diff.pinyin.accuracy_pinyin`，不是 `accuracy`。
+10. **停顿要看 `flow.pauses`（VAD，以音频为真），不是 `flow.word_gaps`（ASR 时间戳）。**
    两者矛盾时（例：`pause_count 0` 但 `word_gaps` 出现 2.3 s 空隙），说明 **ASR 漏词造成了假空隙**，
    不得说“你停了 2.3 秒”；只能提示“这段识别有漏词”。`word_gaps` 仅用于比较词界粘连的相对趋势。
 
@@ -417,6 +423,36 @@ af_heart 在 140 wpm 附近有起始伪影，会让基线自检误判；改后 �
 GOP 现在会**按音频选变体**：对每个多发音词，用它自己的帧区间把每个变体各对齐一次，
 取平均 GOP 最高的那个；换了变体时在 `gop.words[].variant` 里给出 ARPAbet 串（证据）。
 不再因为"恰好查了另一套发音"而把读对的判成读错。
+
+## 中文拼音层（D13，自动生效）
+
+参考文本含**汉字**时，`assess` 自动做拼音层诊断（英文/纯数字参考不产出）。详细口径见
+[pinyin.md](pinyin.md)，这里只列契约：
+
+- `text_diff.pinyin`：整句报告 —— `accuracy_char`（字级）/ **`accuracy_pinyin`（同音不同字不算错）**、
+  `homophones` / `tone_only` / `initial_only` / `rime_only` / `mixed` / `different`、
+  `confusions[]`（`{tag, count, examples}`）、逐字明细 `chars[]`。
+- `issues[].pinyin`：单字诊断 —— `{kind, layers, tags, known, similarity, ref_pinyin, said_pinyin, note}`。
+- 新增 `hint=likely_homophone`：拼音（含声调）完全相同 → **不算发音问题**，severity 固定 `low`。
+- `kind` 三态映射：`tone_only` → `hint=unclear`/`medium`（文本层分不清"声调错"还是"ASR 选字"）；
+  命中已知混淆对（平翘舌/前后鼻音/n-l/尖团音…）→ `likely_pronunciation`/`high`；其余 → `unclear`。
+- 汉字替换项的 `phonetic_similarity` 现在来自拼音（声母 .45 / 韵母 .35 / 声调 .20），
+  **不再恒为 0**（旧实现把所有汉字替换都推成 `likely_different_word`）。
+- `reference_words` / `accuracy` 口径**未变**（仍是字级），便于纵向对比；
+  中文的真实发音口径看 `accuracy_pinyin`。
+- 中文 **不跑 GOP**：`with_gop=true` 时跳过并在 `limitations` 写明（CTC 音素模型面向英文/espeak，中文未标定）。
+- 数字归一：中文场景下 `26` → `二十六`（逐字 3 个单元），5 位以上/年份逐位读（`1998` → `一九九八`）。
+- **语言不匹配守卫**：参考文本是汉字、转写里却没有任何汉字（`lang` 用错 / 音频是英文）→
+  `degraded=true` + `limitations` 说明，`pinyin` 为 `null`，该次字级差异**不得当发音结论**。
+- 拼音表内置在二进制里（`crates/voice-core/data/pinyin-zh.txt`，26 703 汉字 / 7 310 多音字），
+  运行时不需要模型目录；改规则请跑 `python tools/gen_pinyin_table.py`（`check.ps1` 有 `--check` 门禁）。
+
+离线核对（不需要音频/模型）：
+
+```bash
+voice-cli pinyin "银行行长正在开会"                                  # 逐字读音
+voice-cli pinyin "我在北京银航工作" --reference "我在北京的银行工作"   # 三层诊断
+```
 
 ## 韵律（`with_prosody=true` / `reference_audio`）
 

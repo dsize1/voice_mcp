@@ -4,7 +4,8 @@
 //! 设计约束（与 ADR-0010 对齐，便于 Route A 以后直接挂上）：
 //! - 每条计划都携带 `text`、`tags`、`level`、`ref_audio`，词级时间来自素材库；
 //! - 自由说是计划里的固定槽位，明确标注“伪参考 GOP 未启用（ADR-0010）”；
-//! - 只做**选材与预算**，不在这里生成教学话术（那属于 Skill）。
+//! - 只做**选材与预算**，不在这里生成教学话术（那属于 Skill）；
+//! - **避免连续两次计划重复**（N7）：`history` 里最近练过的素材降级，只在素材不够时兜底复用。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -154,7 +155,14 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
         .filter_map(|h| h.bank_id.clone())
         .collect();
     let target_tags = target_tags(learner);
+    let recent_practiced = recently_practiced(learner);
     let mut notes: Vec<String> = Vec::new();
+    if !recent_practiced.is_empty() {
+        notes.push(format!(
+            "已把最近练过的 {} 条素材降级（history 末尾 {RECENT_PRACTICED_N} 条），避免连续两次计划重复",
+            recent_practiced.len()
+        ));
+    }
 
     let mut selected: BTreeSet<String> = BTreeSet::new();
     let mut items: Vec<PlanItem> = Vec::new();
@@ -166,8 +174,14 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
     let reserve = if include_free_speech { 3.0 } else { 0.0 };
     let drill_budget = (req.minutes - reserve).max(1.0);
 
-    // 1) drill_queue 优先
-    for d in &learner.drill_queue {
+    // 1) drill_queue 优先（最近练过的排到队尾：用户显式排了队，但不该连坐两次）
+    let (fresh_queue, stale_queue): (Vec<&DrillItem>, Vec<&DrillItem>) =
+        learner.drill_queue.iter().partition(|d| {
+            d.bank_id
+                .as_ref()
+                .is_none_or(|id| !recent_practiced.contains(id))
+        });
+    for d in fresh_queue.into_iter().chain(stale_queue) {
         if items.len() >= req.limit {
             break;
         }
@@ -231,20 +245,27 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
             seed: req.seed,
             ..Default::default()
         };
-        if let Some(e) = first_available(&q, entries, &selected, &mastered) {
+        // 先避开最近练过的；只有该 tag 没有新素材时才复用（并在 note 里说明）
+        let (hit, reused) =
+            match first_available(&q, entries, &selected, &mastered, &recent_practiced) {
+                Some(e) => (Some(e), false),
+                None => (
+                    first_available(&q, entries, &selected, &mastered, &BTreeSet::new()),
+                    true,
+                ),
+            };
+        if let Some(e) = hit {
             let est = estimate(&e);
             if !items.is_empty() && planned + est > drill_budget {
                 continue;
             }
             selected.insert(e.id.clone());
             planned += est;
-            items.push(item_from(
-                &e,
-                items.len() + 1,
-                format!("{} · 权重 {:.4}", tag, bank::tag_weight(tag)),
-                "error_stats",
-                est,
-            ));
+            let mut reason = format!("{} · 权重 {:.4}", tag, bank::tag_weight(tag));
+            if reused {
+                reason.push_str("（该 tag 只剩最近练过的素材，已复用）");
+            }
+            items.push(item_from(&e, items.len() + 1, reason, "error_stats", est));
         } else {
             notes.push(format!("tag `{tag}` 在 level {level} 没有可用素材"));
         }
@@ -273,7 +294,10 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
                 if items.len() >= req.limit || planned >= drill_budget {
                     break;
                 }
-                if mastered.contains(&e.id) || selected.contains(&e.id) {
+                if mastered.contains(&e.id)
+                    || selected.contains(&e.id)
+                    || recent_practiced.contains(&e.id)
+                {
                     continue;
                 }
                 let est = estimate(&e);
@@ -293,6 +317,50 @@ pub fn build(entries: &[BankEntry], learner: &Learner, req: &PlanRequest) -> Tra
             if items.len() >= req.limit || planned >= drill_budget {
                 break;
             }
+        }
+    }
+
+    // 3b) 兜底：素材不够时允许复用"最近练过"的（否则短素材库会产出空计划）
+    if items.len() < req.limit && !recent_practiced.is_empty() {
+        let q = PickQuery {
+            level: Some(level),
+            tags: target_tags.clone(),
+            corpus: req.corpus.clone(),
+            exclude_corpora: req.exclude_corpora.clone(),
+            kind: Some("read_aloud".into()),
+            part: req.part,
+            weighted: true,
+            limit: req.limit + selected.len() + 8,
+            seed: req.seed,
+            ..Default::default()
+        };
+        let mut reused = 0usize;
+        for e in bank::pick_from(entries, &q) {
+            if items.len() >= req.limit || planned >= drill_budget {
+                break;
+            }
+            if mastered.contains(&e.id) || selected.contains(&e.id) {
+                continue;
+            }
+            let est = estimate(&e);
+            if !items.is_empty() && planned + est > drill_budget {
+                continue;
+            }
+            selected.insert(e.id.clone());
+            planned += est;
+            reused += 1;
+            items.push(item_from(
+                &e,
+                items.len() + 1,
+                format!("补足 level {level}（最近练过，兜底复用）"),
+                "fill",
+                est,
+            ));
+        }
+        if reused > 0 {
+            notes.push(format!(
+                "素材不够：兜底复用了 {reused} 条最近练过的素材（想要全新鲜素材请先扩充素材库）"
+            ));
         }
     }
 
@@ -460,15 +528,35 @@ fn resolve(entries: &[BankEntry], d: &DrillItem, level: u8) -> Option<(BankEntry
         })
 }
 
+/// 去重窗口：`history` 末尾这么多条里出现过的素材算"最近练过"。
+///
+/// 12 条 ≈ 两到三次训练的量（一次计划 5–8 项）；窗口太大会把语料抽干，
+/// 太小则重复率下不去（验收线：连续两次计划重复率 <20%）。
+pub const RECENT_PRACTICED_N: usize = 12;
+
+/// `history` 末尾 `RECENT_PRACTICED_N` 条里练过的素材 id（N7：连续两次计划别重复）。
+///
+/// 只看 `bank_id`：自由说/单词 drill 没有 bank_id，自然不会进这个集合。
+fn recently_practiced(learner: &Learner) -> BTreeSet<String> {
+    learner
+        .history
+        .iter()
+        .rev()
+        .take(RECENT_PRACTICED_N)
+        .filter_map(|h| h.bank_id.clone())
+        .collect()
+}
+
 fn first_available(
     q: &PickQuery,
     entries: &[BankEntry],
     selected: &BTreeSet<String>,
     mastered: &BTreeSet<String>,
+    avoid: &BTreeSet<String>,
 ) -> Option<BankEntry> {
     bank::pick_from(entries, q)
         .into_iter()
-        .find(|e| !selected.contains(&e.id) && !mastered.contains(&e.id))
+        .find(|e| !selected.contains(&e.id) && !mastered.contains(&e.id) && !avoid.contains(&e.id))
 }
 
 fn estimate(e: &BankEntry) -> f32 {
@@ -769,6 +857,173 @@ mod tests {
         l.readiness.free_speech_enabled = true;
         let p = build(&entries(), &l, &PlanRequest::default());
         assert!(p.free_speech.is_some());
+    }
+
+    // ---------------- N7：连续两次计划不重复 ----------------
+
+    /// 造 n 条同难度素材（写作 N7 验收用；真实素材库 5 028 条，这里只要够抽样）
+    fn many_entries(n: usize) -> Vec<BankEntry> {
+        (1..=n)
+            .map(|i| {
+                entry(
+                    &format!("nce2/02/{i:03}"),
+                    "Our village is in a valley.",
+                    2,
+                    &["v_to_w"],
+                )
+            })
+            .collect()
+    }
+
+    fn plan_ids(p: &TrainingPlan) -> BTreeSet<String> {
+        p.items.iter().filter_map(|i| i.bank_id.clone()).collect()
+    }
+
+    #[test]
+    fn consecutive_plans_do_not_repeat_material() {
+        let entries = many_entries(24);
+        let mut l = learner();
+        l.readiness.free_speech_enabled = false;
+        l.drill_queue.clear(); // 只验"自动选材"的去重，队列不参与
+        let req = PlanRequest {
+            minutes: 40.0, // 预算放宽，确保能靠新素材填满（不走兜底复用）
+            limit: 6,
+            ..Default::default()
+        };
+
+        let p1 = build(&entries, &l, &req);
+        assert!(p1.items.len() >= 6, "第一批应能填满: {}", p1.items.len());
+
+        // 模拟"练完了"：把第一批写进 history
+        for id in plan_ids(&p1) {
+            l.history.push(HistoryItem {
+                bank_id: Some(id),
+                mastered: false,
+            });
+        }
+        let p2 = build(&entries, &l, &req);
+        let (a, b) = (plan_ids(&p1), plan_ids(&p2));
+        let overlap = a.intersection(&b).count();
+        let ratio = overlap as f32 / a.len().max(1) as f32;
+        assert!(
+            ratio < 0.2,
+            "连续两次计划重复率应 <20%，实际 {overlap}/{}: {:?} vs {:?}",
+            a.len(),
+            a,
+            b
+        );
+        assert!(
+            p2.notes.iter().any(|n| n.contains("最近练过")),
+            "应说明做了去重: {:?}",
+            p2.notes
+        );
+    }
+
+    #[test]
+    fn recently_practiced_window_is_bounded() {
+        // 超过窗口的老记录不算"最近练过"（否则素材会被永久拉黑）
+        let entries = many_entries(24);
+        let mut l = learner();
+        l.readiness.free_speech_enabled = false;
+        l.drill_queue.clear();
+        let req = PlanRequest {
+            minutes: 40.0,
+            limit: 6,
+            ..Default::default()
+        };
+        let p1 = build(&entries, &l, &req);
+        for id in plan_ids(&p1) {
+            l.history.push(HistoryItem {
+                bank_id: Some(id),
+                mastered: false,
+            });
+        }
+        // 再塞 RECENT_PRACTICED_N 条别的记录，把上面的挤出窗口
+        for i in 0..RECENT_PRACTICED_N {
+            l.history.push(HistoryItem {
+                bank_id: Some(format!("nce2/09/{i:03}")),
+                mastered: false,
+            });
+        }
+        let p2 = build(&entries, &l, &req);
+        let (a, b) = (plan_ids(&p1), plan_ids(&p2));
+        assert!(
+            !a.intersection(&b).collect::<Vec<_>>().is_empty(),
+            "出了窗口的素材应可再被选中（否则长跑会枯竭）"
+        );
+    }
+
+    #[test]
+    fn tiny_bank_falls_back_to_reuse_instead_of_empty_plan() {
+        // 素材全在"最近练过"里：宁可复用，也不能给出空计划
+        let entries = many_entries(3);
+        let mut l = learner();
+        l.readiness.free_speech_enabled = false;
+        l.drill_queue.clear();
+        for i in 1..=3 {
+            l.history.push(HistoryItem {
+                bank_id: Some(format!("nce2/02/{i:03}")),
+                mastered: false,
+            });
+        }
+        let p = build(
+            &entries,
+            &l,
+            &PlanRequest {
+                minutes: 40.0,
+                limit: 2,
+                ..Default::default()
+            },
+        );
+        assert_eq!(p.items.len(), 2, "素材不够时必须兜底复用");
+        assert!(
+            p.notes.iter().any(|n| n.contains("兜底复用")),
+            "兜底必须写在 notes 里: {:?}",
+            p.notes
+        );
+        assert!(
+            p.items.iter().any(|i| i.reason.contains("兜底复用")),
+            "复用项的 reason 必须显式标注: {:?}",
+            p.items.iter().map(|i| &i.reason).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn queued_item_that_was_just_practiced_moves_to_the_end() {
+        let mut l = learner();
+        l.readiness.free_speech_enabled = false;
+        l.drill_queue = vec![
+            DrillItem {
+                bank_id: Some("nce2/01/001".into()),
+                reason: Some("刚练过".into()),
+                ..Default::default()
+            },
+            DrillItem {
+                bank_id: Some("nce2/01/003".into()),
+                reason: Some("没练过".into()),
+                ..Default::default()
+            },
+        ];
+        l.history.push(HistoryItem {
+            bank_id: Some("nce2/01/001".into()),
+            mastered: false,
+        });
+        let p = build(
+            &entries(),
+            &l,
+            &PlanRequest {
+                minutes: 40.0,
+                limit: 2,
+                ..Default::default()
+            },
+        );
+        let first = p.items.first().and_then(|i| i.bank_id.clone());
+        assert_eq!(
+            first.as_deref(),
+            Some("nce2/01/003"),
+            "最近练过的队列项应排到后面（{:?}）",
+            plan_ids(&p)
+        );
     }
 
     #[test]

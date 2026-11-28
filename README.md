@@ -486,7 +486,9 @@ D:/voice_data/
    不出任何发音/流利度结论（实测低电平录音会让 ASR 整句丢失）。蓝牙耳机增益会自动漂移，开练前先确认 `peak` 在 −20 ~ −12 dBFS。
 6. **音形编码不区分元音长短**（bit/beat、bad/bed 同 key）；CTC spike 使每个音素只有 1–2 帧，
    所以**不能用 GOP 判断元音时长**（/ɪ/ vs /iː/ 只能靠 `heard` 与实际听感）。
-7. **中文只做字级比较**，无拼音层。
+7. **中文发音诊断只到「拼音层」**（2026-11-28 上线，D13）：声母/韵母/声调三层 + 同音不同字不算错，
+   但它是**文本层**结论（输入是 ASR 的汉字），**没有中文声学级音素打分**——声调只能说到 `unclear`。
+   见 [docs/pinyin.md](docs/pinyin.md) 与 ADR-0008 D55。
 8. `accuracy` 只用于**纵向趋势**，不要换算成雅思分数对外承诺。
 9. **长音频必须走分块解码**（`transcribe_long`）：单次喂 >30 s 音频会让时间戳压缩、尾部内容丢失。
    这个坑实测会让"81 s 音频只转出 57 s"。业务层请勿直接调用 `asr.transcribe`。
@@ -506,6 +508,7 @@ D:/voice_data/
 | P2.5 | 音素级 GOP（纯 Rust：ONNX + CTC-Viterbi + 词级聚合 + TTS 基线） | ✅ 2026-11-22 |
 | P2.5 | 韵律分析（F0 轮廓 / 句末升降 / 平调 / 重音候选 / DTW） | ✅ 2026-11-23 |
 | P3.5 | MDD 微调（speechocean762 微调音素 CTC） | ✅ 音素级 AUROC 0.690→0.769 |
+| P5 | **中文拼音层诊断**（声母/韵母/声调 + 同音豁免 + 混淆统计，见 [docs/pinyin.md](docs/pinyin.md)） | ✅ 2026-11-28 |
 | P3 | `ielts-speaking-coach` / `voice-dictation` Skill | ✅ |
 | P4 | **跟读素材库**（NCE 276 课 → 4 997 条 + 10 条 IELTS prompt，见 [ADR-0009](docs/adr/0009-drill-library.md)） | ✅ |
 | P4 | 热键听写 daemon / HTTP 模式 / 流式 TTS / 音色复刻 | – |
@@ -519,7 +522,8 @@ D:/voice_data/
 ├── Cargo.toml                  # workspace
 ├── crates/
 │   ├── voice-core/             # 核心库（无 MCP 依赖）
-│   │   └── src/{config, store, audio/*, engine/*, assess/*, gop/*, bank/*}
+│   │   ├── src/{config, store, audio/*, engine/*, assess/*, gop/*, bank/*}
+│   │   └── data/pinyin-zh.txt   # 汉字→拼音表（生成物，26 703 字，见 tools/gen_pinyin_table.py）
 │   ├── voice-mcp/              # MCP 服务（rmcp 3.11）
 │   ├── voice-cli/              # 客户端 CLI
 │   └── spike/                  # P0 验证用的小程序（保留作为证据）
@@ -531,6 +535,7 @@ D:/voice_data/
 │   ├── GOALS.md                # 目标与进度：近期 / 中期 / 远期（含验收）
 │   ├── STATE.md                # 交接页：现状 / 实测数字 / 待办 / 债务
 │   ├── levels.md               # 水平与就绪等级 L0–L4 + 自由说 gate
+│   ├── pinyin.md               # 中文拼音层：口径、数据源、边界、审计
 │   ├── phoneme-gop.md          # 音素级 GOP：选型、标定、混淆对、边界
 │   ├── mdd.md                  # MDD 微调实验：协议、结果、环境
 │   ├── datasets.md             # 评测数据集：校验方法、数据画像、tag 权重
@@ -546,6 +551,8 @@ D:/voice_data/
 │   ├── export_phoneme_ctc.py   # 音素 CTC → ONNX（一次性）
 │   ├── calibrate_gop.py        # GOP 标定 / A-B（AUROC、P/R）
 │   ├── mdd_train.py            # MDD 微调（dump/train/export/eval）
+│   ├── gen_pinyin_table.py     # 生成/校验汉字→拼音表（pypinyin 派生）
+│   ├── pinyin_audit.py         # 中文拼音层真机审计（TTS→ASR→assess）
 │   └── install_skills.ps1      # Skill 安装（junction）
 └── .pi/{mcp.json,settings.json}  # Pi 项目级配置
 ```

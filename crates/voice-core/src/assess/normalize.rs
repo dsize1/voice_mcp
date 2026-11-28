@@ -4,7 +4,8 @@
 //! - 缩写展开（I'm → i am、don't → do not、gonna → going to）
 //! - 数字统一成词（3 → three）
 //! - 去标点、统一小写
-//! - 中文按字符切分（diff 变成字级）
+//! - 中文按字符切分（diff 变成字级）；**中文场景下阿拉伯数字归一成汉字数字**
+//!   （ASR 把「二十六」写成「26」曾被当成 3 个字全错，见 D13）
 //!
 //! **关键设计（D03 修复）**：规范化会改变词数（展开缩写），所以每个规范化词都带
 //! 一个 `token` 字段指回**原始 token 序号**。上层用这个序号去取 ASR 词时间戳，
@@ -42,8 +43,30 @@ pub fn tokens(text: &str) -> Vec<String> {
     v
 }
 
-/// 规范化单元序列（带来源 token 序号）。
+/// 规范化单元序列（带来源 token 序号）。英文口径：数字 → 英文词。
 pub fn units(text: &str) -> Vec<Unit> {
+    units_with(text, Script::English)
+}
+
+/// 规范化单元序列（中文口径）：数字 → **汉字数字**（`26` → `二十六`）。
+///
+/// 为什么要单独一条：SenseVoice 中文会把「二十六」写成 `26`、把「十四」写成 `14`，
+/// 而参考文本是汉字。按英文口径展开会得到 `twenty six` 这种英文词，跟中文逐字比较
+/// 完全对不上（实测「他把空调开到二十六度」的字级准确率被这 1 个数字拖到 0.70）。
+pub fn units_zh(text: &str) -> Vec<Unit> {
+    units_with(text, Script::Chinese)
+}
+
+/// 比较平面（决定数字怎么读）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Script {
+    /// 英文：`3` → `three`
+    English,
+    /// 中文：`26` → `二十六`（5 位以上的年份/编号逐位读，见 `number_to_chinese`）
+    Chinese,
+}
+
+fn units_with(text: &str, script: Script) -> Vec<Unit> {
     let mut out = Vec::new();
     for (idx, raw) in tokens(text).iter().enumerate() {
         if raw.chars().all(is_cjk_char) {
@@ -55,7 +78,7 @@ pub fn units(text: &str) -> Vec<Unit> {
                 });
             }
         } else {
-            for w in expand_contraction(raw) {
+            for w in expand_contraction_with(raw, script) {
                 out.push(Unit {
                     text: w,
                     token: idx,
@@ -76,7 +99,8 @@ pub fn surfaces(text: &str) -> Vec<String> {
     tokens(text)
 }
 
-fn is_cjk_char(c: char) -> bool {
+/// CJK 判定（汉字基本区/扩展 A + 日文假名）。`assess::pinyin` 复用它。
+pub fn is_cjk_char(c: char) -> bool {
     matches!(c,
         '\u{4E00}'..='\u{9FFF}'   // CJK 统一汉字
         | '\u{3400}'..='\u{4DBF}' // 扩展 A
@@ -84,15 +108,22 @@ fn is_cjk_char(c: char) -> bool {
     )
 }
 
-/// 展开缩写与口语缩略，纯数字转英文词。
-fn expand_contraction(w: &str) -> Vec<String> {
+/// 展开缩写与口语缩略，纯数字按 `script` 读（英文词 / 汉字数字）。
+fn expand_contraction_with(w: &str, script: Script) -> Vec<String> {
     let lower = w.replace('\u{2019}', "'").to_ascii_lowercase();
     let lower = lower.trim_matches('\'').to_string();
     if lower.is_empty() {
         return Vec::new();
     }
     if lower.chars().all(|c| c.is_ascii_digit()) {
-        return number_words(&lower);
+        return match script {
+            Script::English => number_words(&lower),
+            // 汉字数字必须**逐字**成为比较单元（参考文本里「二十六」就是 3 个字）
+            Script::Chinese => number_to_chinese(&lower)
+                .chars()
+                .map(|c| c.to_string())
+                .collect(),
+        };
     }
     if let Some(v) = CONTRACTIONS.iter().find(|(k, _)| *k == lower) {
         return v.1.iter().map(|s| s.to_string()).collect();
@@ -182,6 +213,61 @@ static US_UK_VARIANTS: &[(&str, &str)] = &[
     ("math", "maths"),
     ("airplane", "aeroplane"),
 ];
+
+/// 阿拉伯数字 → 汉字数字（`26` → `二十六`，`105` → `一百零五`）。
+///
+/// 口径（**必须承认的局限**）：
+/// - 5 位及以上、以 `0` 开头、或 1–2 开头的 4 位数（年份 1000–2999）按**逐位**读
+///   （`1998` → `一九九八`），因为这类串多半是年份/编号，中文口语就是逐位读；
+/// - 因此若参考文本把年份写成「一千九百九十八」，会与本函数产出对不上 ——
+///   这属于写法差异，拼音层不据此判发音（见 docs/pinyin.md）。
+/// - 小数点在 `tokens()` 里已经切开：`3.5` → `3` + `5`（读作「三、五」）。
+pub fn number_to_chinese(digits: &str) -> String {
+    const D: [&str; 10] = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+    let digitwise = || -> String {
+        digits
+            .chars()
+            .filter_map(|c| c.to_digit(10))
+            .map(|d| D[d as usize])
+            .collect()
+    };
+    // 前导零 / 5 位以上 / 1–2 开头的 4 位（年份 1000–2999）→ 逐位读
+    let year_like = digits.len() == 4 && matches!(digits.as_bytes()[0], b'1' | b'2');
+    if digits.len() >= 5 || digits.starts_with('0') || year_like {
+        return digitwise();
+    }
+    let Ok(n) = digits.parse::<u32>() else {
+        return digitwise();
+    };
+    if n == 0 {
+        return "零".into();
+    }
+    let mut out = String::new();
+    let mut rest = n;
+    let mut zero_pending = false;
+    for (v, unit) in [(1000u32, "千"), (100, "百"), (10, "十"), (1, "")] {
+        let d = rest / v;
+        rest %= v;
+        if d == 0 {
+            if !out.is_empty() && rest > 0 {
+                zero_pending = true;
+            }
+            continue;
+        }
+        if zero_pending {
+            out.push('零');
+            zero_pending = false;
+        }
+        // 10–19 读「十」而不是「一十」
+        if v == 10 && d == 1 && out.is_empty() {
+            out.push('十');
+            continue;
+        }
+        out.push_str(D[d as usize]);
+        out.push_str(unit);
+    }
+    out
+}
 
 fn number_words(digits: &str) -> Vec<String> {
     const SMALL: [&str; 20] = [
@@ -363,6 +449,50 @@ mod tests {
     fn converts_numbers() {
         assert_eq!(words("I have 3 cats"), vec!["i", "have", "three", "cats"]);
         assert_eq!(words("21"), vec!["twenty", "one"]);
+    }
+
+    // ---------------- D13：中文数字归一（ASR 写阿拉伯数字） ----------------
+
+    #[test]
+    fn chinese_numbers_use_hanzi_digits() {
+        assert_eq!(
+            normalize_zh_words("十六"),
+            vec!["十", "六"],
+            "汉字数字逐字透传"
+        );
+        assert_eq!(
+            normalize_zh_words("我把空调开到26度"),
+            vec!["我", "把", "空", "调", "开", "到", "二", "十", "六", "度"],
+            "26 必须读成「二十六」，不能是 twenty six"
+        );
+        // 同一个数字串在英文平面下仍然走英文词
+        assert_eq!(words("have 26 cats"), vec!["have", "twenty", "six", "cats"]);
+    }
+
+    #[test]
+    fn number_to_chinese_covers_common_readings() {
+        for (digits, want) in [
+            ("0", "零"),
+            ("7", "七"),
+            ("10", "十"),
+            ("12", "十二"),
+            ("20", "二十"),
+            ("26", "二十六"),
+            ("105", "一百零五"),
+            ("110", "一百一十"),
+            ("1001", "一零零一"), // 1 开头的 4 位数按年份口径逐位读
+            ("3001", "三千零一"),
+            ("9999", "九千九百九十九"),
+        ] {
+            assert_eq!(number_to_chinese(digits), want, "digits={digits}");
+        }
+        // 5 位以上 / 前导零 → 逐位读（年份、编号）
+        assert_eq!(number_to_chinese("1998"), "一九九八");
+        assert_eq!(number_to_chinese("007"), "零零七");
+    }
+
+    fn normalize_zh_words(t: &str) -> Vec<String> {
+        units_zh(t).into_iter().map(|u| u.text).collect()
     }
 
     #[test]

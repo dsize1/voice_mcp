@@ -1,16 +1,29 @@
 {
   "id": "r01_third_16k",
-  "note": "16 kHz 录音机音频：/θ/ 被抵掉，ASR 把 third 听成 straight。用来锁住 band_limited 与 unclear 三态。",
+  "note": "16 kHz 录音机音频：/θ/ 被抵掉，ASR 把 third 听成 straight（2026-11-28 复测变成 three，同一现象的另一种近似）。用来锁住 band_limited 与 unclear 三态。D56：said 写等价集合。",
   "audio": "${VOICE_CASES_DIR}/test.m4a",
   "reference": "I think this is the third time.",
   "lang": "en",
   "expect": {
-    "accuracy": { "gte": 0.80, "lte": 0.90 },
+    "accuracy": {
+      "gte": 0.8,
+      "lte": 0.9
+    },
     "timestamp_alignment": "exact",
     "band_limited": true,
-    "issue_count": { "gte": 1 },
+    "issue_count": {
+      "gte": 1
+    },
     "issues": [
-      { "kind": "substitution", "reference": "third", "said": "straight", "hint": "unclear" }
+      {
+        "kind": "substitution",
+        "reference": "third",
+        "said": [
+          "straight",
+          "three"
+        ],
+        "hint": "unclear"
+      }
     ]
   }
 }

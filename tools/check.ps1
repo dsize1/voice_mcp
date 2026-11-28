@@ -33,6 +33,20 @@ try {
     Invoke-Step "cargo clippy --all-targets -- -D warnings" {
         cargo clippy --all-targets --release -- -D warnings
     }
+    # D13：拼音表是生成物（pypinyin 派生），必须与生成脚本一致。
+    # 没装 python/pypinyin 时只提示、不阻断——CI 不装 Python 依赖也能绿。
+    $py = Get-Command python -ErrorAction SilentlyContinue
+    if ($py) {
+        & python -c "import pypinyin" 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Invoke-Step "python tools/gen_pinyin_table.py --check" {
+                python tools/gen_pinyin_table.py --check
+            }
+        }
+        else {
+            Write-Host "== 跳过拼音表校验（缺 pypinyin：pip install pypinyin）" -ForegroundColor Yellow
+        }
+    }
     if (-not $SkipTests) {
         Invoke-Step "cargo test" { cargo test --release }
     }

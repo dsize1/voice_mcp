@@ -17,7 +17,7 @@
 | 素材库 | **5 028 条**（NCE 4 997 + IELTS prompt 10 + IELTS 听力真人 14 + Peppa 7），`text_source` 区分 lrc/book/srt/asr；`peppa` 默认不进训练计划 |
 | 诊断能力 | 词级 diff + flow + 词级 GOP（**真人原声优先**基线/混淆对）+ 韵律（F0/升降/平调/重音候选/DTW，参考音标 native/tts） |
 | TTS | 默认 **am_michael（男声）+ 140 wpm**（130–160，D54 已收口：实测 136–146 全部在带内），slow=110；WPM 按**语音跨度**（单位＝英文词＋中文字）；起始伪影检测 + 换速度重试；**开放词表 G2P → `phoneme_codepoints`**（lexicon 仅覆盖层，未见词根走规则 LTS 并打标记），中英混说默认拒答；`tts-verify` + `bank refs` + `tts-regress`（漏词门禁）批量验证；verified 听力集/10 条 prompt 见 STATE |
-| 债务 | D01–D53 已登记；**已还 D20/D47/D49/D51；D04/D52/D53 部分偿还** |
+| 债务 | D01–D56 已登记；**已还 D13/D20/D46/D47/D48/D49/D51/D56；D04/D52/D53 部分偿还** |
 | 近期训练 | 计划 **7/7 项**完成；`/θ/` 词首/词尾修正；144 wpm 下 `/θ/`、`/v/` 守住 |
 | 本地提交 | 2026-11-26 已推送（本轮 12 个 commit 全部推送；CI 每次绿） |
 
@@ -45,8 +45,8 @@
 
 | ID | 目标 | 状态 | 验收 | 依赖 |
 |---|---|---|---|---|
-| **N6** | D48：readiness 自动评估（从 history 算 stage/缺项） | ⏳ | `voice-cli learner readiness` 输出并可写回 | 无 |
-| **N7** | `bank plan` 排除“最近练过”的素材 | ⏳ | 连续两次计划重复率 <20% | N6 同批 |
+| **N6** | D48：readiness 自动评估（从 history 算 stage/缺项） | ✅ **2026-11-28** | `voice-cli learner readiness [--write]`：`readiness.rs` 三态判据（acc / 语速带 / 停顿密度）+ `unknown` 单列；写回保留人工 evidence、开自由说仍需 `--confirm-free-speech` 且 L4 达标 | 无 |
+| **N7** | `bank plan` 排除“最近练过”的素材 | ✅ **2026-11-28** | `RECENT_PRACTICED_N=12` 窗口去重；队列项排到队尾而非丢弃；素材不够时兜底复用并在 `notes` 写明。单测 `consecutive_plans_do_not_repeat_material`（重叠 0/6 < 20%） | N6 同批 |
 | **N8** | L3 达标：连续 3 条 acc≥0.90 | 🟡 | 最近 1.00 / 0.80 / 0.875 → 需补 2 条 | 训练 |
 
 ### D. 素材与录音
@@ -76,7 +76,7 @@
 | **M2** | P5：按音素定向组卷 | ⏳ | 依赖 D46/D50 与更稳的 GOP |
 | **M3** | Part 2/3 长独白训练 | ⏳ | 需 D38 分块切词 + D14 长句 accuracy 口径 |
 | **M4** | 自由说 L4 + Route A 评估 | 🅿️ | ADR-0010；前置 L4、D04、D49 |
-| **M5** | 中文发音诊断（拼音层） | ⏳ | D13；当前中文只做字级 diff |
+| **M5** | 中文发音诊断（拼音层） | ✅ | **2026-11-28 完成**（D13 已还）：`text_diff.pinyin` 三层诊断 + 同音不算错 + 数字归一；见 [pinyin.md](pinyin.md) |
 | **M6** | 分发：Pi package / 预编译 / 跨平台 | 🅿️ **调低（2026-11-28）** | D29/D30/D31；Windows-only 假设。单用户本地跑通优先于分发 |
 | **M7** | CI + 合成 fixture + 数据保留策略 | 🟡 | D20/D21 已还（`tools/build.ps1` + 前端 golden 进 CI）；剩 D25/D26（数据保留策略），与分发无关 |
 | **M8** | `learner.json` schema 校验与迁移 | ⏳ | D27；现有 `readiness` 等字段只靠散文 |

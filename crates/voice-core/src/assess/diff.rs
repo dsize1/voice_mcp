@@ -59,6 +59,9 @@ pub enum Hint {
     /// 疑似 ASR 漏听：短功能词（is / a / the / of…）被 CTC 解码吞掉是常见现象，
     /// 实测同一条录音 whisper 能听到 "is" 而 SenseVoice 漏掉 → 不能直接判用户漏读
     LikelyAsrMiss,
+    /// 同音不同字（中文，D13）：`的/得`、`在/再`、`四/寺` 拼音（含声调）完全相同，
+    /// 听起来没有区别，差异来自 ASR 选字，不是发音问题
+    LikelyHomophone,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -123,6 +126,10 @@ pub struct Issue {
     /// 第二引擎是否听到了这个词（仅在 `cross_checked=true` 时有意义）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub other_engine_heard: Option<bool>,
+    /// 中文拼音层诊断（D13）：声母/韵母/声调哪一层不同。
+    /// 只有「参考与识别都是单个汉字」的替换才有，其余为 `None`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinyin: Option<super::pinyin::CharDiag>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,16 +148,34 @@ pub struct TextDiff {
     pub timestamp_alignment: TimestampAlignment,
     /// 兼容字段：只要不是 `exact` 就为 true
     pub timestamps_estimated: bool,
+    /// 中文拼音层报告（D13/M5）：参考文本含汉字时才有。
+    /// 字级准确率 `accuracy` 不变，拼音层另给 `accuracy_pinyin`（同音不同字不算错）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinyin: Option<super::pinyin::PinyinReport>,
 }
 
 /// 比较参考文本与转写结果。
 pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
     let ref_surfaces = normalize::surfaces(reference);
-    let ref_units = normalize::units(reference);
-    let hyp_units = normalize::units(&transcript.text);
+    // D13：参考文本含汉字 → 数字按汉字读（`26` → `二十六`），否则按英文词读（`3` → `three`）。
+    // 两个平面不能混用，否则中文句子里只要 ASR 写了阿拉伯数字就会全错。
+    let script = if super::pinyin::has_cjk(reference) {
+        normalize::Script::Chinese
+    } else {
+        normalize::Script::English
+    };
+    let units_of = |t: &str| match script {
+        normalize::Script::Chinese => normalize::units_zh(t),
+        normalize::Script::English => normalize::units(t),
+    };
+    let ref_units = units_of(reference);
+    let hyp_units = units_of(&transcript.text);
     let hyp_token_count = normalize::surfaces(&transcript.text).len();
 
     let ref_words: Vec<String> = ref_units.iter().map(|u| u.text.clone()).collect();
+    // 拼音层累积器（仅中文参考建；英文/纯数字不付任何代价）
+    let mut pinyin_acc =
+        (script == normalize::Script::Chinese).then(super::pinyin::Accumulator::default);
     // ASR 词时间戳（优先 words，其次 tokens）
     let src: Vec<(f32, f32)> = if !transcript.words.is_empty() {
         transcript.words.iter().map(|w| (w.t0, w.t1)).collect()
@@ -218,6 +243,9 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
 
         let pair = match (&step.reference, &step.said) {
             (Some(r), Some(h)) if r == h => {
+                if let Some(acc) = pinyin_acc.as_mut() {
+                    acc.push_pair(r, r, super::pinyin::table());
+                }
                 let ref_idx = ref_cursor;
                 ref_cursor += 1;
                 Pair {
@@ -233,36 +261,60 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
             (Some(r), Some(h)) => {
                 s += 1;
                 let sim = similarity(r, h);
-                let psim = phonetic::similarity(r, h);
-                let hint = if psim >= 0.6 || sim >= 0.6 {
-                    Hint::LikelyPronunciation
-                } else if psim <= 0.35 && sim <= 0.45 {
-                    Hint::LikelyDifferentWord
-                } else {
-                    Hint::Unclear
+                // D13：汉字对优先用拼音层判定。英文的骨架编码对汉字返回空 key
+                // （一律 0 相似），过去会把「四→十」误判成“说成了别的词”。
+                let diag = match (super::pinyin::single_char(r), super::pinyin::single_char(h)) {
+                    (Some(a), Some(b)) => super::pinyin::diagnose(a, b, super::pinyin::table()),
+                    _ => None,
+                };
+                let psim = diag
+                    .as_ref()
+                    .map(|d| d.similarity)
+                    .unwrap_or_else(|| phonetic::similarity(r, h));
+                if let Some(acc) = pinyin_acc.as_mut() {
+                    acc.push_pair(r, h, super::pinyin::table());
+                }
+                let (hint, severity, cn_note) = match &diag {
+                    Some(d) => chinese_verdict(d),
+                    None if psim >= 0.6 || sim >= 0.6 => {
+                        (Hint::LikelyPronunciation, Severity::High, String::new())
+                    }
+                    None if psim <= 0.35 && sim <= 0.45 => {
+                        (Hint::LikelyDifferentWord, Severity::High, String::new())
+                    }
+                    None => (Hint::Unclear, Severity::High, String::new()),
                 };
                 if !already_reported(ref_token, &mut last_reported_ref_token) {
                     let shown = ref_surface.clone().unwrap_or_else(|| r.clone());
-                    let note = match hint {
-                        Hint::LikelyPronunciation => format!(
-                            "参考词 \"{shown}\" → 识别为 \"{h}\"（音形相似 {:.0}%）：两个词听起来接近，\
-                             大概率是发音偏差；具体是哪个音素错，需要音素级对齐确认",
-                            psim * 100.0
-                        ),
-                        Hint::LikelyDifferentWord => format!(
-                            "参考词 \"{shown}\" → 识别为 \"{h}\"（音形相似 {:.0}%）：听起来差得远，\
-                             更可能是说成了别的词（词汇/记忆），不一定是发音问题",
-                            psim * 100.0
-                        ),
-                        Hint::Unclear => format!(
-                            "参考词 \"{shown}\" → 识别为 \"{h}\"（音形相似 {:.0}%、拼写相似 {:.0}%）：\
-                             从文本无法判断是发音偏差还是 ASR 误听。可让用户重录该词，或对照示范音确认",
-                            psim * 100.0,
-                            sim * 100.0
-                        ),
-                        // LikelyAsrMiss 只用于 omitted 分支；这里理论上不会出现
-                        Hint::LikelyAsrMiss => {
-                            format!("参考词 \"{shown}\" → 识别为 \"{h}\"：疑似 ASR 误听，请复核")
+                    let note = if !cn_note.is_empty() {
+                        cn_note
+                    } else {
+                        match hint {
+                            Hint::LikelyPronunciation => format!(
+                                "参考词 \"{shown}\" → 识别为 \"{h}\"（音形相似 {:.0}%）：两个词听起来接近，\
+                                 大概率是发音偏差；具体是哪个音素错，需要音素级对齐确认",
+                                psim * 100.0
+                            ),
+                            Hint::LikelyDifferentWord => format!(
+                                "参考词 \"{shown}\" → 识别为 \"{h}\"（音形相似 {:.0}%）：听起来差得远，\
+                                 更可能是说成了别的词（词汇/记忆），不一定是发音问题",
+                                psim * 100.0
+                            ),
+                            Hint::Unclear => format!(
+                                "参考词 \"{shown}\" → 识别为 \"{h}\"（音形相似 {:.0}%、拼写相似 {:.0}%）：\
+                                 从文本无法判断是发音偏差还是 ASR 误听。可让用户重录该词，或对照示范音确认",
+                                psim * 100.0,
+                                sim * 100.0
+                            ),
+                            // LikelyAsrMiss / LikelyHomophone 只用于其他分支
+                            Hint::LikelyAsrMiss => {
+                                format!(
+                                    "参考词 \"{shown}\" → 识别为 \"{h}\"：疑似 ASR 误听，请复核"
+                                )
+                            }
+                            Hint::LikelyHomophone => {
+                                format!("参考词 \"{shown}\" → 识别为 \"{h}\"：同音字，不算发音问题")
+                            }
                         }
                     };
                     issues.push(Issue {
@@ -274,11 +326,12 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                         said: Some(h.clone()),
                         t0,
                         t1,
-                        severity: Severity::High,
+                        severity,
                         note,
                         similarity: sim,
                         phonetic_similarity: psim,
                         hint: Some(hint),
+                        pinyin: diag.clone(),
                     });
                 }
                 let ref_idx = ref_cursor;
@@ -295,6 +348,9 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
             }
             (Some(r), None) => {
                 d += 1;
+                if let Some(acc) = pinyin_acc.as_mut() {
+                    acc.push_omitted(r);
+                }
                 if !already_reported(ref_token, &mut last_reported_ref_token) {
                     let shown = ref_surface.clone().unwrap_or_else(|| r.clone());
                     // 短功能词漏读的可信度低：CTC 解码吞掉 1–4 字母的弱读词很常见
@@ -329,6 +385,7 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                         similarity: 0.0,
                         phonetic_similarity: 0.0,
                         hint,
+                        pinyin: None,
                     });
                 }
                 let ref_idx = ref_cursor;
@@ -345,6 +402,9 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
             }
             (None, Some(h)) => {
                 i += 1;
+                if let Some(acc) = pinyin_acc.as_mut() {
+                    acc.push_extra(h);
+                }
                 issues.push(Issue {
                     kind: IssueKind::Extra,
                     cross_checked: None,
@@ -361,6 +421,7 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
                     similarity: 0.0,
                     phonetic_similarity: 0.0,
                     hint: None,
+                    pinyin: None,
                 });
                 Pair {
                     op: Op::Insert,
@@ -385,6 +446,8 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
         1.0 - errors as f32 / n as f32
     };
 
+    let pinyin = pinyin_acc.and_then(|acc| acc.finish(super::pinyin::table(), accuracy));
+
     TextDiff {
         reference: reference.to_string(),
         reference_words: ref_words.len(),
@@ -396,6 +459,23 @@ pub fn compare(reference: &str, transcript: &Transcript) -> TextDiff {
         alignment,
         timestamp_alignment: alignment_quality,
         timestamps_estimated: alignment_quality != TimestampAlignment::Exact,
+        pinyin,
+    }
+}
+
+/// 中文替换项的判定：拼音层三层差异 → (`hint`, `severity`, 说明)。
+///
+/// 只把「命中已知混淆对」或「同音」的结论说死，其余一律保守：
+/// 文本层无法区分“用户读错”和“ASR 选字”（中文没有声学级 GOP，见 ADR-0008 D13）。
+fn chinese_verdict(d: &super::pinyin::CharDiag) -> (Hint, Severity, String) {
+    use super::pinyin::Kind;
+    match d.kind {
+        Kind::Homophone => (Hint::LikelyHomophone, Severity::Low, d.note.clone()),
+        // 声调只看文本看不出来：ASR 换个调的字很常见 → 中置信度
+        Kind::ToneOnly => (Hint::Unclear, Severity::Medium, d.note.clone()),
+        // 命中已知混淆对（平翘舌/前后鼻音/n-l…）→ 可以当发音偏差说，但仍需重录复核
+        _ if d.known => (Hint::LikelyPronunciation, Severity::High, d.note.clone()),
+        _ => (Hint::Unclear, Severity::Medium, d.note.clone()),
     }
 }
 
@@ -898,5 +978,95 @@ mod tests {
                 .any(|i| i.reference.as_deref() == Some("非"))
         );
         assert!(d.accuracy < 1.0);
+    }
+
+    // ---------------- D13：中文拼音层 ----------------
+
+    #[test]
+    fn chinese_homophone_is_not_a_pronunciation_error() {
+        // 参考「得」、识别「的」：拼音完全一样 → 不算发音问题（过去算字级错误）
+        let t = tr("我觉的这样很好", &[]);
+        let d = compare("我觉得这样很好", &t);
+        let de = d
+            .issues
+            .iter()
+            .find(|i| i.reference.as_deref() == Some("得"))
+            .expect("应报 1 条替换");
+        assert_eq!(de.hint, Some(Hint::LikelyHomophone));
+        assert_eq!(de.severity, Severity::Low, "同音不应高严重度");
+        assert!((de.phonetic_similarity - 1.0).abs() < 1e-6);
+        assert!(de.note.contains("同音不同字"), "{}", de.note);
+        assert!(de.pinyin.is_some(), "汉字替换必须带拼音诊断");
+
+        let p = d.pinyin.expect("中文参考应产出拼音报告");
+        assert_eq!(p.homophones, 1);
+        assert_eq!(p.chars_total, 7);
+        assert!(p.accuracy_char < 1.0, "字级仍算错（保留兼容口径）");
+        assert!(
+            (p.accuracy_pinyin - 1.0).abs() < 1e-6,
+            "拼音层应判 1.0，实际 {}",
+            p.accuracy_pinyin
+        );
+        assert!(p.confusions.is_empty(), "同音不该进混淆统计");
+    }
+
+    #[test]
+    fn chinese_retroflex_confusion_is_diagnosed() {
+        // 「四是四」读成「十是十」：s/sh 声母 + 4/2 声调
+        let t = tr("十是十", &[]);
+        let d = compare("四是四", &t);
+        let p = d.pinyin.as_ref().expect("应有拼音报告");
+        assert_eq!(p.mixed, 2, "两个「四」都是 s/sh + 声调两层 → mixed");
+        assert_eq!(p.equal, 1, "中间的「是」应算相同字");
+        assert!(
+            p.confusions.iter().any(|c| c.tag == "initial.sh_s"),
+            "{:?}",
+            p.confusions
+        );
+        let four = d
+            .issues
+            .iter()
+            .find(|i| i.reference.as_deref() == Some("四"))
+            .expect("应报「四」");
+        assert_eq!(four.hint, Some(Hint::LikelyPronunciation));
+        assert_eq!(four.severity, Severity::High);
+        assert!(four.note.contains("翘舌"), "{}", four.note);
+        assert!(
+            four.phonetic_similarity > 0.4,
+            "过去的英文骨架对汉字一律 0: {}",
+            four.phonetic_similarity
+        );
+    }
+
+    #[test]
+    fn chinese_tone_only_stays_medium_confidence() {
+        // 买/卖：只有声调不同 → 文本层分不清「声调真错」与「ASR 选字」
+        let t = tr("卖", &[]);
+        let d = compare("买", &t);
+        let is = &d.issues[0];
+        assert_eq!(is.hint, Some(Hint::Unclear));
+        assert_eq!(is.severity, Severity::Medium);
+        assert!(is.note.contains("声调"), "{}", is.note);
+    }
+
+    #[test]
+    fn chinese_omission_counts_against_pinyin_accuracy() {
+        let t = tr("很好", &[]);
+        let d = compare("我觉得很好", &t);
+        let p = d.pinyin.expect("应有拼音报告");
+        assert_eq!(p.chars_total, 5);
+        // 漏了「我」「觉」「得」→ 2/5。注意漏读不享受同音豁免
+        assert!(
+            (p.accuracy_pinyin - 0.4).abs() < 1e-6,
+            "{}",
+            p.accuracy_pinyin
+        );
+    }
+
+    #[test]
+    fn english_reference_has_no_pinyin_layer() {
+        let t = tr("I think this is the third time", &[]);
+        let d = compare("I think this is the third time", &t);
+        assert!(d.pinyin.is_none(), "英文参考不应产出拼音层");
     }
 }

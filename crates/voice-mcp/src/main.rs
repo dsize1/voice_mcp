@@ -8,9 +8,18 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use rmcp::RoleServer;
+use rmcp::ServerHandler;
+use rmcp::handler::server::skill_catalog::SkillCatalog;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::{ServiceExt, tool, tool_router};
+use rmcp::model::{
+    GetSkillRequestParams, GetSkillResult, ListResourcesResult, ListSkillsResult,
+    PaginatedRequestParams, ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult,
+    ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData, ServiceExt, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -205,14 +214,64 @@ fn err_ok(e: impl std::fmt::Display) -> OkResult {
     }
 }
 
+// ------------------------------------------------------------------ Skills（SEP-2640）
+///
+/// Skill 不再以副本形式安装到客户端：`skills/` 目录随服务一起发布，由 MCP 提供。
+/// 目录解析顺序：`$VOICE_SKILLS_DIR` → 可执行文件旁的 `skills/` → 仓库根的 `skills/`（开发期）。
+/// 目录缺失时不声明 skills 扩展，工具照常工作。
+fn skills_root() -> Option<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("VOICE_SKILLS_DIR") {
+        let p = std::path::PathBuf::from(p);
+        if p.is_dir() {
+            return Some(p);
+        }
+        tracing::warn!(dir = %p.display(), "VOICE_SKILLS_DIR 不是目录，忽略");
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let cand = dir.join("skills");
+        if cand.is_dir() {
+            return Some(cand);
+        }
+    }
+    // 开发期回退：仓库 checkout 里的 skills/
+    let cand = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
+    cand.is_dir().then_some(cand)
+}
+
+/// 载入 skills 快照。快照同时保存每个文件的字节与 sha256，
+/// 所以 `resources/read` 永远返回清单里声明的那些字节（改文件要重启才生效）。
+fn load_skills() -> Option<Arc<SkillCatalog>> {
+    let root = skills_root()?;
+    match SkillCatalog::from_dir(&root) {
+        Ok(c) => {
+            let skills = c.skills();
+            tracing::info!(
+                root = %root.display(),
+                skills = skills.len(),
+                uris = ?skills.iter().map(|s| s.uri.as_str()).collect::<Vec<_>>(),
+                "skills 已就绪（SEP-2640）"
+            );
+            Some(Arc::new(c))
+        }
+        Err(e) => {
+            tracing::warn!(root = %root.display(), error = %e, "skills 载入失败，不声明 skills 扩展");
+            None
+        }
+    }
+}
+
 // ------------------------------------------------------------------ 服务
 struct VoiceServer {
     app: Arc<App>,
+    /// `None` = 没有可提供的 skills，`initialize` 里不声明扩展
+    skills: Option<Arc<SkillCatalog>>,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
-#[tool_router(server_handler)]
+#[tool_router]
 impl VoiceServer {
     /// 语音转文字。支持 wav/m4a/mp3/flac/ogg（Win11 录音机 .m4a 直读）。
     /// 返回词级时间戳、token 时间戳、使用的引擎与语言，并自动把原始音频、
@@ -883,6 +942,100 @@ impl VoiceServer {
     }
 }
 
+// ------------------------------------------------------------------ Skills over MCP（SEP-2640）
+//
+// 服务端职责（规范里属于 server 的那一半）：
+//   · `initialize` 的 capabilities.extensions 声明 `io.modelcontextprotocol/skills`
+//   · `skills/list` / `skills/get` 返回完整清单（frontmatter + 每个文件的 sha256 + size）
+//   · 技能文件走普通 `resources/read`，目录导航走 `resources/directory/read`
+//   · `resources/list` 只列各技能的 SKILL.md（兼容只认基础 Resources 的客户端）
+//
+// 版本绑定在服务端是天然的：SkillCatalog 是启动时的内存快照，字节与 digest 同源，
+// 磁盘随后怎么改都不影响已发布的清单。改技能 = 重启服务 + 客户端按 digest 变化重新审批。
+#[rmcp::tool_handler]
+impl ServerHandler for VoiceServer {
+    fn get_info(&self) -> ServerConfig {
+        let mut capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources();
+        let mut instructions =
+            String::from("本地语音 I/O 与测量服务：转写 / 朗读示范 / 录音 / 音频体检 / 评测。");
+        if let Some(skills) = &self.skills {
+            capabilities = capabilities.enable_skills_with_directory_read();
+            let uris = skills
+                .skills()
+                .iter()
+                .map(|s| format!("`{}`", s.uri))
+                .collect::<Vec<_>>()
+                .join("、");
+            instructions.push_str(&format!(
+                "\n\n本服务随 MCP 提供 Agent Skills（扩展 io.modelcontextprotocol/skills）：\
+                 用 skills/list 枚举、skills/get 取单个技能清单；技能文件是普通资源，\
+                 SKILL.md 可直接用 resources/read 读取：{uris}。"
+            ));
+        }
+        ServerConfig::new(capabilities.build()).with_instructions(instructions)
+    }
+
+    async fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListSkillsResult, ErrorData> {
+        let skills = self
+            .skills
+            .as_ref()
+            .ok_or_else(|| ErrorData::method_not_found::<rmcp::model::ListSkillsRequestMethod>())?;
+        Ok(skills.list_skills())
+    }
+
+    async fn get_skill(
+        &self,
+        request: GetSkillRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetSkillResult, ErrorData> {
+        let skills = self
+            .skills
+            .as_ref()
+            .ok_or_else(|| ErrorData::method_not_found::<rmcp::model::GetSkillRequestMethod>())?;
+        skills.get_skill(&request.uri)
+    }
+
+    async fn read_resource_directory(
+        &self,
+        request: ReadResourceDirectoryRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceDirectoryResult, ErrorData> {
+        let skills = self.skills.as_ref().ok_or_else(|| {
+            ErrorData::method_not_found::<rmcp::model::ReadResourceDirectoryRequestMethod>()
+        })?;
+        skills.read_resource_directory(&request.uri)
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        let Some(skills) = self.skills.as_ref() else {
+            return Ok(ListResourcesResult::with_all_items(Vec::new()));
+        };
+        Ok(ListResourcesResult::with_all_items(skills.resources()))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        self.skills
+            .as_ref()
+            .and_then(|skills| skills.read_resource(&request.uri))
+            .map(Into::into)
+            .ok_or_else(|| ErrorData::resource_not_found(request.uri, None))
+    }
+}
+
 /// 电平/信噪比的即时提示：录音当下就告诉用户"这条不能用"，别等到评测完才发现。
 fn level_warning(peak_dbfs: f32, snr_db: f32) -> Option<String> {
     if peak_dbfs > -1.0 {
@@ -941,6 +1094,7 @@ async fn run_stdio() -> Result<()> {
     let app = Arc::new(App::new(cfg)?);
     let server = VoiceServer {
         app,
+        skills: load_skills(),
         tool_router: VoiceServer::tool_router(),
     };
     let service = server.serve(rmcp::transport::stdio()).await?;

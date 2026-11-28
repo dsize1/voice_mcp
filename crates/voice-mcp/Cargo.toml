@@ -14,4 +14,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 schemars = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-rmcp = { version = "3.11", features = ["transport-io", "transport-async-rw", "macros", "schemars"] }
+# skills-fs 提供 SEP-2640 的 SkillCatalog（skills/list、skills/get、resources/directory/read）
+rmcp = { version = "3.11", features = ["transport-io", "transport-async-rw", "macros", "schemars", "skills-fs"] }

@@ -14,7 +14,7 @@
 |---|---|---|
 | [`assess`](#assess) | **评测**：转写 + 语流 + 词级差异 | 留证：asr.json + metrics.json + feedback.md |
 | [`transcribe`](#transcribe) | 语音转文字（词级时间戳） | 留证：原始音频 + 16k 派生 + asr.json |
-| [`synthesize`](#synthesize) | 文字转语音（示范音，可服务端播放） | 留证：wav + ref.json |
+| [`synthesize`](#synthesize) | 文字转语音（示范音，可服务端播放）**⚠️ 只能当示范/跟读提示，不作听力素材**（D57） | 留证：wav + ref.json |
 | [`record`](#record) | 麦克风录音（静音自动停） | 留证：16k wav + capture.json |
 | [`play`](#play) | 播放 wav | 无 |
 | [`prepare_audio`](#prepare_audio) | 音频体检/去静音 | 留证：16k wav |
@@ -165,11 +165,32 @@ sessions/<date>/<hhmmss>_drill/takes/
 - `degraded: true` 表示时间戳缺失或引擎回退 → **不要做音素级结论**，只能谈整句/词级。
 - `audio.band_limited: true` 表示源音频采样率 ≤16 kHz（如 Win11 录音机），6–8 kHz 摩擦音细节有限，
   判断 /θ/ vs /s/ 这类区分时置信度要打折。
+- **词尾结论要打折（ADR-0008 D57/D58）**：ASR 会按语法先验**补** `-ed`（孤立 `open` 的音频 → “opened”）、
+  也会**吞** `-z`（`files` → “file”），而且**双引擎同时错**。所以 `text_diff` 里的 `-ed/-s/-z/-t/-d` 差异，
+  必须**先确认材料本身**（参照音是 TTS 时尤其）再归因给学员；TTS 参照音属 L-C，不能当答案键。
+  音素级结论用 `with_gop=true`，但注意 forced alignment 有「必塞满参考音素」的盲点。
 - `silent_ratio` 很高（>0.6）说明录音里留白多，属正常；若 >0.95 基本是空录音。
 
 ---
 
 ## synthesize
+
+> **2026-11-28 口径（ADR-0008 D57/D58）：TTS 产出 ≠ 听力素材。**
+> 本工具只供**发音示范 / 跟读提示 / 听写提示音**；**不得**当答案键、不得用于难度校准或分数估计。
+>
+> 材料分级：
+> | 级别 | 定义 | 能用来做什么 |
+> |---|---|---|
+> | **L-A** | 真人原声（NCE 切片 / IELTS 听力） | 听力素材、答案键、难度校准、GOP 基线 |
+> | **L-B** | TTS 且**已过音素门禁**（CTC 自由解码 + 擦音/浊音能量） | 跟读示范、泛听铺量 |
+> | **L-C** | TTS 未审（本工具默认产出） | 只给自己练；**禁止**进训练计划/复习块/听力题 |
+>
+> 已知缺陷（实测，未修）：
+> - **没有弱读**：美音 lexicon 只有强读形式（`the ð i` / `to t u` / `and æ n d` / `a A`），实测句首 `The`=/ðiː/、`to`≈300 ms、`and`≈460 ms；真人弱读 60–120 ms、整句 180–214 wpm。→ 听力正确率会被抬高。
+> - **会丢词尾**：`files` 的 `-z` 在 110 与 140 wpm 都缺（4–8 kHz 相对 0–1 kHz：−23.6 / −23.7 dB）。`-ed/-s/-z/-t/-d` 不可信，**慢速不补**。
+> - **ASR 回读不构成证据**：ASR 会补 `-ed`、也会吞 `-z`（双引擎同时错）。要审材料请看 ADR-0008 D58 的三层判据。
+>
+> 返回值新增机器可读字段：`material_tier`（默认 `L-C`）、`allowed_use`、`not_for`。
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|

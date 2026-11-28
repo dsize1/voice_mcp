@@ -364,9 +364,11 @@ impl VoiceServer {
 
     /// 文字转语音。返回生成的 wav 绝对路径；play=true 时服务端直接播放。
     /// 中文讲解与英文示范必须分开调用（一段文本只允许一种语言）。
+    ///
+    /// 用途限定（ADR-0008 D57/D58）：只做示范/跟读提示，**不作听力素材**。
     #[tool(
         name = "synthesize",
-        description = "文字转语音（示范音，24kHz）。默认按雅思目标 140 wpm（130–160）；slow_too 生成 110 wpm 慢速 + 140 wpm 常速；显式 speed 时按倍率。音色默认按语言：英文 am_michael、中文 zf_xiaoni；中英混说会被拒答。"
+        description = "文字转语音（示范音，24kHz）。默认按雅思目标 140 wpm（130–160）；slow_too 生成 110 wpm 慢速 + 140 wpm 常速；显式 speed 时按倍率。音色默认按语言：英文 am_michael、中文 zf_xiaoni；中英混说会被拒答。\n\n⚠️ 只能当【发音示范 / 跟读提示 / 听写提示音】，**不要当听力素材、不要当答案键、不要用于难度校准或估分**（ADR-0008 D57）：①美音词表无弱读，功能词一律强读（the→/ði/、to→/tuː/≈300ms、and→/ænd/≈460ms），与真人语流（180–214 wpm、弱化连读）差距大，会把听力正确率抬高；②声学层会丢词尾（实测 files 的 -z 在 110/140 wpm 都缺），-ed/-s/-z/-t/-d 不可信；③这两类缺陷 ASR 看不出来（词级回读照样全对），不要用 transcribe 回读当“已验证”。\n\n材料分级：**L-A 真人原声**（唯一可信答案键）> **L-B TTS 且已过音素门禁**（音素自由解码 + 擦音/浊音能量）> **L-C 未审 TTS**（只给自己练，禁止进训练计划/复习块/听力题）。细则见 docs/CONTRACT.md §synthesize。"
     )]
     async fn synthesize(&self, Parameters(p): Parameters<SynthesizeParams>) -> Json<OkResult> {
         let app = self.app.clone();
@@ -438,6 +440,10 @@ impl VoiceServer {
                 "files": files.1,
                 "session": session.id,
                 "prefix": prefix,
+                // 机器可读的用途限制（ADR-0008 D57）：不要当听力素材
+                "material_tier": "L-C",
+                "allowed_use": ["imitation_demo", "reading_along", "dictation_cue"],
+                "not_for": ["listening_material", "answer_key", "difficulty_calibration", "band_estimate"],
             }))
         })
         .await;
@@ -681,9 +687,10 @@ impl VoiceServer {
 
     /// 评测：一次完成 ASR + 语流指标 + 词级差异，全部落盘留证。
     /// 这是口语训练的核心工具：返回的 metrics 是给 LLM 解读的"测量结果"，不是教学话术。
+    /// 注意（ADR-0008 D58）：词级差异对**词尾辅音**不可靠——ASR 会补 -ed、会吞 -z。
     #[tool(
         name = "assess",
-        description = "评测一段录音：转写 + 语流（语速/停顿/词界/填充词）+ 与参考文本的词级差异（漏读/多读/替换，含音形相似度与原因推断）。返回结构化指标并留证。"
+        description = "评测一段录音：转写 + 语流（语速/停顿/词界/填充词）+ 与参考文本的词级差异（漏读/多读/替换，含音形相似度与原因推断）。返回结构化指标并留证。\n\n⚠️ 对**词尾**结论要打折（ADR-0008 D57/D58）：ASR 会按语法先验**补** -ed（孤立 open 的音频→“opened”）、也会**吞** -z（files→file），两个引擎同时错。因此：①`text_diff` 里的 -ed/-s/-z/-t/-d 差异，先确认材料本身（参照音是 TTS 时尤其）再当学员错误；②TTS 生成的参照音/示范音只能算 L-C 材料，不能当答案键（真人原声 L-A 才能）；③需要音素级结论时用 `with_gop=true`（或 CLI `voice-cli gop`）并注意 forced alignment 有“必塞满”盲点。"
     )]
     async fn assess(&self, Parameters(p): Parameters<AssessParams>) -> Json<OkResult> {
         let app = self.app.clone();

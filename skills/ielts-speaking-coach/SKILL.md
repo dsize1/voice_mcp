@@ -27,7 +27,7 @@ metadata:
 | 工具（MCP `voice`） | 用途 |
 |---|---|
 | `mcp__voice__status` | 自检：`mic` 是否为 null、模型是否齐全 |
-| `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`play=true` 服务端出声；默认 140 wpm，`slow_too=true` 产出 slow(110)+norm(140) 两个文件；显式 `speed` 才按倍率 |
+| `mcp__voice__synthesize` | 示范音。`text` 单语、`voice` 音色名、`play=true` 服务端出声；默认 140 wpm，`slow_too=true` 产出 slow(110)+norm(140) 两个文件；显式 `speed` 才按倍率。**只能当示范/跟读提示，不作听力素材**（ADR-0008 D57）：无弱读（`the`=/ði/）、会丢词尾（`-z/-ed` 不可信）、ASR 回读也查不出。材料分级 L-A 真人 > L-B TTS＋过音素门禁 > L-C 未审；**听写/听力题只能用 L-A** |
 | `mcp__voice__assess` | **核心**：转写 + 语流 + 与参考文本的词级差异。`path` 可传 `"last"`；**`bank_id` 给素材库 id 时用真人原声切片当基线**（无则回退 TTS）；`with_gop=true` 额外给音素级排序（见 4.1）；`with_prosody=true` 或 `reference_audio=<示范音>` 给 F0/升降/重音候选（见 4.2） |
 | `mcp__voice__record` | 麦克风录音（静音自动停）。`mic` 为 null 时不可用 |
 | `voice-cli bank …` | **素材库（CLI，非 MCP）**：`pick/show/drill`。`pick` 按 focus tags + level 从 3 368 条里取 1–3 条 |

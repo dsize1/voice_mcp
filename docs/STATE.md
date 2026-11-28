@@ -21,6 +21,14 @@
 - 工程：**D18** `tools/build.ps1`（DLL 占用不再 panic）；**D21** 前端 golden 进 CI（无需模型）
 下一步（按优先级）：**M8**（learner schema 校验/迁移，D27）→ **N5**（韵律 12 条人工标注验收）→
 **M1/M2**（ref_slow 批量、按音素组卷）；**IELTS prompt 10 条补录真人示范**（补完 D52 才完全收口，需要人录音）。
+
+> **材料可信度（2026-11-28 登记，暂不偿还；ADR-0008 D57/D58）**：**TTS 生成物不作听力素材**。
+> 实测：美音 lexicon 无弱读（`the`=/ði/、`to`≈300 ms、`and`≈460 ms）＋ 声学层丢词尾（`files` 的 `-z` 在 110/140 wpm 都缺）；
+> 且 ASR 会**补** `-ed` / **吞** `-z`，词级回读不能证明音频正确。分级：**L-A 真人原声**（唯一可信答案键）
+> \> **L-B TTS＋已过音素门禁** > **L-C 未审 TTS**（禁止进训练计划/复习块/听力题）。
+> 已写入 MCP `synthesize`/`assess` 工具说明与 `docs/CONTRACT.md §synthesize`；`synthesize` 返回值新增
+> `material_tier`/`allowed_use`/`not_for` 字段。后续实验：多段 `phoneme_codepoints`+`silence_scale`、`blank_penalty`（见 D58）。
+
 门禁一句话：`powershell -File tools/check.ps1`（fmt+clippy+209 单测+golden+pinyin 表 `--check`）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55`（需模型）。
 TTS 侧已收口：前端开放词表 G2P + misaki-zh + LTS + 漏词门禁（见 `docs/audit/tts-2026-11-27-frontend.md`）。
 

@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/voice-core", "crates/voice-mcp", "crates/voice-cli", "crates/spike"]
+members = ["crates/voice-core", "crates/voice-mcp", "crates/voice-cli", "crates/skilld", "crates/spike"]
 # P0 验证用小程序不进默认构建（需要时 -p spike 显式构建）
-default-members = ["crates/voice-core", "crates/voice-mcp", "crates/voice-cli"]
+default-members = ["crates/voice-core", "crates/voice-mcp", "crates/voice-cli", "crates/skilld"]
 
 [workspace.package]
 version = "0.1.0"

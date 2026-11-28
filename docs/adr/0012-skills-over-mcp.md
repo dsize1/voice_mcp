@@ -54,7 +54,8 @@ pi 的 stdio 服务是每个会话新起的进程，所以实际体验是"改完
 
 ### D4 pi 侧用桥接扩展（repo 内），B1 自建连接
 
-位置：`.pi/extensions/mcp-skills/`（项目已 trust，自动加载）。
+位置：源在 `pi-extensions/mcp-skills/`，用 `node tools/install_pi_extension.mjs` 做 junction 到
+`~/.pi/agent/extensions/mcp-skills`（所有项目共用一份实现，项目级不再放副本）。
 连接方式：**扩展自己连服务**，只用公开协议
 （`initialize` / `skills/list` / `skills/get` / `resources/read` / `resources/directory/read`），
 不依赖 pi 内部工具名，也不替换 pi 的内置 MCP 支持。两种传输：
@@ -100,6 +101,28 @@ MCP 技能与本地/其他来源同名时，**不注册 MCP 版**，在启动诊
 
 技能文本（`skills/**`）与工具接口（`crates/voice-mcp`）在同一仓库、同一次发布。
 不再维护"客户端安装步骤"这类会漂移的文档；README 只说明"技能由 MCP 提供"。
+
+### D8 通用化：`skilld` + 用户级扩展
+
+`voice-mcp` 只服务语音相关技能。其他仓库（up-main、tabletop_game）用**通用服务**
+`crates/skilld`：
+
+```text
+skilld --dir <skills-root>      # 或 SKILLS_DIR=<dir>
+```
+
+它只做 skills/resources（无 tools），与 `voice-mcp` 共用同一套 SEP-2640 语义
+（内存快照、sha256、`directoryRead`、`ttlMs=0`/`private`）。
+
+约定：
+
+1. 技能源目录放**仓库根的 `skills/`**，不要放 `.pi/skills/`——那是 pi 的本地自动发现路径，
+   会与 MCP 版同名冲突（按 D6 会被拒绝）。
+2. 项目的 `.pi/mcp.json` 指向 `skilld --dir <repo>/skills`。
+3. 桥接扩展装到用户级（`~/.pi/agent/extensions/mcp-skills`，junction 回仓库），
+   三个项目共用；升级扩展只改仓库里的源。
+4. 历史文档（`.memory/sessions/*`、`.memory/weeks/*`）里的旧路径**不改**——那些是快照，
+   只改现行规则文件（`AGENTS.md`、`.memory/README.md`、`PLAN.md`、`profile.md`）。
 
 ## 版本绑定
 
@@ -167,7 +190,8 @@ MCP 技能与本地/其他来源同名时，**不注册 MCP 版**，在启动诊
 
 1. **服务端**：`Cargo.toml` 开 `skills-fs`；`main.rs` 加 `SkillCatalog` 与 `ServerHandler` 实现
    （见本轮 diff 预览）。
-2. **桥接扩展**：新增 `.pi/extensions/mcp-skills/`（`index.js` + `lib/` + `test/`），零第三方依赖。
+2. **桥接扩展**：`pi-extensions/mcp-skills/`（`index.js` + `lib/` + `test/`），零第三方依赖；
+   用 `node tools/install_pi_extension.mjs` 装到用户级（junction）。
 3. **删副本**：
    ```powershell
    Remove-Item ~/.pi/agent/skills/ielts-speaking-coach, ~/.pi/agent/skills/voice-dictation
@@ -193,7 +217,9 @@ MCP 技能与本地/其他来源同名时，**不注册 MCP 版**，在启动诊
 |---|---|
 | 服务端（`skills-fs` + `SkillCatalog` + `ServerHandler`） | 已实现，`cargo check` / `release` 通过 |
 | `skills/list` / `skills/get` / `resources/read` / `resources/directory/read` | 已用原始 JSON-RPC 验证 |
-| pi 桥接扩展 `.pi/extensions/mcp-skills/`（stdio + HTTP） | 已实现，`node --test` 16/16 通过 |
+| pi 桥接扩展 `pi-extensions/mcp-skills/`（stdio + HTTP，装到用户级） | 已实现，`node --test` 16/16 通过 |
+| 通用服务 `crates/skilld`（任意目录 → MCP skills） | 已实现，raw JSON-RPC 验证 |
+| up-main 迁移（`.pi/skills/` → `skills/` + `.pi/mcp.json` → `skilld`） | 已完成，真机验证（技能来自 `cache/mcp-skills/skills/…`） |
 | HTTP 传输（JSON / SSE / session id / 503 重试） | 已用本地 fixture 验证，真机接到 `http-demo` |
 | 真机验证（技能来自缓存路径、篡改自愈、内容变化刷新） | 已完成 |
 | 删除 junction 副本 + `.pi/settings.json` 去掉本地 skills | 已完成 |

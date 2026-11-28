@@ -232,8 +232,14 @@ pi mcp add voice -- <项目绝对路径>/target/release/voice-mcp.exe
 
 - **服务端**：`voice-mcp` 在 `initialize` 里声明扩展，提供 `skills/list` / `skills/get` /
   `resources/read` / `resources/directory/read`，技能正文与工具接口同仓库、同一次发布
-- **客户端**：`.pi/extensions/mcp-skills/` 把技能接进 pi —— 校验 sha256 → 按需拉文件 →
+- **客户端**：`pi-extensions/mcp-skills/` 把技能接进 pi —— 校验 sha256 → 按需拉文件 →
   写入 `~/.pi/agent/cache/mcp-skills/voice/<slug>/` → 交给 pi 原生 skill 机制
+
+桥接扩展装一次，所有项目共用（源在仓库，装的是 junction，不是副本）：
+
+```bash
+node tools/install_pi_extension.mjs          # -> ~/.pi/agent/extensions/mcp-skills
+```
 
 版本绑定与缓存规则见 [`docs/adr/0012-skills-over-mcp.md`](docs/adr/0012-skills-over-mcp.md)。
 
@@ -335,7 +341,7 @@ voice-cli tts-probe                           # 为 54 个音色各生成一句�
 ## Skills
 
 技能**由 `voice-mcp` 通过 MCP 提供**（SEP-2640，扩展 `io.modelcontextprotocol/skills`），
-仓库 `skills/` 是唯一事实源，客户端不装副本。pi 侧由 `.pi/extensions/mcp-skills/` 桥接：
+仓库 `skills/` 是唯一事实源，客户端不装副本。pi 侧由 `pi-extensions/mcp-skills/` 桥接：
 校验摘要 → 按需拉文件 → 写入 `~/.pi/agent/cache/mcp-skills/voice/<slug>/` → 交给 pi 原生技能机制
 （系统提示里只有 name/description，正文按需加载，可用 `/skill:name` 强制）。
 

@@ -52,12 +52,19 @@ pi 的 stdio 服务是每个会话新起的进程，所以实际体验是"改完
 同一会话内 digest 保持不变，不会出现半个新版本。
 "接口与说明同步演进"由此落地：技能跟二进制一起发布，客户端看到新 digest 就是新版本。
 
-### D4 pi 侧用桥接扩展（repo 内），B1 自建 stdio 连接
+### D4 pi 侧用桥接扩展（repo 内），B1 自建连接
 
 位置：`.pi/extensions/mcp-skills/`（项目已 trust，自动加载）。
-连接方式：**扩展自己起一条到服务的 stdio 连接**，只用公开协议
+连接方式：**扩展自己连服务**，只用公开协议
 （`initialize` / `skills/list` / `skills/get` / `resources/read` / `resources/directory/read`），
-不依赖 pi 内部工具名，也不替换 pi 的内置 MCP 支持。
+不依赖 pi 内部工具名，也不替换 pi 的内置 MCP 支持。两种传输：
+
+| 配置 | 传输 | 说明 |
+|---|---|---|
+| `command` + `args` | stdio（子进程） | 本项目默认（`voice-mcp.exe`） |
+| `url` + `headers` | Streamable HTTP | 支持 JSON 与 `text/event-stream` 响应、`Mcp-Session-Id`、503/429 重试一次；`${VAR}` 会展开 |
+
+**不支持 OAuth**：`config.oauth` 存在时告警并跳过，需要 OAuth 的 HTTP 服务请用 pi 内置 MCP。
 
 流程：
 
@@ -102,7 +109,9 @@ MCP 技能与本地/其他来源同名时，**不注册 MCP 版**，在启动诊
 - `frontmatter.metadata.version` **只供人看**，不参与任何缓存/审批判定。
 - 审批记录（若启用）持久化为 `{ label, uri, entryDigest, resources[], approvedAt }`；
   `entryDigest` 变化即视为"技能已变"，审批失效、必须重新确认。
-- 服务端可选把 crate 版本写进 `metadata.version`（如 `0.1.0`），便于人工排查。
+- 服务端把 crate 版本写进每个 `SKILL.md` 的 `metadata.version`（当前 `0.1.0`），
+  客户端可原样展示；`crates/voice-mcp/tests/skills_metadata.rs` 校验它与 `CARGO_PKG_VERSION` 一致，
+  版本漂移会让测试变红。服务端 `instructions` 也带版本号。
 
 ## 缓存与陈旧
 
@@ -183,11 +192,12 @@ MCP 技能与本地/其他来源同名时，**不注册 MCP 版**，在启动诊
 |---|---|
 | 服务端（`skills-fs` + `SkillCatalog` + `ServerHandler`） | 已实现，`cargo check` / `release` 通过 |
 | `skills/list` / `skills/get` / `resources/read` / `resources/directory/read` | 已用原始 JSON-RPC 验证 |
-| pi 桥接扩展 `.pi/extensions/mcp-skills/` | 已实现，`node --test` 11/11 通过 |
+| pi 桥接扩展 `.pi/extensions/mcp-skills/`（stdio + HTTP） | 已实现，`node --test` 16/16 通过 |
+| HTTP 传输（JSON / SSE / session id / 503 重试） | 已用本地 fixture 验证，真机接到 `http-demo` |
 | 真机验证（技能来自缓存路径、篡改自愈、内容变化刷新） | 已完成 |
 | 删除 junction 副本 + `.pi/settings.json` 去掉本地 skills | 已完成 |
 | README / `install_skills.ps1` 标注 | 已完成 |
-| `metadata.version` 写入 crate 版本 | **未做**（可选，纯展示用） |
+| `metadata.version` 写入 crate 版本 | 已实现；`cargo test -p voice-mcp --test skills_metadata` 门禁 |
 
 ## 未决 / 风险
 
@@ -195,7 +205,10 @@ MCP 技能与本地/其他来源同名时，**不注册 MCP 版**，在启动诊
 2. **支持文件读取不经校验**（见"已知边界"）：需 pi 增加 skill 加载钩子才能根治。
 3. **多 server 同名 / 嵌套技能审批**：先按 D6 拒绝 + 告警，嵌套技能暂不自动注册。
 4. **`ttlMs`/`cacheScope`** 依赖协议版本 ≥ 2026-07-28；对老客户端只能退化为"每次校验"（本项目默认行为）。
-5. **B1 多一个进程**：`voice-mcp` 会被连两次（pi 一次、扩展一次）。引擎惰性加载，
+5. **HTTP 只支持 headers 鉴权**：OAuth 服务需用 pi 内置 MCP（扩展不实现授权流程）。
+6. **探测成本**：每个配置的 MCP 服务都会被 `initialize` 探测一次（未知则不重复），
+   未声明扩展的服务在本次会话内不再探测；探测失败不打扰用户（静默）。
+7. **B1 多一个进程**：`voice-mcp` 会被连两次（pi 一次、扩展一次）。引擎惰性加载，
    代价约几十 ms / 数 MB；若将来不可接受，再评估 B2。
 
 ## 后果

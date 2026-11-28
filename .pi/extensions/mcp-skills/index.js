@@ -8,7 +8,8 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { StdioMcpClient, expandRecord } from "./lib/mcp-client.js";
+import { StdioMcpClient, expandEnv, expandRecord } from "./lib/mcp-client.js";
+import { HttpMcpClient } from "./lib/http-client.js";
 import {
   parseFrontmatter,
   removeServerCache,
@@ -20,6 +21,8 @@ const CONNECT_TIMEOUT_MS = 4_000;
 
 /** 复用的连接（模块级，随扩展实例存活）。 */
 const connections = new Map();
+/** 探测结果缓存：false = 该服务在本次会话内不提供 skills，不再重复 initialize。 */
+const probe = new Map();
 
 function agentDir() {
   return process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent");
@@ -116,16 +119,32 @@ async function settingsSkillPaths(cwd) {
   return paths;
 }
 
-function serverConnection(name, config, cwd) {
-  const key = `${name}:${cwd}`;
+function serverConnection(name, config, cwd, warn) {
+  const key = `${name}:${cwd}:${config.url ?? config.command}`;
   const existing = connections.get(key);
   if (existing) return existing;
-  const client = new StdioMcpClient({
-    command: config.command,
-    args: Array.isArray(config.args) ? config.args : [],
-    env: expandRecord(config.env),
-    cwd: config.cwd ? path.resolve(cwd, config.cwd.replace(/^~(?=$|[\\/])/, homedir())) : cwd,
-  });
+
+  let client;
+  if (config.command) {
+    client = new StdioMcpClient({
+      command: config.command,
+      args: Array.isArray(config.args) ? config.args : [],
+      env: expandRecord(config.env),
+      cwd: config.cwd
+        ? path.resolve(cwd, config.cwd.replace(/^~(?=$|[\\/])/, homedir()))
+        : cwd,
+    });
+  } else {
+    if (config.oauth) {
+      warn(
+        "[mcp-skills] 需要 OAuth 的 HTTP 服务请用 pi 内置 MCP；本扩展目前只支持 headers 鉴权",
+      );
+    }
+    client = new HttpMcpClient({
+      url: expandEnv(config.url),
+      headers: expandRecord(config.headers),
+    });
+  }
   connections.set(key, client);
   return client;
 }
@@ -154,15 +173,33 @@ export default function mcpSkills(pi) {
 
     await Promise.all(
       servers.map(async ({ name, config }) => {
-        if (!config.command) {
-          // HTTP 服务本轮不支持（ADR-0012 "未决/风险"）；记一次提示即可。
-          warn(ctx, `[mcp-skills] ${name}: 只支持 stdio 服务，已跳过 HTTP 服务`);
+        if (!config.command && !config.url) return; // 没有连接方式，跳过
+        const key = `${name}:${config.url ?? config.command}`;
+        if (probe.get(key) === false) return; // 本次会话已知不支持，不再探测
+
+        const client = serverConnection(name, config, cwd, warn);
+
+        // 探测：大多数 MCP 服务不提供 skills，连不上/超时属于正常，不打扰用户。
+        let declared;
+        try {
+          declared = await client.declaredSkills({ timeoutMs: CONNECT_TIMEOUT_MS });
+        } catch (err) {
+          probe.set(key, false);
+          if (process.env.PI_MCP_SKILLS_DEBUG) {
+            console.debug(`[mcp-skills] ${name}: 探测失败（不影响其它服务）: ${err.message}`);
+          }
+          client.close?.();
+          connections.delete(`${name}:${cwd}:${config.url ?? config.command}`);
           return;
         }
-        const client = serverConnection(name, config, cwd);
+        if (!declared) {
+          probe.set(key, false);
+          return; // 未声明扩展：静默跳过
+        }
+        probe.set(key, true);
+
+        // 已确认声明扩展：之后的失败都值得告警。
         try {
-          const declared = await client.declaredSkills({ timeoutMs: CONNECT_TIMEOUT_MS });
-          if (!declared) return; // 未声明扩展：静默跳过
           const result = await syncServer({
             client,
             label: name,
@@ -176,10 +213,7 @@ export default function mcpSkills(pi) {
           }
           paths.push(...result.skillPaths);
         } catch (err) {
-          // 服务没起来 / 超时 / 协议不符：不阻塞会话，下次 reload 再试。
-          warn(ctx, `[mcp-skills] ${name}: ${err.message}`);
-          client.close();
-          connections.delete(`${name}:${cwd}`);
+          warn(ctx, `[mcp-skills] ${name}: 同步失败：${err.message}`);
         }
       }),
     );

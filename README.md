@@ -341,6 +341,8 @@ voice-cli tts-probe                           # 为 54 个音色各生成一句�
 
 - 技能版本 = `entryDigest`（清单里所有文件 `uri+sha256+size` 的确定性哈希）；内容一变，缓存刷新
 - 缓存文件每次加载前**重算 sha256**，不符即重新拉取，不会拿旧版凑合
+- 每个 `SKILL.md` 的 `metadata.version` 与服务版本一致（`cargo test -p voice-mcp --test skills_metadata` 门禁）
+- 桥接支持 **stdio**（`command`）与 **Streamable HTTP**（`url` + `headers`，JSON/SSE，带 `Mcp-Session-Id`）；OAuth 服务请继续用 pi 内置 MCP
 - 与本地技能同名时**拒绝加载并告警**，不静默遮蔽
 - 设计细节：[ADR-0012](docs/adr/0012-skills-over-mcp.md)
 

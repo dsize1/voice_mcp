@@ -958,8 +958,10 @@ impl ServerHandler for VoiceServer {
         let mut capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_resources();
-        let mut instructions =
-            String::from("本地语音 I/O 与测量服务：转写 / 朗读示范 / 录音 / 音频体检 / 评测。");
+        let mut instructions = format!(
+            "voice-mcp {}：本地语音 I/O 与测量服务（转写 / 朗读示范 / 录音 / 音频体检 / 评测）。",
+            env!("CARGO_PKG_VERSION")
+        );
         if let Some(skills) = &self.skills {
             capabilities = capabilities.enable_skills_with_directory_read();
             let uris = skills

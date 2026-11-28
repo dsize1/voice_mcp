@@ -11,7 +11,24 @@ import path from "node:path";
 
 export const SKILL_FILE_LIMIT = 512;
 export const SKILL_BYTE_LIMIT = 16 * 1024 * 1024;
+/** 支持文件并发校验/拉取的上限。 */
+const FETCH_CONCURRENCY = 8;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
+/** 并发映射，限制同时进行的任务数（保持输入顺序）。 */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      out[index] = await fn(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 export function sha256(buffer) {
   return `sha256:${createHash("sha256").update(buffer).digest("hex")}`;
@@ -151,15 +168,9 @@ export async function syncSkill({ client, cacheRoot, label, entry }) {
     if (!wanted.has(rel)) await fs.rm(path.join(dir, rel), { force: true });
   }
 
-  // SKILL.md 最后写，避免中间态被当成"技能已就绪"。
-  const ordered = [...wanted.entries()].sort(([a], [b]) => (a === "SKILL.md") - (b === "SKILL.md"));
-  for (const [rel, meta] of ordered) {
+  const syncOne = async ([rel, meta]) => {
     const file = path.join(dir, rel);
-    const cached = await readIfMatches(file, meta);
-    if (cached) {
-      reused += 1;
-      continue;
-    }
+    if (await readIfMatches(file, meta)) return "reused";
     const contents = await client.readResource(meta.uri);
     const buffer = contentsToBuffer(contents, meta.uri);
     if (buffer.length !== meta.size) {
@@ -169,8 +180,23 @@ export async function syncSkill({ client, cacheRoot, label, entry }) {
       throw new Error(`摘要不符: ${meta.uri}`);
     }
     await writeAtomic(file, buffer);
-    fetched += 1;
-  }
+    return "fetched";
+  };
+  const tally = (results) => {
+    for (const result of results) {
+      if (result === "reused") reused += 1;
+      else fetched += 1;
+    }
+  };
+
+  // 支持文件并发校验/拉取（限制并发，避免大技能打爆服务端）。
+  const entries = [...wanted.entries()];
+  const supporting = entries.filter(([rel]) => rel !== "SKILL.md");
+  tally(await mapLimit(supporting, FETCH_CONCURRENCY, syncOne));
+
+  // SKILL.md 最后写：它的存在就是"技能已就绪"的信号。
+  const skillMd = entries.find(([rel]) => rel === "SKILL.md");
+  if (skillMd) tally([await syncOne(skillMd)]);
 
   const manifest = {
     label,

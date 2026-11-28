@@ -30,6 +30,11 @@
 > `material_tier`/`allowed_use`/`not_for` 字段。后续实验：多段 `phoneme_codepoints`+`silence_scale`、`blank_penalty`（见 D58）。
 
 门禁一句话：`powershell -File tools/check.ps1`（fmt+clippy+209 单测+golden+pinyin 表 `--check`）＋ `voice-cli tts-regress cases/tts-word-loss.jsonl --speed 0.55`（需模型）。
+
+> **改 MCP 工具说明后必须重建 + 重连**（2026-11-28 踩过）：工具 description 编译进二进制，改完不重建就看不到任何变化。
+> `target/release/voice-mcp.exe` 被运行时进程占用时，Windows 下可先 **改名**（不必杀进程）：
+> `Move-Item target/release/voice-mcp.exe target/release/voice-mcp.exe.old` → `cargo build -p voice-mcp --release`；
+> 已有会话仍读旧 schema（会话启动时加载），要新建会话 / 重连才能看到。故**长期规则以 SKILL §0 铁律为准**，MCP 说明只作辅助。
 TTS 侧已收口：前端开放词表 G2P + misaki-zh + LTS + 漏词门禁（见 `docs/audit/tts-2026-11-27-frontend.md`）。
 
 ## 已实测的关键数字（别再猜）

@@ -1,0 +1,208 @@
+// pi 扩展：把 MCP 服务提供的技能（SEP-2640）接入 pi 的原生技能机制。
+//
+// 扩展只做"宿主"该做的那一半：发现 → 校验 → 按需取文件 → 写入隔离缓存 →
+// 通过 resources_discover 把缓存路径交给 pi。pi 自己负责渐进披露与 /skill:name。
+//
+// 零第三方依赖。设计说明见 docs/adr/0012-skills-over-mcp.md。
+import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+
+import { StdioMcpClient, expandRecord } from "./lib/mcp-client.js";
+import {
+  parseFrontmatter,
+  removeServerCache,
+  syncServer,
+} from "./lib/cache.js";
+
+const SKILL_EXTENSION_ID = "io.modelcontextprotocol/skills";
+const CONNECT_TIMEOUT_MS = 4_000;
+
+/** 复用的连接（模块级，随扩展实例存活）。 */
+const connections = new Map();
+
+function agentDir() {
+  return process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent");
+}
+
+function cacheRoot() {
+  return path.join(agentDir(), "cache", "mcp-skills");
+}
+
+async function readJson(file) {
+  try {
+    return JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** 合并 user 与 project 的 mcpServers；项目条目覆盖同名用户条目。 */
+async function loadServerConfigs(cwd) {
+  const userFile = path.join(agentDir(), "mcp.json");
+  const projectFile = path.join(cwd, ".pi", "mcp.json");
+  const user = (await readJson(userFile))?.mcpServers ?? {};
+  const project = (await readJson(projectFile))?.mcpServers ?? {};
+  const merged = new Map();
+  for (const [name, config] of Object.entries(user)) merged.set(name, { name, config, source: userFile });
+  for (const [name, config] of Object.entries(project)) {
+    const previous = merged.get(name);
+    const base = previous?.config ?? {};
+    // 项目条目没有 command/url 时只覆盖 enabled/exposure 等字段（与 pi 一致）
+    merged.set(name, {
+      name,
+      config: config?.command || config?.url ? config : { ...base, ...config },
+      source: projectFile,
+    });
+  }
+  return [...merged.values()].filter(({ config }) => config && config.enabled !== false);
+}
+
+/** 本地已存在的技能名：MCP 版不得静默遮蔽它们。 */
+async function collectLocalSkillNames(cwd, settingsPaths) {
+  const roots = new Set([
+    path.join(agentDir(), "skills"),
+    path.join(cwd, ".pi", "skills"),
+    path.join(cwd, ".agents", "skills"),
+  ]);
+  for (const dir of settingsPaths) {
+    roots.add(path.resolve(dir));
+  }
+  const names = new Set();
+  for (const root of roots) {
+    for (const file of await findSkillFiles(root, 0)) {
+      try {
+        const fm = parseFrontmatter(await fs.readFile(file, "utf8"));
+        if (fm.name) names.add(fm.name);
+      } catch {
+        /* 忽略不可读的本地技能 */
+      }
+    }
+  }
+  return names;
+}
+
+async function findSkillFiles(dir, depth) {
+  if (depth > 3) return [];
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isFile() && entry.name === "SKILL.md") out.push(full);
+    else if (entry.isDirectory()) out.push(...(await findSkillFiles(full, depth + 1)));
+  }
+  return out;
+}
+
+async function settingsSkillPaths(cwd) {
+  const paths = [];
+  for (const file of [path.join(agentDir(), "settings.json"), path.join(cwd, ".pi", "settings.json")]) {
+    const settings = await readJson(file);
+    if (!Array.isArray(settings?.skills)) continue;
+    const base = file.includes(`${path.sep}.pi${path.sep}`) ? path.dirname(file) : path.dirname(file);
+    for (const raw of settings.skills) {
+      if (typeof raw !== "string" || raw.startsWith("!")) continue;
+      const value = raw.startsWith("+") || raw.startsWith("-") ? raw.slice(1) : raw;
+      if (!value) continue;
+      paths.push(path.resolve(base, value));
+    }
+  }
+  return paths;
+}
+
+function serverConnection(name, config, cwd) {
+  const key = `${name}:${cwd}`;
+  const existing = connections.get(key);
+  if (existing) return existing;
+  const client = new StdioMcpClient({
+    command: config.command,
+    args: Array.isArray(config.args) ? config.args : [],
+    env: expandRecord(config.env),
+    cwd: config.cwd ? path.resolve(cwd, config.cwd.replace(/^~(?=$|[\\/])/, homedir())) : cwd,
+  });
+  connections.set(key, client);
+  return client;
+}
+
+export default function mcpSkills(pi) {
+  const warned = new Set();
+  const warn = (ctx, message) => {
+    if (warned.has(message)) return;
+    warned.add(message);
+    try {
+      ctx?.ui?.notify?.(message, "warning");
+    } catch {
+      /* 非 TUI 模式没有 notify */
+    }
+    console.warn(message);
+  };
+
+  const discover = async (event, ctx) => {
+    const cwd = event?.cwd || ctx?.cwd || process.cwd();
+    const servers = await loadServerConfigs(cwd);
+    if (servers.length === 0) return { skillPaths: [] };
+
+    const reserved = await collectLocalSkillNames(cwd, await settingsSkillPaths(cwd));
+    const paths = [];
+    let touched = false;
+
+    await Promise.all(
+      servers.map(async ({ name, config }) => {
+        if (!config.command) {
+          // HTTP 服务本轮不支持（ADR-0012 "未决/风险"）；记一次提示即可。
+          warn(ctx, `[mcp-skills] ${name}: 只支持 stdio 服务，已跳过 HTTP 服务`);
+          return;
+        }
+        const client = serverConnection(name, config, cwd);
+        try {
+          const declared = await client.declaredSkills({ timeoutMs: CONNECT_TIMEOUT_MS });
+          if (!declared) return; // 未声明扩展：静默跳过
+          const result = await syncServer({
+            client,
+            label: name,
+            cacheRoot: cacheRoot(),
+            reservedNames: reserved,
+            log: (message) => warn(ctx, message),
+          });
+          touched = true;
+          for (const skipped of result.skipped) {
+            warn(ctx, `[mcp-skills] ${name} 跳过 ${skipped.name ?? skipped.uri}：${skipped.reason}`);
+          }
+          paths.push(...result.skillPaths);
+        } catch (err) {
+          // 服务没起来 / 超时 / 协议不符：不阻塞会话，下次 reload 再试。
+          warn(ctx, `[mcp-skills] ${name}: ${err.message}`);
+          client.close();
+          connections.delete(`${name}:${cwd}`);
+        }
+      }),
+    );
+
+    if (touched) {
+      // 缓存根不在任何 skill 发现路径内，只有这里把它交给 pi。
+      return { skillPaths: paths };
+    }
+    return { skillPaths: [] };
+  };
+
+  pi.on("resources_discover", discover);
+
+  pi.on("session_shutdown", async () => {
+    for (const client of connections.values()) {
+      try {
+        client.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    connections.clear();
+  });
+}
+
+export { collectLocalSkillNames, loadServerConfigs, cacheRoot, serverConnection, SKILL_EXTENSION_ID };

@@ -1,0 +1,10 @@
+{
+  "name": "pi-mcp-skills",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Serve Agent Skills over MCP (SEP-2640) into pi's native skill machinery",
+  "pi": {
+    "extensions": ["./index.js"]
+  }
+}

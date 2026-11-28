@@ -155,6 +155,9 @@ skilld --dir <skills-root>      # 或 SKILLS_DIR=<dir>
 3. `held entry` 之外的文件一律拒读（未列出 = 验证失败），目录读结果不得扩展清单。
 4. 不预取：`SKILL.md` 在加载时取，支持文件在读取时取。
 5. 卸载 server → 删除该 `label` 目录；缓存字节永不"升级"为本地技能信任。
+   **不做自动孤儿清理**：缓存目录是跨项目共享的（同一台机器上 up-main、tabletop_game、
+   本仓库看到的 `label` 集合不同），按当前项目的 mcp.json 清理会误删其他项目正在用的缓存。
+   删服务时手动 `rm -rf ~/.pi/agent/cache/mcp-skills/<label>`（ADR 里保留这条作为运维步骤）。
 6. 每次 `session_start` / `resources_discover` 重新校验 `SKILL.md`；其余文件读取时校验。
 7. 支持文件按 8 并发校验/拉取（实测 300 文件 32.5 ms → 6.1 ms），`SKILL.md` 最后写。
 

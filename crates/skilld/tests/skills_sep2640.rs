@@ -1,6 +1,7 @@
-//! skilld 的端到端门禁：起真实进程，走 SEP-2640 的四个方法。
+//! skilld 的端到端门禁：起真实进程，走 SEP-2640 的四个方法，
+//! 并验证 `--up` 的向上查找（配置与仓库位置解耦）。
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn temp_skills() -> PathBuf {
@@ -22,10 +23,23 @@ struct Session {
 }
 
 impl Session {
-    fn start(dir: &PathBuf) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_skilld"))
-            .arg("--dir")
-            .arg(dir)
+    fn start(dir: &Path) -> Self {
+        Self::spawn(|command| {
+            command.arg("--dir").arg(dir);
+        })
+    }
+
+    /// 用 --up <name> 从指定工作目录向上查找。
+    fn start_up(cwd: &Path, name: &str) -> Self {
+        Self::spawn(|command| {
+            command.arg("--up").arg(name).current_dir(cwd);
+        })
+    }
+
+    fn spawn(configure: impl FnOnce(&mut Command)) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_skilld"));
+        configure(&mut command);
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -57,6 +71,18 @@ impl Session {
         }
         self.send(payload)
     }
+
+    fn initialize(&mut self) -> serde_json::Value {
+        self.request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0"}
+            }),
+        )
+    }
 }
 
 impl Drop for Session {
@@ -71,15 +97,7 @@ fn serves_skills_with_digests_and_no_list_caching() {
     let dir = temp_skills();
     let mut session = Session::start(&dir);
 
-    let init = session.request(
-        1,
-        "initialize",
-        serde_json::json!({
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": {"name": "test", "version": "0"}
-        }),
-    );
+    let init = session.initialize();
     let capabilities = &init["result"]["capabilities"];
     assert_eq!(
         capabilities["extensions"]["io.modelcontextprotocol/skills"]["directoryRead"],
@@ -123,4 +141,29 @@ fn serves_skills_with_digests_and_no_list_caching() {
     assert_eq!(missing["error"]["code"], serde_json::json!(-32602));
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn up_finds_the_skills_dir_from_a_nested_cwd() {
+    let root = std::env::temp_dir().join(format!("skilld-up-{}", std::process::id()));
+    let skills = root.join("skills");
+    std::fs::create_dir_all(skills.join("demo")).unwrap();
+    std::fs::write(
+        skills.join("demo/SKILL.md"),
+        "---\nname: demo\ndescription: demo skill\n---\n",
+    )
+    .unwrap();
+    let nested = root.join("a/b");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let mut session = Session::start_up(&nested, "skills");
+    session.initialize();
+    let list = session.request(2, "skills/list", serde_json::Value::Null);
+    let skills = list["result"]["skills"].as_array().unwrap();
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0]["uri"], "skill://demo/SKILL.md");
+
+    // 子进程的 cwd 在这个目录下，先结束再删（Windows 会拒绕）。
+    drop(session);
+    let _ = std::fs::remove_dir_all(&root);
 }

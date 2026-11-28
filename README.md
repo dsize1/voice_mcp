@@ -352,6 +352,27 @@ voice-cli tts-probe                           # 为 54 个音色各生成一句�
 - 与本地技能同名时**拒绝加载并告警**，不静默遮蔽
 - 设计细节：[ADR-0012](docs/adr/0012-skills-over-mcp.md)
 
+### 新环境搭建
+
+```bash
+cargo build --release -p voice-mcp -p skilld   # 服务端 + 通用技能服务
+node tools/install_pi_extension.mjs            # 桥接扩展（用户级 junction，全部项目共用）
+```
+
+再确认 `~/.pi/agent/mcp.json`（voice 服务）与本项目 `.pi/mcp.json` 存在，然后：
+
+```bash
+pi mcp list && pi -p "列出你现在可用的 skills"
+```
+
+其它仓库（如 up-main）只需在自己的 `.pi/mcp.json` 里加一行：
+
+```json
+{"mcpServers":{"skills":{"command":"<repo>/target/release/skilld.exe","args":["--up","skills"]}}}
+```
+
+`--up skills` 会从会话目录向上查找 `skills/`，所以换机器只改 `command` 一处路径。
+
 | Skill | 用途 |
 |---|---|
 | [`ielts-speaking-coach`](skills/ielts-speaking-coach/SKILL.md) | 口语陪练 + 纠音，目标雅思 7 分。固定五步循环：播示范 → 跟读 → 评测 → 只指出 1 个问题 → 重读对比 |

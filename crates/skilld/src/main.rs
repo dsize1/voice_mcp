@@ -102,10 +102,11 @@ impl ServerHandler for SkillServer {
     }
 }
 
-/// 解析 `--dir <path>`，回退 `SKILLS_DIR`。
+/// 解析 `--dir <path>` / `--up <name>`，回退 `SKILLS_DIR`。
 fn skills_dir() -> Result<PathBuf> {
     let mut args = std::env::args().skip(1);
     let mut dir = std::env::var_os("SKILLS_DIR").map(PathBuf::from);
+    let mut up: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--dir" => {
@@ -113,14 +114,44 @@ fn skills_dir() -> Result<PathBuf> {
                     args.next().context("--dir 需要一个路径参数")?,
                 ));
             }
+            "--up" => up = Some(args.next().context("--up 需要一个目录名")?),
             "-h" | "--help" => {
-                println!("usage: skilld --dir <skills-root>   (or SKILLS_DIR=<dir>)");
+                println!("usage: skilld --dir <skills-root>");
+                println!(
+                    "       skilld --up <name>        # 从当前目录向上查找 <name>/（便于跨机器配置）"
+                );
+                println!("       (or SKILLS_DIR=<dir>)");
                 std::process::exit(0);
             }
             other => anyhow::bail!("未知参数: {other}（用 --help 查看用法）"),
         }
     }
-    dir.context("缺少技能目录：用 --dir <path> 或设置 SKILLS_DIR")
+    if let Some(dir) = dir {
+        return Ok(dir);
+    }
+    if let Some(name) = up {
+        return find_up(&name).with_context(|| format!("从当前目录向上找不到 {name}/"));
+    }
+    Err(anyhow::anyhow!(
+        "缺少技能目录：用 --dir <path>、--up <name> 或设置 SKILLS_DIR"
+    ))
+}
+
+/// 从 cwd 向上查找名为 `name` 的目录。
+///
+/// pi 的 session 目录可能是仓库子目录，配置里写死绝对路径换机器就断；
+/// `--up skills` 让配置与仓库位置解耦。
+fn find_up(name: &str) -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let candidate = dir.join(name);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }
 
 fn main() -> Result<()> {

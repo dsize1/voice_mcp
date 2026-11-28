@@ -1,4 +1,3 @@
 {
-  "$schema": "https://pi.dev/schemas/settings.schema.json",
-  "$comment": "技能由 voice-mcp 通过 MCP 提供（SEP-2640），不在本地装副本；见 docs/adr/0012-skills-over-mcp.md。服务不可用时可用 `pi --skill ../skills/<name>` 临时兜底。"
+  "$schema": "https://pi.dev/schemas/settings.schema.json"
 }
